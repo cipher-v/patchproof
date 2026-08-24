@@ -1,0 +1,13 @@
+version: 1
+python: "3.12"
+
+install:
+  - ["uv", "sync", "--frozen", "--all-groups"]
+
+test:
+  command: ["python", "-m", "pytest"]
+
+allowed_test_paths:
+  - "tests/patchproof_generated/"
+
+timeout_seconds: 120
