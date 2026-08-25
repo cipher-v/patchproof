@@ -486,9 +486,10 @@ there is no outbound-network block, syscall sandbox, or complete supply-chain co
 
 ## Why is Phase 8 still blocked?
 
-Code and infrastructure are locally verified, but no authenticated Google Cloud project was
-available and `gcloud` is not installed. Docker Desktop was available for the pre-cloud checkpoint:
-the shared production image built, both service health paths responded, and the production
+Code and infrastructure are locally verified. A read-only preflight confirmed an active,
+billing-enabled Google Cloud project and a GitHub App installation scoped to the PatchProof
+repository, but no cloud API has been enabled and no resource has been deployed. Docker Desktop
+built the shared production image, both service health paths responded, and the production
 execution core reproduced BASE assertion failure / HEAD pass inside the container. That is local
 container proof, not Cloud Run, Firestore, Tasks, OIDC, Secret Manager, or GitHub publication proof.
 A real deployment and signed PR-to-GitHub-Check capture are required before claiming visible cloud
@@ -507,22 +508,24 @@ classification.
 
 ## Was a real historical Gemini candidate measured in the pre-cloud checkpoint?
 
-Not successfully. The initial checkpoint had no credential. Once a key became available, exactly
-one historical attempt used `more-itertools` PR 1223, deterministic context, actual PR narrative,
-and `gemini-3.6-flash`. The model response ended partway through its claim JSON, so strict schema
-validation failed before candidate generation. PatchProof did not retry a non-transient invalid
-response and did not convert it into an abstention. Consequently there is no generated candidate,
-BASE/HEAD candidate result, semantic decision, or retained usage total to compare with the stored
-discriminating developer oracle. This negative result is the live measurement: provider wiring and
-credentials worked, while useful historical candidate generation remains unproven.
+Yes, for one bounded non-blind case. The first historical attempt on `more-itertools` PR 1223 ended
+partway through its claim JSON, so strict validation failed closed before candidate generation and
+did not retry the non-transient invalid response.
 
 The truncated-output diagnosis led to low-thinking structured calls and larger hard generation
 caps that remain above separate visible-response character budgets. A single post-fix attempt then
 returned valid JSON and retained 1,671 total tokens, but grounding rejected the claim because the
 changed 171,808-byte production file and 241,043-byte test file exceeded the old 160,000-byte scan
 cap. That cap is now a still-bounded 256 KiB, and offline retrieval of the exact PR returns the
-changed function, changed test class/method, and snippets. No third model call was made, so this is
-mechanical proof of the context fix, not a claim that Gemini can now generate a useful candidate.
+changed function, changed test class/method, and snippets.
+
+With explicit authorization, a final normal-policy workflow selected a grounded negative-`chunked`
+claim. Its initial candidate was environmental on BASE; the one permitted repair produced BASE
+assertion failure / HEAD pass with identical bytes. Semantic assessment returned
+`CLAIM_SUPPORTED_FOR_SCENARIO`, matching the stored developer oracle's discriminating pattern. The
+four provider attempts used 12,225 total tokens with no provider retries. This proves that the real
+adapters and execution path can complete this case; it does not measure blind generation because
+changed test context was visible, and it does not establish an aggregate rate from one sample.
 
 ## Future interview checklist (answers must follow implementation)
 

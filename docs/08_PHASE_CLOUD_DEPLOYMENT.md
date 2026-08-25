@@ -306,8 +306,22 @@ Offline diagnosis showed that the changed production and test files were 171,808
 both beyond the old 160,000-byte source-scan cap. The still-hard cap is now 256 KiB. A regression
 test covers changed Python files above the previous boundary, and deterministic retrieval on the
 exact immutable PR now returns `chunked`, `ChunkedTests`, `ChunkedTests.test_negative`, and bounded
-source/test snippets. No third Gemini call was made after that fix; useful candidate generation is
-therefore still unproven rather than selectively rerun until success.
+source/test snippets.
+
+With explicit authorization, one final bounded workflow then ran on the same immutable case. It
+selected the testable claim that negative `chunked()` sizes raise `ValueError` with the expected
+message. The initial validated candidate produced BASE `TEST_ERROR` / HEAD `PASSED`, so the
+mechanical classifier rejected it as environmental. The one permitted repair produced BASE
+`ASSERTION_FAILED` / HEAD `PASSED` with identical artifact bytes, and semantic assessment returned
+`CLAIM_SUPPORTED_FOR_SCENARIO`. This matched the stored developer oracle's discriminating pattern.
+Across claim selection, initial candidate, repair, and assessment, the run made four provider
+attempts with no provider retries and used 9,862 prompt, 734 output, and 12,225 total tokens. The
+sanitized record is `benchmarks/results/live-gemini-smoke.json`.
+
+This is useful real workflow and execution evidence, but not a blind agent-quality benchmark.
+Production context included changed test diff/snippets, the historical commits predate
+`.patchproof.yaml` and therefore used the benchmark's fixed synthetic Python/pytest contract with
+dependency installation disabled, and one successful case cannot establish an aggregate rate.
 
 A separate read-only preflight verified that the GitHub App credentials can mint an installation
 token and that its single selected repository is `cipher-v/patchproof`. The selected Google Cloud
@@ -347,9 +361,9 @@ deterministic fake. They do not prove real Google IAM or deployed requests.
 ## Limitations and trade-offs
 
 - No cloud resources exist yet, so visible deployment proof is blocked.
-- The initial and single post-fix historical Gemini attempts both failed closed before candidate
-  generation. The post-fix run retained token use and exposed a now-fixed context-size boundary,
-  but historical candidate quality remains unmeasured because no third call was made.
+- One bounded historical Gemini workflow reached a matching discriminating result after its single
+  allowed repair. Because changed tests were visible and only one case ran, blind and aggregate
+  historical candidate quality remains unmeasured.
 - Local control health used SQLite mode. Firestore/Cloud Tasks/Secret Manager/IAM behavior still
   requires actual GCP deployment proof.
 - Control holds one task request while calling executor; this preserves credentials but consumes a

@@ -3,7 +3,8 @@
 **Status: COMPLETE WITH LIMITATIONS.** PatchProof Bench now reproduces four genuine historical
 bug fixes from two public pure-Python repositories, compares HEAD-only and BASE/HEAD evidence
 policies over identical artifacts, executes controlled failure-path checks, and stores raw and
-summarized results. It does not yet measure live Gemini candidate-generation quality.
+summarized results. A separate bounded live Gemini smoke completed one historical claim-to-evidence
+workflow, but it is not a blind or aggregate candidate-generation benchmark.
 
 ## Problem solved
 
@@ -93,7 +94,9 @@ the known flaw in HEAD-only acceptance, and the historical positives use ideal d
 - `benchmarks/results/raw.json`: all eight execution scenarios, bounded BASE/HEAD outputs,
   statuses, hashes, timings, per-strategy decisions, and the controlled-suite result;
 - `benchmarks/results/summary.json`: recomputed aggregate counts and rates;
-- `benchmarks/results/summary.md`: concise human-readable output.
+- `benchmarks/results/summary.md`: concise human-readable output;
+- `benchmarks/results/live-gemini-smoke.json`: sanitized one-case live workflow evidence, model
+  usage, immutable artifact hashes, oracle comparison, and explicit limitations.
 
 Summary files can always be regenerated from raw JSON. Results are written only after a complete
 manifest run succeeds; the harness does not skip or delete an inconvenient case.
@@ -143,7 +146,7 @@ Final repository verification on Windows/Python 3.12:
 
 ```text
 uv run pytest -q
-191 passed, 1 skipped, 2 warnings in 114.85s
+208 passed, 1 skipped, 2 warnings in 116.54s
 
 uv run ruff check src tests benchmarks
 All checks passed!
@@ -158,20 +161,27 @@ reported above.
 
 ## Unmeasured work and limitations
 
-The current process has no Gemini credential, so the following remain explicitly unmeasured:
+One credentialed smoke on `more-itertools` PR 1223 selected a grounded claim, generated a candidate,
+used the single permitted repair after an environmental BASE result, and then reproduced BASE
+assertion failure / HEAD pass. Semantic assessment returned `CLAIM_SUPPORTED_FOR_SCENARIO`, and the
+mechanical result matched the stored developer oracle. The four provider attempts used 9,862 prompt,
+734 output, and 12,225 total tokens. The sanitized record is
+`benchmarks/results/live-gemini-smoke.json`.
 
-- live Gemini candidate generation and candidate validity;
-- end-to-end semantic claim selection/support accuracy;
-- model calls, tokens, and model latency;
+The following remain explicitly unmeasured:
+
+- blind candidate generation, because production retrieval included the changed test diff and
+  snippets;
+- aggregate candidate validity and semantic accuracy beyond this one historical case;
 - an existing-upstream-test-suite baseline;
 - incomplete-fix, unrelated-refactor, and introduced-regression historical cases;
 - repeated runs across operating systems and dependency environments.
 
 For that reason Phase 7 is complete with limitations. The benchmark is a real reproducible
-historical executor/policy benchmark and a foundation for agent evaluation, but it is not yet a
-claim that Gemini generates useful tests on 4/4 PRs. A later credentialed evaluation must store
-every raw attempt, keep the developer oracles hidden, and report failures and abstentions without
-selection.
+historical executor/policy benchmark and a foundation for agent evaluation, while the live smoke is
+one successful non-blind workflow sample. Neither is a claim that Gemini generates useful tests on
+4/4 PRs. A later blind evaluation must store every sanitized attempt, keep developer oracles and
+changed tests out of model context, and report failures and abstentions without selection.
 
 ## Interview questions
 

@@ -504,5 +504,7 @@ but has not necessarily been implemented yet.
 - **Alternative rejected:** Unlimited output, repeated live attempts until success, disabling
   grounding, accepting truncated JSON, or removing source-scan bounds.
 - **Consequence:** The first post-fix call proved complete structured output and usage retention but
-  stopped at the old context boundary. Offline retrieval now proves the exact PR is groundable; no
-  third model call was made, so historical candidate quality remains explicitly unproven.
+  stopped at the old context boundary. After the retrieval fix, one explicitly authorized bounded
+  workflow selected a grounded claim and used its single repair to reach BASE assertion failure /
+  HEAD pass, matching the developer oracle. This is one non-blind success because changed test
+  context was visible; it does not establish aggregate historical candidate quality.

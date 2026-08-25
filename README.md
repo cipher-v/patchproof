@@ -27,11 +27,13 @@ PatchProof Bench replays four developer regression oracles from four genuine his
 `more-itertools` and `humanize`. All four reproduced BASE assertion failure / HEAD pass, and all
 four controlled weak no-op candidates were rejected as non-discriminating. In this deliberately
 small policy comparison, HEAD-only acceptance produced four false supports while the BASE/HEAD
-policy produced none. An initial bounded live Gemini historical attempt returned truncated claim
-JSON. After a bounded-output fix, one post-fix attempt returned complete JSON and usage but failed
-grounding because both changed files exceeded the source-scan cap. That deterministic cap is now
-256 KiB and the exact PR context resolves mechanically, but candidate quality remains unmeasured
-because PatchProof did not make a third model call to chase success.
+policy produced none. A final explicitly authorized, bounded live Gemini workflow on
+`more-itertools` PR 1223 selected a grounded claim, repaired one environmental candidate, and
+produced an identical-artifact BASE assertion failure / HEAD pass. Semantic assessment returned
+`CLAIM_SUPPORTED_FOR_SCENARIO`, matching the stored developer oracle's discriminating pattern.
+The run used four provider attempts and 12,225 total tokens. It is real one-case workflow evidence,
+not a blind candidate-generation benchmark: production retrieval included changed test context,
+and the immutable historical commits required the benchmark's synthetic test contract.
 
 The cloud composition is now implemented: transactional Firestore persistence, deterministic
 OIDC-authenticated Cloud Tasks, a public webhook/control service, and an IAM-private executor with
@@ -41,9 +43,9 @@ script are checked in. The production image builds locally; both service health 
 the containerized production execution core reproduced an immutable BASE-fail/HEAD-pass fixture.
 The cloud-control composition itself still requires real Google services. A later read-only
 preflight verified an active billing-enabled project and a least-scope GitHub App installation, but
-no API was enabled and nothing was deployed. The historical live-Gemini attempts both failed closed
-before candidate generation, so PatchProof still does not claim historical agent quality or visible
-Google Cloud proof. Hostile-code isolation and the dashboard are also not implemented.
+no API was enabled and nothing was deployed. The bounded historical Gemini smoke now proves one
+successful claim-to-evidence path, but it does not establish an aggregate agent success rate or
+visible Google Cloud proof. Hostile-code isolation and the dashboard are also not implemented.
 
 ## Supported scope
 

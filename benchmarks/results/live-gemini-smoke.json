@@ -1,0 +1,136 @@
+{
+  "schema_version": 1,
+  "run_date": "2026-08-25",
+  "case_id": "more-itertools-1223-negative-chunk",
+  "repository": "more-itertools/more-itertools",
+  "pull_request_number": 1223,
+  "base_sha": "516f0a80fb7c2c8562dbb5e318fc2a3d44f4171f",
+  "head_sha": "0e6acdf9b60765ecf9634d6f5c132ac1bebc616b",
+  "configured_model": "gemini-3.6-flash",
+  "attempt_policy": {
+    "claim_calls": 1,
+    "candidate_calls": 2,
+    "repair_used": true,
+    "assessment_calls": 1,
+    "provider_retries": 0
+  },
+  "context": {
+    "changed_file_count": 2,
+    "changed_symbols": [
+      {
+        "path": "more_itertools/more.py",
+        "qualified_name": "chunked"
+      },
+      {
+        "path": "tests/test_more.py",
+        "qualified_name": "ChunkedTests"
+      },
+      {
+        "path": "tests/test_more.py",
+        "qualified_name": "ChunkedTests.test_negative"
+      }
+    ],
+    "snippet_count": 8,
+    "truncated": false
+  },
+  "claim": {
+    "disposition": "SELECTED",
+    "claim_id": "claim-chunked-negative-n-valueerror",
+    "summary": "chunked() raises a ValueError with message 'n must be at least 0' when n is negative.",
+    "confidence": 0.95,
+    "testability": "TESTABLE",
+    "raw_response_sha256": "52e02eab3a61d5add8d7df0fa1d63887f982c7126b384ecb579184e3a39b44b9",
+    "usage": {
+      "model_version": "gemini-3.6-flash",
+      "prompt_tokens": 2920,
+      "output_tokens": 292,
+      "total_tokens": 3212,
+      "duration_seconds": 5.222677799989469,
+      "provider_attempts": 1
+    }
+  },
+  "candidate_attempts": [
+    {
+      "sequence": 1,
+      "origin": "INITIAL",
+      "status": "VALIDATED",
+      "candidate_id": "candidate-chunked-negative-n-valueerror",
+      "target_path": "tests/patchproof_generated/test_chunked_negative.py",
+      "test_function": "test_chunked_negative_n_raises_value_error",
+      "artifact_sha256": "fa5847230958208e793a0354daa0a8c5615d6cb555b46ad1d39da8aafffb01ba",
+      "base_status": "TEST_ERROR",
+      "head_status": "PASSED",
+      "mechanical_status": "ENVIRONMENTAL",
+      "pattern": "NOT_COMPARABLE",
+      "base_collected": 1,
+      "head_collected": 1,
+      "artifact_unchanged_base": true,
+      "artifact_unchanged_head": true,
+      "usage": {
+        "model_version": "gemini-3.6-flash",
+        "prompt_tokens": 2903,
+        "output_tokens": 153,
+        "total_tokens": 3056,
+        "duration_seconds": 4.4320635999320075,
+        "provider_attempts": 1
+      }
+    },
+    {
+      "sequence": 2,
+      "origin": "REPAIR",
+      "status": "VALIDATED",
+      "candidate_id": "candidate-chunked-negative-n-valueerror-2",
+      "target_path": "tests/patchproof_generated/test_chunked_negative.py",
+      "test_function": "test_chunked_negative_n_raises_value_error",
+      "artifact_sha256": "5af30603f729226259e8e16f843a24f45c1395398cc5e715b428d1128b4c59ee",
+      "base_status": "ASSERTION_FAILED",
+      "head_status": "PASSED",
+      "mechanical_status": "DISCRIMINATING",
+      "pattern": "BASE_ASSERTION_FAILED_HEAD_PASSED",
+      "base_collected": 1,
+      "head_collected": 1,
+      "artifact_unchanged_base": true,
+      "artifact_unchanged_head": true,
+      "usage": {
+        "model_version": "gemini-3.6-flash",
+        "prompt_tokens": 3102,
+        "output_tokens": 197,
+        "total_tokens": 4928,
+        "duration_seconds": 13.338157900027,
+        "provider_attempts": 1
+      }
+    }
+  ],
+  "semantic_assessment": {
+    "outcome": "CLAIM_SUPPORTED_FOR_SCENARIO",
+    "assertion_relation": "RELATED",
+    "confidence": 1.0,
+    "usage": {
+      "model_version": "gemini-3.6-flash",
+      "prompt_tokens": 937,
+      "output_tokens": 92,
+      "total_tokens": 1029,
+      "duration_seconds": 3.7899295000825077,
+      "provider_attempts": 1
+    }
+  },
+  "oracle": {
+    "base_status": "ASSERTION_FAILED",
+    "head_status": "PASSED",
+    "mechanical_status": "DISCRIMINATING",
+    "pattern": "BASE_ASSERTION_FAILED_HEAD_PASSED",
+    "comparison": "MATCHED_DISCRIMINATING_PATTERN"
+  },
+  "usage_totals": {
+    "prompt_tokens": 9862,
+    "output_tokens": 734,
+    "total_tokens": 12225,
+    "provider_attempts": 4
+  },
+  "final_outcome": "CLAIM_SUPPORTED_FOR_SCENARIO",
+  "limitations": [
+    "The immutable historical commits predate .patchproof.yaml, so the smoke used the benchmark's fixed synthetic Python/pytest contract without dependency installation.",
+    "Production retrieval includes the changed test diff and snippets, so oracle comparison is useful execution evidence but not a blind candidate-generation measurement.",
+    "This is one historical case and does not establish an aggregate agent success rate."
+  ]
+}
