@@ -27,7 +27,8 @@ PatchProof Bench replays four developer regression oracles from four genuine his
 `more-itertools` and `humanize`. All four reproduced BASE assertion failure / HEAD pass, and all
 four controlled weak no-op candidates were rejected as non-discriminating. In this deliberately
 small policy comparison, HEAD-only acceptance produced four false supports while the BASE/HEAD
-policy produced none. Live Gemini candidate quality is explicitly not measured yet.
+policy produced none. One bounded live Gemini historical attempt later stopped at claim selection
+because the structured JSON ended prematurely; candidate quality therefore remains unmeasured.
 
 The cloud composition is now implemented: transactional Firestore persistence, deterministic
 OIDC-authenticated Cloud Tasks, a public webhook/control service, and an IAM-private executor with
@@ -35,10 +36,12 @@ no project roles or secrets. A pinned Python 3.12 shared container image, Cloud 
 least-privilege IAM, Secret Manager, scale-to-zero settings, and an exact PowerShell deployment
 script are checked in. The production image builds locally; both service health paths respond; and
 the containerized production execution core reproduced an immutable BASE-fail/HEAD-pass fixture.
-The cloud-control composition itself still requires real Google credentials and services, and the
-historical live-Gemini generation smoke remains unmeasured because no API key was available during
-this checkpoint. Nothing has been deployed, so PatchProof does not yet claim visible Google Cloud
-proof. Hostile-code isolation and the dashboard are also not implemented.
+The cloud-control composition itself still requires real Google services. A later read-only
+preflight verified an active billing-enabled project and a least-scope GitHub App installation, but
+no API was enabled and nothing was deployed. The historical live-Gemini attempt returned truncated
+structured claim output before candidate generation, so PatchProof still does not claim historical
+agent quality or visible Google Cloud proof. Hostile-code isolation and the dashboard are also not
+implemented.
 
 ## Supported scope
 

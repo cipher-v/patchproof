@@ -268,11 +268,26 @@ Windows retries. The final smoke and full suite passed after these changes.
 
 ## Real Gemini historical smoke
 
-**Skipped honestly.** `GOOGLE_API_KEY` and `GEMINI_API_KEY` were absent from process, user, and
-machine environments, and no local `.env` existed. No Gemini request was made, no historical case
-was selected, and no claim, generated candidate, token usage, outcome, or oracle comparison is
-reported. The earlier live empty-diff abstention test proves provider wiring only; it is not a
-substitute for the requested real historical generation run.
+The initial checkpoint skipped this honestly because no credential was available. After a key was
+provided outside the repository, one bounded attempt was run against
+`more-itertools-1223-negative-chunk` using `gemini-3.6-flash`, the real deterministic context
+retriever, actual PR narrative, and the production structured claim adapter. The provider returned
+a claim-shaped response whose JSON ended prematurely (`EOF while parsing`), so schema validation
+rejected it. Invalid structured output is not a transient provider failure, and the run was not
+retried.
+
+Candidate generation, BASE/HEAD candidate execution, evidence assessment, and token aggregation
+were therefore not reached. The conservative result is **INVALID agent output / no claim support**,
+not an abstention and not a successful candidate. The stored developer oracle for the same case
+remains `BASE_ASSERTION_FAILED_HEAD_PASSED` and `DISCRIMINATING`; the live attempt did not reach the
+point where it could reproduce or contradict that oracle. Usage was not retained because the
+current claim-validation exception does not carry the raw response's usage metadata. This is an
+observed agent-quality/reliability limitation, not a credential or historical-fixture failure.
+
+A separate read-only preflight verified that the GitHub App credentials can mint an installation
+token and that its single selected repository is `cipher-v/patchproof`. The selected Google Cloud
+project was also confirmed active and billing-enabled. No cloud API was enabled and no resource was
+created by either preflight.
 
 ## Tests and checks
 
@@ -307,8 +322,8 @@ deterministic fake. They do not prove real Google IAM or deployed requests.
 ## Limitations and trade-offs
 
 - No cloud resources exist yet, so visible deployment proof is blocked.
-- The real Gemini historical benchmark smoke remains unmeasured because no credential was available
-  to this process.
+- One real Gemini historical attempt failed closed on truncated structured claim JSON before
+  candidate generation. Historical candidate quality and token use therefore remain unmeasured.
 - Local control health used SQLite mode. Firestore/Cloud Tasks/Secret Manager/IAM behavior still
   requires actual GCP deployment proof.
 - Control holds one task request while calling executor; this preserves credentials but consumes a

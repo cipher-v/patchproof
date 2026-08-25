@@ -507,11 +507,14 @@ classification.
 
 ## Was a real historical Gemini candidate measured in the pre-cloud checkpoint?
 
-No. Neither `GOOGLE_API_KEY` nor `GEMINI_API_KEY` was available in the process, user, or machine
-environment, and there was no local `.env`. The earlier credential-gated live test proves the
-configured `gemini-3.6-flash` endpoint can return a structured abstention for empty diff context;
-it does not measure claim extraction or candidate quality on a historical bug. That one-case
-measurement remains required and must follow the existing bounded generation and repair policy.
+Not successfully. The initial checkpoint had no credential. Once a key became available, exactly
+one historical attempt used `more-itertools` PR 1223, deterministic context, actual PR narrative,
+and `gemini-3.6-flash`. The model response ended partway through its claim JSON, so strict schema
+validation failed before candidate generation. PatchProof did not retry a non-transient invalid
+response and did not convert it into an abstention. Consequently there is no generated candidate,
+BASE/HEAD candidate result, semantic decision, or retained usage total to compare with the stored
+discriminating developer oracle. This negative result is the live measurement: provider wiring and
+credentials worked, while useful historical candidate generation remains unproven.
 
 ## Future interview checklist (answers must follow implementation)
 
