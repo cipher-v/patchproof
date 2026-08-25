@@ -1,6 +1,6 @@
 # Architecture
 
-## Current architecture (Phase 8 complete and deployed)
+## Current architecture (Phase 9 deployed)
 
 The implemented slices connect through a durable run identity and an injectable, idempotent
 dispatcher. The ingestion slice is:
@@ -189,6 +189,12 @@ private Cloud Run executor -- checkout + validated pytest
       |
       v
 bounded facts -> control -> Firestore -> GitHub Check
+                              |
+                              v
+                 sanitized featured-run projection
+                              |
+                              v
+                 read-only evidence dashboard
 ```
 
 The control plane owns orchestration, model access, GitHub App credentials, durable state, task
@@ -197,7 +203,12 @@ contract, and a hashed artifact, then independently refetches and validates them
 bounded facts. It receives no GitHub write credential, Gemini key, or Firestore permission. This
 composition and its deployment script are implemented and live in project `patchproof-506606`.
 PR #1 exercised a genuine signed GitHub delivery through the task, executor, evidence, and GitHub
-Check path.
+Check path. The control service now also serves a same-origin static evidence console. Its API
+accepts no run identifier: operators explicitly select at most eight unique durable UUIDs through
+deployment configuration. The projection recomputes each evidence hash and checks run/repository/
+PR/revision identity before returning only bounded public fields. Candidate source is public for
+those featured runs by design; PR body, installation identity, raw model responses, stdout/stderr,
+and credentials are excluded.
 
 ## Intended evidence flow
 
@@ -219,6 +230,8 @@ abstention, bounded candidate/repair, installation, BASE/HEAD execution, mechani
 semantic relevance assessment, evidence persistence, and GitHub Check publication are connected.
 The dispatcher and Firestore adapter implement those cloud boundaries, the resources are live, and
 the first deployed end-to-end capture is recorded in `deploy/results/phase8-deployment.json`.
+The dashboard release and public-projection checks are recorded in
+`deploy/results/phase9-dashboard.json`.
 
 ## Architectural invariants
 
@@ -255,3 +268,7 @@ the first deployed end-to-end capture is recorded in `deploy/results/phase8-depl
   with an audience- and email-pinned Google OIDC identity.
 - The executor Cloud Run identity has no project roles or secret mounts; only the control identity
   can invoke it, and executor independently revalidates commits, contract, artifact, and allowlist.
+- The public dashboard can project only operator-configured run UUIDs, never request-selected
+  Firestore documents, and must verify stored evidence hashes and immutable identity before output.
+- Public evidence rendering uses typed JSON, DOM text nodes, and a same-origin CSP; untrusted
+  evidence is never interpreted as HTML or script.

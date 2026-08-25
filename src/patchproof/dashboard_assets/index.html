@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta
+      name="description"
+      content="PatchProof claim-scoped BASE/HEAD evidence console"
+    />
+    <title>PatchProof · Evidence Console</title>
+    <link rel="stylesheet" href="/dashboard/assets/styles.css" />
+    <script src="/dashboard/assets/dashboard.js" defer></script>
+  </head>
+  <body>
+    <div class="ambient ambient-one"></div>
+    <div class="ambient ambient-two"></div>
+    <header class="site-header">
+      <a class="brand" href="/dashboard" aria-label="PatchProof evidence console home">
+        <span class="brand-mark" aria-hidden="true">P<span>P</span></span>
+        <span><strong>PatchProof</strong><small>Evidence Console</small></span>
+      </a>
+      <div class="live-pill"><span></span> Google Cloud · live proof</div>
+    </header>
+
+    <main>
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow">CLAIM-SCOPED EXECUTABLE EVIDENCE</p>
+          <h1 id="hero-title">Proof for the claim.<br /><em>Not a verdict on the PR.</em></h1>
+          <p class="hero-deck">
+            One generated scenario. Identical bytes on immutable BASE and HEAD.
+            Mechanical facts first; semantic conclusions only when the evidence earns them.
+          </p>
+        </div>
+        <div class="hero-proof" aria-label="Live proof summary">
+          <div class="proof-orbit" aria-hidden="true"><span>BASE</span><i></i><span>HEAD</span></div>
+          <div class="proof-stat"><strong id="metric-runs">—</strong><span>featured runs</span></div>
+          <div class="proof-stat"><strong id="metric-checks">—</strong><span>published checks</span></div>
+          <div class="proof-stat"><strong id="metric-hashes">—</strong><span>verified hashes</span></div>
+        </div>
+      </section>
+
+      <section class="console" aria-labelledby="console-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">IMMUTABLE RUN LEDGER</p>
+            <h2 id="console-title">What happened, in order</h2>
+          </div>
+          <p id="scope-notice">Loading the bounded evidence projection…</p>
+        </div>
+
+        <div id="run-tabs" class="run-tabs" role="tablist" aria-label="Featured verification runs"></div>
+        <div id="dashboard-status" class="loading-card" role="status">
+          <span class="loading-line"></span><span class="loading-line short"></span>
+        </div>
+
+        <article id="run-panel" class="run-panel" hidden>
+          <div class="run-masthead">
+            <div>
+              <p id="run-kicker" class="eyebrow"></p>
+              <h3 id="run-title"></h3>
+              <div id="run-identities" class="identity-row"></div>
+            </div>
+            <div id="run-outcome" class="outcome-badge"></div>
+          </div>
+
+          <ol id="lifecycle-rail" class="lifecycle-rail" aria-label="Verification lifecycle"></ol>
+
+          <div class="evidence-grid">
+            <section class="card claim-card">
+              <div class="card-label"><span>01</span> Selected behavioral claim</div>
+              <h4 id="claim-summary"></h4>
+              <p id="claim-reasoning" class="muted"></p>
+              <dl class="claim-facts">
+                <div><dt>Precondition</dt><dd id="claim-precondition"></dd></div>
+                <div><dt>Action</dt><dd id="claim-action"></dd></div>
+                <div><dt>Expected</dt><dd id="claim-expected"></dd></div>
+              </dl>
+            </section>
+
+            <section class="card candidate-card">
+              <div class="card-label"><span>02</span> Candidate lineage</div>
+              <div id="candidate-list" class="candidate-list"></div>
+            </section>
+
+            <section class="card differential-card">
+              <div class="card-label"><span>03</span> Immutable challenge</div>
+              <div class="revision-comparison">
+                <div id="base-result" class="revision-result"></div>
+                <div class="comparison-axis" aria-hidden="true"><i></i><b>same bytes</b><i></i></div>
+                <div id="head-result" class="revision-result"></div>
+              </div>
+              <div id="mechanical-result" class="mechanical-result"></div>
+            </section>
+
+            <section class="card conclusion-card">
+              <div class="card-label"><span>04</span> Conservative conclusion</div>
+              <blockquote id="conclusion"></blockquote>
+              <div id="semantic-result" class="semantic-result"></div>
+            </section>
+
+            <section class="card audit-card">
+              <div class="card-label"><span>05</span> Audit trail</div>
+              <dl id="audit-list" class="audit-list"></dl>
+            </section>
+
+            <section class="card boundary-card">
+              <div class="card-label"><span>!</span> Claim boundary</div>
+              <h4>This is evidence for one tested scenario.</h4>
+              <p>
+                It does not certify the whole pull request, establish arbitrary-code safety,
+                or replace maintainer review. Abstention is a valid product result.
+              </p>
+            </section>
+          </div>
+        </article>
+      </section>
+    </main>
+
+    <footer>
+      <span>PatchProof · Taskmaster track</span>
+      <span>GitHub → Cloud Run → Firestore → Cloud Tasks → private executor → Check</span>
+    </footer>
+  </body>
+</html>

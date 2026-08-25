@@ -9,7 +9,8 @@ weak evidence, and publish a conservative claim-scoped report.
 
 ## Project status
 
-**Phase 8 complete — Phase 9 dashboard/demo polish remains.** PatchProof reads
+**Phase 9 implementation and live deployment complete; genuine screenshots remain pending.**
+PatchProof reads
 immutable BASE/HEAD Git objects, derives changed Python symbols with the AST, and ranks bounded
 diff, source, test, import, and reference evidence. One logical stateless, tool-free Google ADK
 agent using Gemini 3.6 Flash may select one grounded claim and propose one structured pytest
@@ -40,7 +41,7 @@ OIDC-authenticated Cloud Tasks, a public webhook/control service, and an IAM-pri
 no project roles or secrets. A pinned Python 3.12 shared container image, Cloud Build file,
 least-privilege IAM, Secret Manager, scale-to-zero settings, and an exact PowerShell deployment
 script are checked in. Cloud Build pushed image digest
-`sha256:0660d901df33535d83df1695f8ef61493c4ca435f36005f8f9708576f06757b8`;
+`sha256:2ad74df4a335d6c4f4aa7d7aaaab8126658bd4fa0f4249278ad384d5f0838058`;
 the control and executor revisions are Ready; public control liveness and authenticated private
 executor liveness return HTTP 200; unauthenticated executor access returns HTTP 403; and Firestore
 plus the rate-limited task queue are live in `asia-south1`. GitHub App 4711074 is active with the
@@ -49,8 +50,12 @@ successful immutable run `695eaa20-7db3-492f-a57e-9819ebb54087` traversed Cloud 
 private executor, persisted hash-verified evidence, observed BASE assertion failure / HEAD pass,
 and published successful GitHub Check 97764451438. The first delivery also demonstrated honest
 abstention after two invalid model-generated candidates. These live cases prove the deployed
-composition, not an aggregate agent success rate. Hostile-code isolation and the Phase 9 dashboard
-are not implemented.
+composition, not an aggregate agent success rate. The live read-only
+[evidence console](https://patchproof-control-q26kc4fdba-el.a.run.app/dashboard) now projects only
+those two explicitly configured runs from Firestore, recomputes their evidence hashes, and shows
+claim, candidate lineage, BASE/HEAD facts, abstention, and final GitHub result without publishing
+raw model/process output or credentials. Hostile-code isolation is not implemented, and browser
+screenshots remain pending because the available capture tool requires a newer Node runtime.
 
 ## Supported scope
 
@@ -83,6 +88,15 @@ The factory reads `PATCHPROOF_WEBHOOK_SECRET`, `PATCHPROOF_ALLOWED_REPOSITORIES`
 `owner/name` values), and optional `PATCHPROOF_DATABASE_PATH`. Do not commit real webhook secrets or
 the local database.
 
+To preview the evidence console with the checked sanitized live-proof fixture:
+
+```shell
+uv run python -m patchproof.dashboard_preview
+```
+
+Then open `http://127.0.0.1:8092/dashboard`. Production reads only the UUIDs explicitly listed in
+`PATCHPROOF_DASHBOARD_RUN_IDS` and never accepts arbitrary dashboard record IDs from a request.
+
 ## Repository layout
 
 ```text
@@ -105,8 +119,11 @@ The reliability limits, credential boundary, retry policy, and residual risk are
 [`docs/06_PHASE_RELIABILITY_SECURITY.md`](docs/06_PHASE_RELIABILITY_SECURITY.md).
 The historical cases, methodology, raw results, metrics, and evaluation limitations are documented
 in [`docs/07_PHASE_EVALUATION.md`](docs/07_PHASE_EVALUATION.md).
-The deployable services, identity boundaries, exact commands, cost controls, and deployment blocker
-are documented in [`docs/08_PHASE_CLOUD_DEPLOYMENT.md`](docs/08_PHASE_CLOUD_DEPLOYMENT.md).
+The deployed services, identity boundaries, exact commands, cost controls, and live end-to-end
+proof are documented in
+[`docs/08_PHASE_CLOUD_DEPLOYMENT.md`](docs/08_PHASE_CLOUD_DEPLOYMENT.md). The evidence-console
+boundary, live release proof, four-minute demo, Devpost copy, screenshot plan, and final limitations
+are documented in [`docs/09_PHASE_DASHBOARD_DEMO.md`](docs/09_PHASE_DASHBOARD_DEMO.md).
 
 ## Reproduce PatchProof Bench
 

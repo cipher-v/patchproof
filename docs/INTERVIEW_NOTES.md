@@ -530,3 +530,44 @@ changed test context was visible, and it does not establish an aggregate rate fr
 ## Future interview checklist (answers must follow implementation)
 
 - How could the design later support TypeScript without weakening the Python implementation?
+
+## Why is the Phase 9 UI an evidence console rather than a chatbot?
+
+The primary user task is audit, not conversation: identify the immutable run, inspect the selected
+claim and exact candidate, compare BASE with HEAD, understand rejection or repair, and follow the
+published Check. A chatbot would hide deterministic facts behind generated narration and create a
+new prompt-injection surface. The console renders the stored typed evidence directly and keeps the
+scope disclaimer visible.
+
+## Can a public caller enumerate Firestore runs through the dashboard?
+
+No. The API has no run-ID parameter and performs no query from request data. Deployment supplies a
+bounded, unique list of featured UUIDs. For each one, the server reloads the durable run and
+evidence, recomputes SHA-256, verifies repository/PR/BASE/HEAD identity, and returns a typed public
+projection. A missing or inconsistent configured record produces a generic 503.
+
+## Why is candidate source public while stdout and raw model output are not?
+
+The exact candidate bytes are essential to understanding what was tested and are already bound to
+the public artifact hash and GitHub result. Raw model responses may contain rejected or extraneous
+untrusted text, and executor output can contain repository-controlled details unrelated to the
+claim. The dashboard therefore publishes the validated candidate and bounded validation feedback,
+but excludes raw responses, response hashes, stdout, stderr, exception details, PR body,
+installation ID, and credentials.
+
+## What do the two featured runs demonstrate?
+
+The synchronized run demonstrates the complete positive composition: one grounded claim, one
+validated candidate, identical artifact, BASE assertion failure, HEAD pass, related semantic
+assessment, stored hash-verified evidence, and successful Check 97764451438. The initial run
+demonstrates fail-closed behavior: two bounded candidate-construction attempts produced
+environmental evidence, so PatchProof abstained and published neutral Check 97763556013. Together
+they demonstrate control flow and honesty, not an aggregate success rate.
+
+## Why is Phase 9 marked with a screenshot limitation?
+
+The implementation, API, package, container, cloud revisions, and live HTTP behavior were tested.
+The available in-app browser controller requires Node 22.22 or newer, while the installed runtime
+is Node 20.17, so it could not capture a genuine rendered image. No alternate or fabricated image
+was substituted. The exact four captures to take after the runtime upgrade are listed in the Phase
+9 document.

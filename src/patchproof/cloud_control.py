@@ -29,6 +29,7 @@ from patchproof.cloud_executor import (
 from patchproof.cloud_tasks import CloudTasksDispatcherSettings, CloudTasksRunDispatcher
 from patchproof.context_retrieval import DeterministicContextRetriever
 from patchproof.control_plane import ControlPlaneSettings, create_app
+from patchproof.dashboard import StoreDashboardSnapshotProvider, install_dashboard
 from patchproof.evidence_workflow import EvidenceWorkflow
 from patchproof.execution_contract import ExecutionContract, ExecutionContractLoader
 from patchproof.firestore_store import FirestoreVerificationRunStore
@@ -326,6 +327,7 @@ class CloudControlSettings:
     allowed_repositories: frozenset[str]
     github_app_id: int
     github_private_key: str
+    dashboard_run_ids: tuple[UUID, ...] = ()
     firestore_namespace: str = "patchproof"
     model_name: str = DEFAULT_CLAIM_MODEL
 
@@ -352,6 +354,11 @@ class CloudControlSettings:
             ),
             github_app_id=int(required("PATCHPROOF_GITHUB_APP_ID")),
             github_private_key=required("PATCHPROOF_GITHUB_PRIVATE_KEY"),
+            dashboard_run_ids=tuple(
+                UUID(item.strip())
+                for item in os.environ.get("PATCHPROOF_DASHBOARD_RUN_IDS", "").split(",")
+                if item.strip()
+            ),
             firestore_namespace=os.environ.get("PATCHPROOF_FIRESTORE_NAMESPACE", "patchproof"),
             model_name=os.environ.get("PATCHPROOF_GEMINI_MODEL", DEFAULT_CLAIM_MODEL),
         )
@@ -400,6 +407,13 @@ def create_cloud_control_app(
         ),
         store=resolved_store,
         dispatcher=resolved_dispatcher,
+    )
+    install_dashboard(
+        app,
+        provider=StoreDashboardSnapshotProvider(
+            store=resolved_store,
+            run_ids=settings.dashboard_run_ids,
+        ),
     )
 
     @app.post("/tasks/verify")

@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-08-25",
+  "status": "LIVE_DASHBOARD_VERIFIED_SCREENSHOTS_PENDING",
+  "project_id": "patchproof-506606",
+  "region": "asia-south1",
+  "cloud_build": {
+    "build_id": "da9d3601-74cc-44e0-9dc8-e692028c54c8",
+    "status": "SUCCESS",
+    "image": "asia-south1-docker.pkg.dev/patchproof-506606/patchproof/patchproof:phase9",
+    "digest": "sha256:2ad74df4a335d6c4f4aa7d7aaaab8126658bd4fa0f4249278ad384d5f0838058"
+  },
+  "control": {
+    "service": "patchproof-control",
+    "revision": "patchproof-control-00009-dc6",
+    "url": "https://patchproof-control-q26kc4fdba-el.a.run.app",
+    "livez_http_status": 200,
+    "root_http_status": 307,
+    "root_location": "/dashboard"
+  },
+  "executor": {
+    "service": "patchproof-executor",
+    "revision": "patchproof-executor-00006-8x2",
+    "url": "https://patchproof-executor-q26kc4fdba-el.a.run.app",
+    "unauthenticated_http_status": 403
+  },
+  "dashboard": {
+    "url": "https://patchproof-control-q26kc4fdba-el.a.run.app/dashboard",
+    "html_http_status": 200,
+    "api_http_status": 200,
+    "asset_http_status": 200,
+    "source": "live durable evidence",
+    "featured_run_count": 2,
+    "forbidden_public_field_name_hits": 0,
+    "content_security_policy": "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+    "featured_runs": [
+      {
+        "run_id": "695eaa20-7db3-492f-a57e-9819ebb54087",
+        "claim_outcome": "CLAIM_SUPPORTED_FOR_SCENARIO",
+        "base_status": "ASSERTION_FAILED",
+        "head_status": "PASSED",
+        "evidence_sha256": "9593d2a0b8092898c4951595793654bb87e4e2cfe03a42f0b3e107a8045d1d6c",
+        "evidence_hash_verified": true,
+        "check_run_id": 97764451438,
+        "check_url": "https://github.com/cipher-v/patchproof/runs/97764451438"
+      },
+      {
+        "run_id": "2386649f-56b9-44c8-833e-ddf440a05483",
+        "claim_outcome": "INSUFFICIENT_EVIDENCE",
+        "base_status": "TEST_ERROR",
+        "head_status": "TEST_ERROR",
+        "evidence_sha256": "b52aed0d2650d533ce7b71390b634de0932521b09de40ae6f3f6371f2cc085c5",
+        "evidence_hash_verified": true,
+        "check_run_id": 97763556013,
+        "check_url": "https://github.com/cipher-v/patchproof/runs/97763556013"
+      }
+    ]
+  },
+  "verification": {
+    "ruff": "PASS",
+    "pytest_passed": 216,
+    "pytest_skipped": 1,
+    "skipped_reason": "credential-gated billable live Gemini test",
+    "wheel_assets_present": true,
+    "production_container_smoke": "PASS"
+  },
+  "screenshots": {
+    "captured": false,
+    "blocker": "in-app browser requires Node >=22.22; installed Node is 20.17"
+  }
+}

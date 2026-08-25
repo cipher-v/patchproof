@@ -547,3 +547,22 @@ but has not necessarily been implemented yet.
 - **Consequence:** Phase 8 is complete at the composition boundary. Candidate-quality measurement
   remains limited and explicit, and Phase 9 must present both outcomes without turning the success
   Check into a whole-PR correctness claim.
+
+## ADR-042 — Publish an explicit sanitized run projection from the control service
+
+- **Context:** The final demo needs to explain real evidence lineage, including rejected candidates,
+  without turning Firestore into a public query API or creating a second deployment stack.
+- **Choice:** Serve a static same-origin evidence console from the existing control image. Project
+  only operator-configured run UUIDs through a strict response model, cap the list at eight unique
+  records, recompute the stored evidence hash, and verify immutable run identity before output.
+  Render all evidence with DOM text nodes under a strict Content Security Policy.
+- **Why:** The control service already owns read access to durable evidence and has a stable public
+  URL. An explicit projection makes publication reviewable and keeps credentials, PR body,
+  installation IDs, raw responses, stdout/stderr, and arbitrary records outside the browser.
+- **Alternative rejected:** A chatbot, a request-addressable Firestore browser, embedding secrets or
+  live database credentials in a separate SPA, and a second hosting provider for a four-view static
+  client.
+- **Consequence:** Adding a featured run ID is a deliberate publication decision because generated
+  candidate source becomes public. Dashboard failure is fail-closed and generic, while webhook,
+  task, executor, and Check routes retain their existing boundaries. Genuine screenshots remain a
+  separate presentation artifact and must never be synthesized from unverified data.

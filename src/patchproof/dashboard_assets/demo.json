@@ -1,0 +1,252 @@
+{
+  "schema_version": 1,
+  "source": "sanitized Phase 8 live evidence",
+  "scope_notice": "PatchProof reports claim-scoped evidence for tested scenarios, not whole-PR correctness.",
+  "runs": [
+    {
+      "run_id": "695eaa20-7db3-492f-a57e-9819ebb54087",
+      "repository": "cipher-v/patchproof",
+      "pr_number": 1,
+      "pr_url": "https://github.com/cipher-v/patchproof/pull/1",
+      "title": "Normalize stored pull-request title whitespace",
+      "event_action": "synchronize",
+      "lifecycle": "TERMINAL",
+      "phase": "PUBLICATION",
+      "terminal_reason": "COMPLETED",
+      "publication_state": "PUBLISHED",
+      "revision_state": "CURRENT",
+      "base_sha": "e6ac5f33b67710eb983cf651ae49998bfb4b9021",
+      "head_sha": "745283fedf88ebb7b1e038b3893e152cee89687a",
+      "created_at": "2026-08-25T10:10:03.922003Z",
+      "updated_at": "2026-08-25T10:10:36.367537Z",
+      "claim_disposition": "SELECTED",
+      "claim": {
+        "claim_id": "claim-normalize-pr-title-whitespace",
+        "summary": "GitHubPullRequestWebhook.to_event collapses leading, trailing, and internal whitespace in pull request titles",
+        "preconditions": [
+          "A valid pull-request webhook title contains repeated spaces or line breaks."
+        ],
+        "action": "Convert the validated GitHubPullRequestWebhook to a durable PullRequestEvent.",
+        "expected_behavior": "The stored title collapses all surrounding and internal whitespace to single spaces.",
+        "confidence": 0.95,
+        "reasoning_summary": "The changed to_event symbol replaces simple strip() behavior with deterministic split/join normalization."
+      },
+      "claim_usage": {
+        "model_name": "gemini-3.6-flash",
+        "total_tokens": 3489,
+        "duration_seconds": 3.735256159,
+        "provider_attempts": 1
+      },
+      "candidates": [
+        {
+          "sequence": 1,
+          "origin": "INITIAL",
+          "status": "VALIDATED",
+          "parent_candidate_id": null,
+          "candidate_id": "candidate-1",
+          "target_path": "tests/patchproof_generated/test_github_webhook_title_whitespace.py",
+          "test_function": "test_github_pull_request_webhook_collapses_title_whitespace",
+          "source": "from datetime import UTC, datetime\nfrom patchproof.github_webhook import GitHubPullRequestWebhook\n\ndef test_github_pull_request_webhook_collapses_title_whitespace() -> None:\n    webhook = GitHubPullRequestWebhook.model_validate(\n        {\n            \"action\": \"opened\",\n            \"number\": 1,\n            \"repository\": {\"full_name\": \"cipher-v/patchproof\", \"private\": False},\n            \"pull_request\": {\n                \"base\": {\"sha\": \"a\" * 40},\n                \"head\": {\"sha\": \"b\" * 40},\n                \"updated_at\": datetime(2026, 8, 25, tzinfo=UTC),\n                \"title\": \"  Normalize   this\\n title  \",\n            },\n            \"installation\": {\"id\": 156402136},\n        }\n    )\n    event = webhook.to_event(\"delivery-123\")\n    assert event.title == \"Normalize this title\"\n",
+          "rationale": "Exercise the exact title normalization behavior through the public webhook model boundary.",
+          "artifact_sha256": "910e1959f639abd9b253e5114fcc23fae250d3db54b96a964d231a0a1bdcbefd",
+          "issues": [],
+          "feedback_summary": null,
+          "feedback_observations": [],
+          "usage": {
+            "model_name": "gemini-3.6-flash",
+            "total_tokens": 3703,
+            "duration_seconds": 3.44050437,
+            "provider_attempts": 1
+          }
+        }
+      ],
+      "evaluations": [
+        {
+          "attempt_sequence": 1,
+          "mechanical_status": "DISCRIMINATING",
+          "differential_pattern": "BASE_ASSERTION_FAILED_HEAD_PASSED",
+          "mechanical_reason": "The identical selected test assertion failed on BASE and passed on HEAD.",
+          "base_status": "ASSERTION_FAILED",
+          "head_status": "PASSED"
+        }
+      ],
+      "selected_artifact_sha256": "910e1959f639abd9b253e5114fcc23fae250d3db54b96a964d231a0a1bdcbefd",
+      "base_execution": {
+        "role": "BASE",
+        "revision_sha": "e6ac5f33b67710eb983cf651ae49998bfb4b9021",
+        "status": "ASSERTION_FAILED",
+        "collected_count": 1,
+        "exit_code": 1,
+        "duration_seconds": 7.643194786,
+        "artifact_unchanged": true
+      },
+      "head_execution": {
+        "role": "HEAD",
+        "revision_sha": "745283fedf88ebb7b1e038b3893e152cee89687a",
+        "status": "PASSED",
+        "collected_count": 1,
+        "exit_code": 0,
+        "duration_seconds": 7.488308345,
+        "artifact_unchanged": true
+      },
+      "mechanical_status": "DISCRIMINATING",
+      "differential_pattern": "BASE_ASSERTION_FAILED_HEAD_PASSED",
+      "mechanical_reason": "The identical selected test assertion failed on BASE and passed on HEAD.",
+      "semantic_assessment": {
+        "outcome": "CLAIM_SUPPORTED_FOR_SCENARIO",
+        "assertion_relation": "RELATED",
+        "explanation": "The generated assertion directly exercises the selected title-normalization claim.",
+        "confidence": 1.0,
+        "usage": {
+          "model_name": "gemini-3.6-flash",
+          "total_tokens": 1485,
+          "duration_seconds": 3.926729546,
+          "provider_attempts": 1
+        }
+      },
+      "claim_outcome": "CLAIM_SUPPORTED_FOR_SCENARIO",
+      "conclusion": "The generated scenario supports the title-whitespace normalization claim. This is claim-scoped evidence, not verification of the pull request as a whole.",
+      "evidence_sha256": "9593d2a0b8092898c4951595793654bb87e4e2cfe03a42f0b3e107a8045d1d6c",
+      "evidence_hash_verified": true,
+      "check_run_id": 97764451438,
+      "check_url": "https://github.com/cipher-v/patchproof/runs/97764451438",
+      "publication_attempts": 1,
+      "publication_retries": 0,
+      "publication_last_error": null,
+      "failure": null
+    },
+    {
+      "run_id": "2386649f-56b9-44c8-833e-ddf440a05483",
+      "repository": "cipher-v/patchproof",
+      "pr_number": 1,
+      "pr_url": "https://github.com/cipher-v/patchproof/pull/1",
+      "title": "Normalize stored pull-request title whitespace",
+      "event_action": "opened",
+      "lifecycle": "TERMINAL",
+      "phase": "PUBLICATION",
+      "terminal_reason": "COMPLETED",
+      "publication_state": "PUBLISHED",
+      "revision_state": "SUPERSEDED",
+      "base_sha": "e6ac5f33b67710eb983cf651ae49998bfb4b9021",
+      "head_sha": "d1b3af3666336ff79d88b92e68e09c2f6918caec",
+      "created_at": "2026-08-25T10:06:15.881026Z",
+      "updated_at": "2026-08-25T10:10:03.922003Z",
+      "claim_disposition": "SELECTED",
+      "claim": {
+        "claim_id": "claim-normalize-pr-title-whitespace",
+        "summary": "Normalize whitespace in pull request titles when converting webhook payloads to durable events",
+        "preconditions": [
+          "A valid webhook title contains repeated spaces or a line break."
+        ],
+        "action": "Call GitHubPullRequestWebhook.to_event with a valid delivery ID.",
+        "expected_behavior": "The returned event title contains single-space separators with no surrounding whitespace.",
+        "confidence": 0.95,
+        "reasoning_summary": "The change is isolated, deterministic, and directly observable on the returned event model."
+      },
+      "claim_usage": {
+        "model_name": "gemini-3.6-flash",
+        "total_tokens": 2413,
+        "duration_seconds": 4.72157201,
+        "provider_attempts": 1
+      },
+      "candidates": [
+        {
+          "sequence": 1,
+          "origin": "INITIAL",
+          "status": "VALIDATED",
+          "parent_candidate_id": null,
+          "candidate_id": "candidate-1",
+          "target_path": "tests/patchproof_generated/test_github_webhook_title_normalization.py",
+          "test_function": "test_pull_request_webhook_to_event_normalizes_title_whitespace",
+          "source": "from patchproof.github_webhook import GitHubPullRequestWebhook, GitHubRepositoryPayload, GitHubPullRequestPayload, GitHubCommitRefPayload\nfrom datetime import datetime, timezone\n\ndef test_pull_request_webhook_to_event_normalizes_title_whitespace() -> None:\n    webhook = GitHubPullRequestWebhook(\n        action=\"opened\",\n        number=1,\n        repository=GitHubRepositoryPayload(full_name=\"owner/repo\"),\n        pull_request=GitHubPullRequestPayload(\n            base=GitHubCommitRefPayload(sha=\"a\" * 40),\n            head=GitHubCommitRefPayload(sha=\"b\" * 40),\n            updated_at=datetime.now(timezone.utc),\n            title=\"  Normalize   this\\n title  \",\n            body=\"some body\",\n        ),\n    )\n    event = webhook.to_event(\"delivery-123\")\n    assert event.title == \"Normalize this title\"",
+          "rationale": "Attempt to instantiate typed webhook submodels and assert normalized output.",
+          "artifact_sha256": "8fa64f85e2e283ec4a1e31a3a73b7da8ba50f0bc911a70139701bd2eaa2ad424",
+          "issues": [],
+          "feedback_summary": null,
+          "feedback_observations": [],
+          "usage": {
+            "model_name": "gemini-3.6-flash",
+            "total_tokens": 2611,
+            "duration_seconds": 3.889190873,
+            "provider_attempts": 1
+          }
+        },
+        {
+          "sequence": 2,
+          "origin": "REPAIR",
+          "status": "VALIDATED",
+          "parent_candidate_id": "candidate-1",
+          "candidate_id": "candidate-2",
+          "target_path": "tests/patchproof_generated/test_github_webhook_title_normalization.py",
+          "test_function": "test_pull_request_webhook_to_event_normalizes_title_whitespace",
+          "source": "from datetime import datetime, timezone\nfrom patchproof.github_webhook import GitHubPullRequestWebhook\n\ndef test_pull_request_webhook_to_event_normalizes_title_whitespace() -> None:\n    payload = {\n        \"action\": \"opened\",\n        \"number\": 1,\n        \"repository\": {\"full_name\": \"owner/repo\"},\n        \"pull_request\": {\n            \"base\": {\"sha\": \"a\" * 40},\n            \"head\": {\"sha\": \"b\" * 40},\n            \"updated_at\": datetime.now(timezone.utc).isoformat(),\n            \"title\": \"  Normalize   this\\n title  \",\n            \"body\": \"some body\",\n        },\n    }\n    webhook = GitHubPullRequestWebhook.model_validate(payload)\n    event = webhook.to_event(\"delivery-123\")\n    assert event.title == \"Normalize this title\"",
+          "rationale": "Repair the nonexistent import by using model_validate with a plain payload.",
+          "artifact_sha256": "de83800d91c20f46fed78987cda25c95098d8f48cb840b3d74c1bf23b59953da",
+          "issues": [],
+          "feedback_summary": "The previous candidate did not produce discriminating BASE/HEAD evidence.",
+          "feedback_observations": [
+            "mechanical_status=ENVIRONMENTAL",
+            "BASE=COLLECTION_ERROR; HEAD=COLLECTION_ERROR"
+          ],
+          "usage": {
+            "model_name": "gemini-3.6-flash",
+            "total_tokens": 3010,
+            "duration_seconds": 5.671535095,
+            "provider_attempts": 1
+          }
+        }
+      ],
+      "evaluations": [
+        {
+          "attempt_sequence": 1,
+          "mechanical_status": "ENVIRONMENTAL",
+          "differential_pattern": "NOT_COMPARABLE",
+          "mechanical_reason": "Both revisions encountered the same collection error.",
+          "base_status": "COLLECTION_ERROR",
+          "head_status": "COLLECTION_ERROR"
+        },
+        {
+          "attempt_sequence": 2,
+          "mechanical_status": "ENVIRONMENTAL",
+          "differential_pattern": "NOT_COMPARABLE",
+          "mechanical_reason": "Both revisions rejected a payload missing repository.private.",
+          "base_status": "TEST_ERROR",
+          "head_status": "TEST_ERROR"
+        }
+      ],
+      "selected_artifact_sha256": "de83800d91c20f46fed78987cda25c95098d8f48cb840b3d74c1bf23b59953da",
+      "base_execution": {
+        "role": "BASE",
+        "revision_sha": "e6ac5f33b67710eb983cf651ae49998bfb4b9021",
+        "status": "TEST_ERROR",
+        "collected_count": 1,
+        "exit_code": 1,
+        "duration_seconds": 7.709114631,
+        "artifact_unchanged": true
+      },
+      "head_execution": {
+        "role": "HEAD",
+        "revision_sha": "d1b3af3666336ff79d88b92e68e09c2f6918caec",
+        "status": "TEST_ERROR",
+        "collected_count": 1,
+        "exit_code": 1,
+        "duration_seconds": 7.298038909,
+        "artifact_unchanged": true
+      },
+      "mechanical_status": "ENVIRONMENTAL",
+      "differential_pattern": "NOT_COMPARABLE",
+      "mechanical_reason": "Execution environments did not produce comparable assertion outcomes.",
+      "semantic_assessment": null,
+      "claim_outcome": "INSUFFICIENT_EVIDENCE",
+      "conclusion": "PatchProof found insufficient evidence for the selected claim and abstained.",
+      "evidence_sha256": "b52aed0d2650d533ce7b71390b634de0932521b09de40ae6f3f6371f2cc085c5",
+      "evidence_hash_verified": true,
+      "check_run_id": 97763556013,
+      "check_url": "https://github.com/cipher-v/patchproof/runs/97763556013",
+      "publication_attempts": 1,
+      "publication_retries": 0,
+      "publication_last_error": null,
+      "failure": null
+    }
+  ]
+}
