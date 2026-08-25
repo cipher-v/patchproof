@@ -508,3 +508,26 @@ but has not necessarily been implemented yet.
   workflow selected a grounded claim and used its single repair to reach BASE assertion failure /
   HEAD pass, matching the developer oracle. This is one non-blind success because changed test
   context was visible; it does not establish aggregate historical candidate quality.
+
+## ADR-040 — Make deployment explicit across Windows and current Cloud Build defaults
+
+- **Context:** The first real deployment exposed three integration assumptions hidden by local
+  tests: PowerShell promoted expected `gcloud.ps1` `NOT_FOUND` output to a terminating error; new
+  Cloud Build projects selected the default Compute Engine account without source-object access;
+  and colon-delimited environment arguments collided with PowerShell interpolation and URL values.
+- **Choice:** Silence only idempotent existence probes and inspect their exit codes; wrap every
+  other gcloud call with explicit nonzero failure; use a dedicated `patchproof-builder` identity
+  with log-write, source-read, and repository-scoped image-write roles; brace PowerShell variables
+  and use a `#` custom delimiter for control environment values. Use Cloud Run's recommended
+  disabled Invoker IAM check for the intentionally public HMAC-protected control service. Retain
+  `/healthz` for internal startup probes and expose `/livez` for visible liveness because the live
+  Cloud Run frontend intercepted external `/healthz` with its own 404.
+- **Why:** Deployment must be idempotent without hiding real native failures, builds must not inherit
+  an unrelated default account, environment values must survive Windows argument parsing, and the
+  webhook ingress needs a publicly testable path without weakening HMAC or executor IAM.
+- **Alternative rejected:** Granting broad build roles to the default Compute account, ignoring
+  native exit codes, embedding secrets in CLI literals, making executor public, or replacing the
+  ASGI server after the deployed app's other public routes proved healthy.
+- **Consequence:** The script is reliable on the observed Windows/SDK 581 path and the runtime
+  identities remain narrow. The deployed backend is proven, but Phase 8 remains incomplete until
+  the GitHub App webhook is activated/subscribed and a genuine PR produces a Check.

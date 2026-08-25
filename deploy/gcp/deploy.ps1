@@ -17,9 +17,37 @@ $ExecutorService = "patchproof-executor"
 $ControlAccountName = "patchproof-control"
 $ExecutorAccountName = "patchproof-executor"
 $TaskAccountName = "patchproof-task-invoker"
+$BuildAccountName = "patchproof-builder"
 $ControlAccount = "$ControlAccountName@$ProjectId.iam.gserviceaccount.com"
 $ExecutorAccount = "$ExecutorAccountName@$ProjectId.iam.gserviceaccount.com"
 $TaskAccount = "$TaskAccountName@$ProjectId.iam.gserviceaccount.com"
+$BuildAccount = "$BuildAccountName@$ProjectId.iam.gserviceaccount.com"
+
+function Invoke-Gcloud {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
+
+    gcloud @Arguments
+    $NativeExitCode = $LASTEXITCODE
+    if ($NativeExitCode -ne 0) {
+        throw "gcloud command failed with exit code $NativeExitCode."
+    }
+}
+
+function Test-GcloudResource {
+    param([Parameter(Mandatory = $true)][string[]]$Arguments)
+
+    $PreviousErrorActionPreference = $ErrorActionPreference
+    try {
+        # The Windows gcloud.ps1 wrapper converts expected NOT_FOUND stderr into a PowerShell
+        # error record. Silence only these idempotent existence probes and inspect the native exit.
+        $ErrorActionPreference = "SilentlyContinue"
+        gcloud @Arguments *> $null
+        return $LASTEXITCODE -eq 0
+    }
+    finally {
+        $ErrorActionPreference = $PreviousErrorActionPreference
+    }
+}
 
 foreach ($RequiredFile in @($WebhookSecretFile, $GitHubPrivateKeyFile, $GeminiApiKeyFile)) {
     if (-not (Test-Path -LiteralPath $RequiredFile -PathType Leaf)) {
@@ -27,67 +55,76 @@ foreach ($RequiredFile in @($WebhookSecretFile, $GitHubPrivateKeyFile, $GeminiAp
     }
 }
 
-gcloud config set project $ProjectId
-gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com firestore.googleapis.com cloudtasks.googleapis.com secretmanager.googleapis.com iamcredentials.googleapis.com
+Invoke-Gcloud config set project $ProjectId
+Invoke-Gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com firestore.googleapis.com cloudtasks.googleapis.com secretmanager.googleapis.com iamcredentials.googleapis.com
 
-$ProjectNumber = gcloud projects describe $ProjectId --format="value(projectNumber)"
+$ProjectNumber = Invoke-Gcloud projects describe $ProjectId --format="value(projectNumber)"
 
 foreach ($Account in @(
     @{ Name = $ControlAccountName; Display = "PatchProof control plane" },
     @{ Name = $ExecutorAccountName; Display = "PatchProof private executor" },
-    @{ Name = $TaskAccountName; Display = "PatchProof Cloud Tasks caller" }
+    @{ Name = $TaskAccountName; Display = "PatchProof Cloud Tasks caller" },
+    @{ Name = $BuildAccountName; Display = "PatchProof image builder" }
 )) {
-    gcloud iam service-accounts describe "$($Account.Name)@$ProjectId.iam.gserviceaccount.com" 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        gcloud iam service-accounts create $Account.Name --display-name=$Account.Display
+    if (-not (Test-GcloudResource -Arguments @(
+        "iam", "service-accounts", "describe", "$($Account.Name)@$ProjectId.iam.gserviceaccount.com"
+    ))) {
+        Invoke-Gcloud iam service-accounts create $Account.Name --display-name=$Account.Display
     }
 }
 
 foreach ($Role in @("roles/datastore.user", "roles/cloudtasks.enqueuer")) {
-    gcloud projects add-iam-policy-binding $ProjectId --member="serviceAccount:$ControlAccount" --role=$Role --condition=None
+    Invoke-Gcloud projects add-iam-policy-binding $ProjectId --member="serviceAccount:$ControlAccount" --role=$Role --condition=None
 }
-gcloud iam service-accounts add-iam-policy-binding $TaskAccount --member="serviceAccount:$ControlAccount" --role="roles/iam.serviceAccountUser"
-gcloud iam service-accounts add-iam-policy-binding $TaskAccount --member="serviceAccount:service-$ProjectNumber@gcp-sa-cloudtasks.iam.gserviceaccount.com" --role="roles/iam.serviceAccountTokenCreator"
+Invoke-Gcloud iam service-accounts add-iam-policy-binding $TaskAccount --member="serviceAccount:$ControlAccount" --role="roles/iam.serviceAccountUser"
+Invoke-Gcloud iam service-accounts add-iam-policy-binding $TaskAccount --member="serviceAccount:service-$ProjectNumber@gcp-sa-cloudtasks.iam.gserviceaccount.com" --role="roles/iam.serviceAccountTokenCreator"
 
-gcloud artifacts repositories describe $Repository --location=$Region 2>$null
-if ($LASTEXITCODE -ne 0) {
-    gcloud artifacts repositories create $Repository --repository-format=docker --location=$Region --description="PatchProof deployment images"
-}
-
-gcloud firestore databases describe --database="(default)" 2>$null
-if ($LASTEXITCODE -ne 0) {
-    gcloud firestore databases create --database="(default)" --location=$Region --type=firestore-native
+foreach ($Role in @("roles/logging.logWriter", "roles/storage.objectViewer")) {
+    Invoke-Gcloud projects add-iam-policy-binding $ProjectId --member="serviceAccount:$BuildAccount" --role=$Role --condition=None
 }
 
-gcloud tasks queues describe $Queue --location=$Region 2>$null
-if ($LASTEXITCODE -ne 0) {
-    gcloud tasks queues create $Queue --location=$Region
+if (-not (Test-GcloudResource -Arguments @(
+    "artifacts", "repositories", "describe", $Repository, "--location=$Region"
+))) {
+    Invoke-Gcloud artifacts repositories create $Repository --repository-format=docker --location=$Region --description="PatchProof deployment images"
 }
-gcloud tasks queues update $Queue --location=$Region --max-dispatches-per-second=1 --max-concurrent-dispatches=1 --max-attempts=3 --max-retry-duration=3600s
+Invoke-Gcloud artifacts repositories add-iam-policy-binding $Repository --location=$Region --member="serviceAccount:$BuildAccount" --role="roles/artifactregistry.writer"
+
+if (-not (Test-GcloudResource -Arguments @(
+    "firestore", "databases", "describe", "--database=(default)"
+))) {
+    Invoke-Gcloud firestore databases create --database="(default)" --location=$Region --type=firestore-native
+}
+
+if (-not (Test-GcloudResource -Arguments @(
+    "tasks", "queues", "describe", $Queue, "--location=$Region"
+))) {
+    Invoke-Gcloud tasks queues create $Queue --location=$Region
+}
+Invoke-Gcloud tasks queues update $Queue --location=$Region --max-dispatches-per-second=1 --max-concurrent-dispatches=1 --max-attempts=3 --max-retry-duration=3600s
 
 foreach ($Secret in @("patchproof-webhook-secret", "patchproof-github-private-key", "patchproof-gemini-api-key")) {
-    gcloud secrets describe $Secret 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        gcloud secrets create $Secret --replication-policy=automatic
+    if (-not (Test-GcloudResource -Arguments @("secrets", "describe", $Secret))) {
+        Invoke-Gcloud secrets create $Secret --replication-policy=automatic
     }
-    gcloud secrets add-iam-policy-binding $Secret --member="serviceAccount:$ControlAccount" --role="roles/secretmanager.secretAccessor"
+    Invoke-Gcloud secrets add-iam-policy-binding $Secret --member="serviceAccount:$ControlAccount" --role="roles/secretmanager.secretAccessor"
 }
-gcloud secrets versions add patchproof-webhook-secret --data-file=$WebhookSecretFile
-gcloud secrets versions add patchproof-github-private-key --data-file=$GitHubPrivateKeyFile
-gcloud secrets versions add patchproof-gemini-api-key --data-file=$GeminiApiKeyFile
+Invoke-Gcloud secrets versions add patchproof-webhook-secret --data-file=$WebhookSecretFile
+Invoke-Gcloud secrets versions add patchproof-github-private-key --data-file=$GitHubPrivateKeyFile
+Invoke-Gcloud secrets versions add patchproof-gemini-api-key --data-file=$GeminiApiKeyFile
 
-gcloud builds submit --config=deploy/cloudbuild.yaml --substitutions="_IMAGE=$Image" .
+Invoke-Gcloud builds submit --config=deploy/cloudbuild.yaml --substitutions="_IMAGE=$Image" .
 
-gcloud run deploy $ExecutorService --image=$Image --region=$Region --platform=managed --service-account=$ExecutorAccount --no-allow-unauthenticated --set-env-vars="^:^GOOGLE_CLOUD_PROJECT=$ProjectId:PATCHPROOF_SERVICE_ROLE=executor:PATCHPROOF_ALLOWED_REPOSITORIES=$AllowedRepositories" --min=0 --max=1 --concurrency=1 --cpu=2 --memory=2Gi --timeout=900
-$ExecutorUrl = gcloud run services describe $ExecutorService --region=$Region --format="value(status.url)"
-gcloud run services add-iam-policy-binding $ExecutorService --region=$Region --member="serviceAccount:$ControlAccount" --role="roles/run.invoker"
+Invoke-Gcloud run deploy $ExecutorService --image=$Image --region=$Region --platform=managed --service-account=$ExecutorAccount --no-allow-unauthenticated --set-env-vars="GOOGLE_CLOUD_PROJECT=${ProjectId},PATCHPROOF_SERVICE_ROLE=executor,PATCHPROOF_ALLOWED_REPOSITORIES=${AllowedRepositories}" --startup-probe="httpGet.path=/healthz,httpGet.port=8080,timeoutSeconds=5,periodSeconds=5,failureThreshold=12" --min-instances=0 --max-instances=1 --concurrency=1 --cpu=2 --memory=2Gi --timeout=900
+$ExecutorUrl = Invoke-Gcloud run services describe $ExecutorService --region=$Region --format="value(status.url)"
+Invoke-Gcloud run services add-iam-policy-binding $ExecutorService --region=$Region --member="serviceAccount:$ControlAccount" --role="roles/run.invoker"
 
-gcloud run deploy $ControlService --image=$Image --region=$Region --platform=managed --service-account=$ControlAccount --allow-unauthenticated --set-env-vars="^:^GOOGLE_CLOUD_PROJECT=$ProjectId:PATCHPROOF_SERVICE_ROLE=control:PATCHPROOF_REGION=$Region:PATCHPROOF_TASK_QUEUE=$Queue:PATCHPROOF_CONTROL_URL=https://pending.invalid:PATCHPROOF_EXECUTOR_URL=$ExecutorUrl:PATCHPROOF_TASK_INVOKER_EMAIL=$TaskAccount:PATCHPROOF_ALLOWED_REPOSITORIES=$AllowedRepositories:PATCHPROOF_GITHUB_APP_ID=$GitHubAppId:PATCHPROOF_GEMINI_MODEL=gemini-3.6-flash:GOOGLE_GENAI_USE_VERTEXAI=false" --set-secrets="PATCHPROOF_WEBHOOK_SECRET=patchproof-webhook-secret:latest,PATCHPROOF_GITHUB_PRIVATE_KEY=patchproof-github-private-key:latest,GOOGLE_API_KEY=patchproof-gemini-api-key:latest" --min=0 --max=2 --concurrency=4 --cpu=1 --memory=1Gi --timeout=900
-$ControlUrl = gcloud run services describe $ControlService --region=$Region --format="value(status.url)"
-gcloud run services update $ControlService --region=$Region --update-env-vars="PATCHPROOF_CONTROL_URL=$ControlUrl"
+Invoke-Gcloud run deploy $ControlService --image=$Image --region=$Region --platform=managed --service-account=$ControlAccount --no-invoker-iam-check --set-env-vars="^#^GOOGLE_CLOUD_PROJECT=${ProjectId}#PATCHPROOF_SERVICE_ROLE=control#PATCHPROOF_REGION=${Region}#PATCHPROOF_TASK_QUEUE=${Queue}#PATCHPROOF_CONTROL_URL=https://pending.invalid#PATCHPROOF_EXECUTOR_URL=${ExecutorUrl}#PATCHPROOF_TASK_INVOKER_EMAIL=${TaskAccount}#PATCHPROOF_ALLOWED_REPOSITORIES=${AllowedRepositories}#PATCHPROOF_GITHUB_APP_ID=${GitHubAppId}#PATCHPROOF_GEMINI_MODEL=gemini-3.6-flash#GOOGLE_GENAI_USE_VERTEXAI=false" --set-secrets="PATCHPROOF_WEBHOOK_SECRET=patchproof-webhook-secret:latest,PATCHPROOF_GITHUB_PRIVATE_KEY=patchproof-github-private-key:latest,GOOGLE_API_KEY=patchproof-gemini-api-key:latest" --startup-probe="httpGet.path=/healthz,httpGet.port=8080,timeoutSeconds=5,periodSeconds=5,failureThreshold=12" --min-instances=0 --max-instances=2 --concurrency=4 --cpu=1 --memory=1Gi --timeout=900
+$ControlUrl = Invoke-Gcloud run services describe $ControlService --region=$Region --format="value(status.url)"
+Invoke-Gcloud run services update $ControlService --region=$Region --update-env-vars="PATCHPROOF_CONTROL_URL=$ControlUrl"
 
 Write-Output "Control URL: $ControlUrl"
 Write-Output "Executor URL: $ExecutorUrl"
 Write-Output "GitHub webhook URL: $ControlUrl/webhooks/github"
-Write-Output "Public health proof: Invoke-RestMethod $ControlUrl/healthz"
+Write-Output "Public health proof: Invoke-RestMethod $ControlUrl/livez"
 Write-Output "Private executor proof: gcloud run services proxy $ExecutorService --region=$Region --port=8081"

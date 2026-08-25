@@ -80,6 +80,7 @@ def test_health_endpoint_is_independent_of_webhook_authentication(api_parts) -> 
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+    assert client.get("/livez").json() == {"status": "ok"}
 
 
 def test_valid_pull_request_delivery_creates_a_durable_run(api_parts) -> None:

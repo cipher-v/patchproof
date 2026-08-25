@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-08-25",
+  "status": "DEPLOYED_PENDING_SIGNED_WEBHOOK_TO_CHECK_PROOF",
+  "project_id": "patchproof-506606",
+  "project_number": "571762094707",
+  "region": "asia-south1",
+  "cloud_build": {
+    "build_id": "4ae55e6a-9617-4597-bf57-96ad0f441cb6",
+    "status": "SUCCESS",
+    "image": "asia-south1-docker.pkg.dev/patchproof-506606/patchproof/patchproof:phase8",
+    "digest": "sha256:0660d901df33535d83df1695f8ef61493c4ca435f36005f8f9708576f06757b8",
+    "service_account": "patchproof-builder@patchproof-506606.iam.gserviceaccount.com"
+  },
+  "control": {
+    "service": "patchproof-control",
+    "revision": "patchproof-control-00007-zlh",
+    "url": "https://patchproof-control-q26kc4fdba-el.a.run.app",
+    "ready": true,
+    "service_account": "patchproof-control@patchproof-506606.iam.gserviceaccount.com",
+    "ingress": "all",
+    "invoker_iam_check_disabled": true,
+    "max_instances": 2,
+    "concurrency": 4,
+    "public_livez_http_status": 200
+  },
+  "executor": {
+    "service": "patchproof-executor",
+    "revision": "patchproof-executor-00005-5zb",
+    "url": "https://patchproof-executor-q26kc4fdba-el.a.run.app",
+    "ready": true,
+    "service_account": "patchproof-executor@patchproof-506606.iam.gserviceaccount.com",
+    "project_roles": [],
+    "invokers": [
+      "patchproof-control@patchproof-506606.iam.gserviceaccount.com"
+    ],
+    "max_instances": 1,
+    "concurrency": 1,
+    "authenticated_livez_http_status": 200,
+    "unauthenticated_livez_http_status": 403
+  },
+  "firestore": {
+    "database": "(default)",
+    "type": "FIRESTORE_NATIVE",
+    "edition": "STANDARD",
+    "location": "asia-south1"
+  },
+  "cloud_tasks": {
+    "queue": "patchproof-verification-runs",
+    "state": "RUNNING",
+    "max_dispatches_per_second": 1.0,
+    "max_concurrent_dispatches": 1,
+    "max_attempts": 3,
+    "max_retry_duration_seconds": 3600
+  },
+  "secrets": {
+    "names": [
+      "patchproof-webhook-secret",
+      "patchproof-github-private-key",
+      "patchproof-gemini-api-key"
+    ],
+    "latest_enabled_version": 2,
+    "values_recorded": false
+  },
+  "github_app": {
+    "app_id": 4711074,
+    "installation_id": 156402136,
+    "repository": "cipher-v/patchproof",
+    "checks_permission": "write",
+    "pull_request_event_subscribed": false,
+    "webhook_configuration_endpoint_status": 404,
+    "blocker": "Activate the App webhook and subscribe to pull_request in GitHub settings."
+  },
+  "cleanup": {
+    "temporary_cloud_run_services_remaining": 0,
+    "temporary_cloud_tasks_remaining": 0,
+    "diagnostic_apis_disabled": [
+      "orgpolicy.googleapis.com",
+      "accesscontextmanager.googleapis.com"
+    ]
+  },
+  "limitations": [
+    "No genuine signed GitHub pull_request delivery has reached the control service.",
+    "No Cloud Task has completed the deployed semantic and private-executor workflow.",
+    "No deployed evidence document or GitHub Check has been captured."
+  ]
+}

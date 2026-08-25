@@ -27,7 +27,7 @@ settings; tests inject a temporary adapter.
 
 The service exposes:
 
-- `GET /healthz`, a liveness endpoint independent of webhook credentials;
+- `GET /healthz` and `GET /livez`, liveness endpoints independent of webhook credentials;
 - `POST /webhooks/github`, the authenticated event-ingestion boundary.
 
 `ControlPlaneSettings` requires a non-empty webhook secret, at least one valid canonical

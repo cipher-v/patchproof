@@ -2,14 +2,16 @@
 
 ## Status
 
-**BLOCKED ON REAL GOOGLE CLOUD DEPLOYMENT PROOF.** The application, infrastructure script,
-container definition, persistence adapter, queue dispatcher, private executor API, authentication
-boundaries, automated tests, production image build, both service-role health checks, and a
-containerized deterministic BASE/HEAD smoke are locally verified. They have not been deployed to a
-Google Cloud project because this workstation has neither the Google Cloud CLI nor an authenticated
-project. No cloud resource or billable API was silently enabled.
+**DEPLOYED; BLOCKED ON SIGNED WEBHOOK-TO-CHECK PROOF.** Project `patchproof-506606` now has the
+documented Firestore database, rate-limited Cloud Tasks queue, three secrets, four service
+identities, Artifact Registry image, private executor, and public control service in
+`asia-south1`. Both revisions are Ready. Public control `/livez` and authenticated private executor
+`/livez` return HTTP 200; unauthenticated executor access returns HTTP 403.
 
-The repository is deploy-ready; it does not yet claim that a live backend exists.
+The remaining blocker is outside the deployed backend: GitHub App 4711074 has `Checks: write` but
+its App webhook is inactive and its event list does not include `pull_request`. Until that setting
+is enabled and one genuine signed delivery produces a durable run and GitHub Check, Phase 8 remains
+incomplete.
 
 ## Problem and architecture
 
@@ -112,6 +114,7 @@ environment, and secret mounts remain separate. The process listens on `0.0.0.0:
 | `patchproof-control` | Firestore user, Tasks enqueuer, only three named secrets, invoke only executor, act as only task identity | owner/editor, executor identity, arbitrary secrets |
 | `patchproof-executor` | no project role | Firestore, Tasks, Secret Manager, Gemini, GitHub |
 | `patchproof-task-invoker` | no project role; OIDC subject only | data, execution, secrets, GitHub |
+| `patchproof-builder` | log writer, source-object viewer, Artifact Registry writer on only `patchproof` | runtime data, secrets, Run invocation |
 | Cloud Tasks service agent | mint token for only task identity | project-wide account administration |
 
 The human deployer still needs permission to create these resources. Deployment permissions are
@@ -177,7 +180,7 @@ gcloud tasks queues describe patchproof-verification-runs --location "asia-south
 gcloud firestore databases describe --database="(default)"
 
 $controlUrl = gcloud run services describe patchproof-control --region "asia-south1" --format="value(status.url)"
-Invoke-RestMethod "$controlUrl/healthz"
+Invoke-RestMethod "$controlUrl/livez"
 ```
 
 Then send a genuine signed PR event and retain the run UUID, completed task, Firestore run/evidence,
@@ -325,8 +328,31 @@ dependency installation disabled, and one successful case cannot establish an ag
 
 A separate read-only preflight verified that the GitHub App credentials can mint an installation
 token and that its single selected repository is `cipher-v/patchproof`. The selected Google Cloud
-project was also confirmed active and billing-enabled. No cloud API was enabled and no resource was
-created by either preflight.
+project was also confirmed active and billing-enabled. That preflight itself created nothing; the
+later explicitly authorized deployment is recorded below.
+
+## Live Google Cloud deployment
+
+The authorized deployment on 2026-08-25 produced Cloud Build
+`4ae55e6a-9617-4597-bf57-96ad0f441cb6` and image digest
+`sha256:0660d901df33535d83df1695f8ef61493c4ca435f36005f8f9708576f06757b8`.
+Control revision `patchproof-control-00007-zlh` and executor revision
+`patchproof-executor-00005-5zb` are Ready and receive 100% of their services' traffic. Firestore is
+native/Standard in `asia-south1`; the queue is RUNNING with one dispatch per second, one concurrent
+dispatch, and three attempts. Control has max two instances/concurrency four; executor has max one
+instance/concurrency one. Both scale to zero.
+
+Deployment exposed and corrected three Windows/current-GCP integration problems: expected
+`NOT_FOUND` probes from `gcloud.ps1` were terminating under `$ErrorActionPreference = "Stop"`;
+new projects default Cloud Build to the underprivileged Compute Engine account; and PowerShell
+consumed unbraced variables beside a colon-delimited environment string. The script now isolates
+existence probes, fails explicitly on every other native nonzero exit, uses a dedicated builder,
+and uses safe braced/custom-delimiter environment arguments. Cloud Run's external frontend returned
+its own 404 for `/healthz` while the internal startup probe reached that application route with 200,
+so `/livez` is the visible liveness path and `/healthz` remains the HTTP startup probe.
+
+The sanitized machine-readable record is `deploy/results/phase8-deployment.json`. Two diagnostic
+APIs and every temporary probe service/task were removed after use.
 
 ## Tests and checks
 
@@ -340,8 +366,8 @@ uv run pytest -q
 ```
 
 - Ruff: all formatting and lint checks passed.
-- Pytest: **208 passed, 1 live Gemini test skipped, 2 dependency warnings** in 116.54 seconds.
-- New cloud tests: 14, all included in the passing full suite.
+- Pytest: **209 passed, 1 live Gemini test skipped, 2 dependency warnings** in 72.67 seconds.
+- New cloud tests: 15, all included in the passing full suite.
 - Frozen dependency lock: resolved 74 packages without a lock change.
 - `deploy/gcp/deploy.ps1`: PowerShell AST parse succeeded.
 - `git diff --check`: passed.
@@ -353,19 +379,23 @@ The two warnings are known upstream deprecations rather than blockers: Google AD
 `BaseAgentConfig`, and FastAPI/Starlette's deprecated `httpx` TestClient compatibility layer. No
 PatchProof stack trace or runtime warning appeared in the final containers.
 
-The tests prove minimized/idempotent task creation, OIDC identity pinning, task-route authorization,
-executor wire fidelity and fail-closed errors, control-to-executor token propagation, artifact
-identity, and Firestore acceptance/supersession/evidence/publication/failure semantics through a
-deterministic fake. They do not prove real Google IAM or deployed requests.
+The automated tests prove minimized/idempotent task creation, OIDC identity pinning, task-route
+authorization, executor wire fidelity and fail-closed errors, control-to-executor token
+propagation, artifact identity, and Firestore
+acceptance/supersession/evidence/publication/failure semantics through a deterministic fake. The
+separate live proof covers service readiness, public/private ingress, IAM separation,
+Firestore/queue configuration, image identity, and HTTP startup/liveness. A genuine signed task and
+GitHub publication path still needs the external GitHub App setting described below.
 
 ## Limitations and trade-offs
 
-- No cloud resources exist yet, so visible deployment proof is blocked.
+- The GitHub App webhook is inactive and lacks the `pull_request` event subscription, so no genuine
+  signed delivery, Cloud Task execution, Firestore evidence document, or GitHub Check is captured.
 - One bounded historical Gemini workflow reached a matching discriminating result after its single
   allowed repair. Because changed tests were visible and only one case ran, blind and aggregate
   historical candidate quality remains unmeasured.
-- Local control health used SQLite mode. Firestore/Cloud Tasks/Secret Manager/IAM behavior still
-  requires actual GCP deployment proof.
+- Firestore, Cloud Tasks, Secret Manager, and Cloud Run IAM are configured live, but their complete
+  composition still requires the signed webhook-to-Check run.
 - Control holds one task request while calling executor; this preserves credentials but consumes a
   control request for the execution duration.
 - Phase 6 makes execution failures durably terminal. Task retry mainly protects dispatch and
@@ -395,6 +425,9 @@ task ingress later, but adds cost and deployment surface without changing the cu
 
 ## Unblocking Phase 8
 
-Install/authenticate `gcloud`, choose the credited project, prepare the three secret files, and
-authorize running `deploy/gcp/deploy.ps1`. Then capture health, IAM, queue, Firestore, signed
-webhook, executor, and GitHub Check proof. Only then can Phase 8 become complete.
+In GitHub App 4711074, activate the webhook with the deployed
+`CONTROL_URL/webhooks/github`, retain the existing secret, grant Pull requests read permission if
+GitHub requires it, and subscribe to the Pull request event. Then open or synchronize a bounded PR
+in `cipher-v/patchproof` and capture the signed delivery, run UUID, completed task, Firestore
+run/evidence, executor/control logs, and resulting GitHub Check. Only then can Phase 8 become
+complete.

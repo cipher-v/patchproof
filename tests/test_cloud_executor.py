@@ -102,6 +102,13 @@ def test_wire_response_round_trip_preserves_domain_facts() -> None:
     assert result.assessment.mechanical_status is MechanicalEvidenceStatus.DISCRIMINATING
 
 
+def test_executor_exposes_internal_and_public_liveness_paths() -> None:
+    client = TestClient(create_executor_app(executor=StubExecutor(result=response_document())))
+
+    assert client.get("/healthz").json() == {"status": "ok"}
+    assert client.get("/livez").json() == {"status": "ok"}
+
+
 def test_executor_api_validates_and_delegates_bounded_request() -> None:
     executor = StubExecutor(result=response_document())
     response = TestClient(create_executor_app(executor=executor)).post(

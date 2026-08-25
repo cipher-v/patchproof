@@ -1,9 +1,9 @@
 # Architecture
 
-## Current architecture (Phase 8, deploy-ready but not deployed)
+## Current architecture (Phase 8, deployed; end-to-end proof pending)
 
-The implemented local slices now connect through a durable run identity and an injectable,
-idempotent dispatcher. The ingestion slice is:
+The implemented slices connect through a durable run identity and an injectable, idempotent
+dispatcher. The ingestion slice is:
 
 ```text
 GitHub webhook bytes
@@ -195,8 +195,9 @@ The control plane owns orchestration, model access, GitHub App credentials, dura
 dispatch, and publication. The private executor receives immutable identities, a validated
 contract, and a hashed artifact, then independently refetches and validates them before returning
 bounded facts. It receives no GitHub write credential, Gemini key, or Firestore permission. This
-composition and its deployment script are implemented, but a live Google Cloud deployment has not
-yet been performed or claimed.
+composition and its deployment script are implemented and live in project `patchproof-506606`.
+The remaining proof gap is a genuine signed GitHub delivery through the task, executor, evidence,
+and GitHub Check path.
 
 ## Intended evidence flow
 
@@ -216,9 +217,9 @@ PR diff -> changed symbols -> selected or abstained claim -> candidate test arti
 Webhook authentication, PR identity capture, local dispatch boundary, context, claim selection or
 abstention, bounded candidate/repair, installation, BASE/HEAD execution, mechanical classification,
 semantic relevance assessment, evidence persistence, and GitHub Check publication are connected.
-The dispatcher and Firestore adapter now implement those cloud boundaries. Actual resource
-creation and end-to-end deployed proof remain blocked on Google Cloud CLI authentication/project
-selection.
+The dispatcher and Firestore adapter implement those cloud boundaries, and the resources are live.
+The GitHub App webhook still needs activation plus a `pull_request` subscription before the first
+deployed end-to-end capture can be made.
 
 ## Architectural invariants
 

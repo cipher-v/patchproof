@@ -9,5 +9,6 @@ steps:
       - .
 images:
   - ${_IMAGE}
+serviceAccount: projects/${PROJECT_ID}/serviceAccounts/patchproof-builder@${PROJECT_ID}.iam.gserviceaccount.com
 options:
   logging: CLOUD_LOGGING_ONLY

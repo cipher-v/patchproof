@@ -126,6 +126,7 @@ def create_app(
     app.state.run_dispatcher = dispatcher
 
     @app.get("/healthz")
+    @app.get("/livez")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 

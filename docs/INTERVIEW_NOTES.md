@@ -486,14 +486,12 @@ there is no outbound-network block, syscall sandbox, or complete supply-chain co
 
 ## Why is Phase 8 still blocked?
 
-Code and infrastructure are locally verified. A read-only preflight confirmed an active,
-billing-enabled Google Cloud project and a GitHub App installation scoped to the PatchProof
-repository, but no cloud API has been enabled and no resource has been deployed. Docker Desktop
-built the shared production image, both service health paths responded, and the production
-execution core reproduced BASE assertion failure / HEAD pass inside the container. That is local
-container proof, not Cloud Run, Firestore, Tasks, OIDC, Secret Manager, or GitHub publication proof.
-A real deployment and signed PR-to-GitHub-Check capture are required before claiming visible cloud
-deployment.
+The backend is deployed. Cloud Build produced a pinned image digest; both Cloud Run revisions are
+Ready; public control and authenticated executor liveness return 200; anonymous executor access is
+denied; and live Firestore, Tasks, Secret Manager, IAM, and scaling configuration match the bounded
+design. The GitHub App still has an inactive webhook and no `pull_request` event subscription.
+Therefore no signed delivery, durable task/evidence path, or GitHub Check has been captured. Phase 8
+is blocked on that final external configuration and end-to-end proof, not on cloud deployment.
 
 ## What did the container smoke find that native tests did not?
 

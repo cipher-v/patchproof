@@ -277,6 +277,7 @@ def create_executor_app(*, executor: ChallengeExecutor) -> FastAPI:
     app.state.executor = executor
 
     @app.get("/healthz")
+    @app.get("/livez")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 

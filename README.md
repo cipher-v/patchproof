@@ -9,7 +9,7 @@ weak evidence, and publish a conservative claim-scoped report.
 
 ## Project status
 
-**Phase 8 — Google Cloud deployment, blocked on live deployment proof.** PatchProof reads
+**Phase 8 — deployed to Google Cloud, blocked on signed webhook-to-Check proof.** PatchProof reads
 immutable BASE/HEAD Git objects, derives changed Python symbols with the AST, and ranks bounded
 diff, source, test, import, and reference evidence. One logical stateless, tool-free Google ADK
 agent using Gemini 3.6 Flash may select one grounded claim and propose one structured pytest
@@ -35,17 +35,19 @@ The run used four provider attempts and 12,225 total tokens. It is real one-case
 not a blind candidate-generation benchmark: production retrieval included changed test context,
 and the immutable historical commits required the benchmark's synthetic test contract.
 
-The cloud composition is now implemented: transactional Firestore persistence, deterministic
+The cloud composition is now live: transactional Firestore persistence, deterministic
 OIDC-authenticated Cloud Tasks, a public webhook/control service, and an IAM-private executor with
 no project roles or secrets. A pinned Python 3.12 shared container image, Cloud Build file,
 least-privilege IAM, Secret Manager, scale-to-zero settings, and an exact PowerShell deployment
-script are checked in. The production image builds locally; both service health paths respond; and
-the containerized production execution core reproduced an immutable BASE-fail/HEAD-pass fixture.
-The cloud-control composition itself still requires real Google services. A later read-only
-preflight verified an active billing-enabled project and a least-scope GitHub App installation, but
-no API was enabled and nothing was deployed. The bounded historical Gemini smoke now proves one
-successful claim-to-evidence path, but it does not establish an aggregate agent success rate or
-visible Google Cloud proof. Hostile-code isolation and the dashboard are also not implemented.
+script are checked in. Cloud Build pushed image digest
+`sha256:0660d901df33535d83df1695f8ef61493c4ca435f36005f8f9708576f06757b8`;
+the control and executor revisions are Ready; public control liveness and authenticated private
+executor liveness return HTTP 200; unauthenticated executor access returns HTTP 403; and Firestore
+plus the rate-limited task queue are live in `asia-south1`. The remaining Phase 8 blocker is GitHub
+App configuration: the App has `Checks: write`, but its webhook is inactive and it is not subscribed
+to pull-request events, so no signed webhook-to-GitHub-Check capture exists yet. The bounded
+historical Gemini smoke proves one successful claim-to-evidence path, not an aggregate agent success
+rate. Hostile-code isolation and the dashboard are also not implemented.
 
 ## Supported scope
 
