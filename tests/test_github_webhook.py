@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+from datetime import UTC, datetime
 
 import pytest
 
-from patchproof.github_webhook import validate_delivery_id, verify_github_signature
+from patchproof.github_webhook import (
+    GitHubPullRequestWebhook,
+    validate_delivery_id,
+    verify_github_signature,
+)
 
 
 def _signature(secret: bytes, body: bytes) -> str:
@@ -56,3 +61,24 @@ def test_delivery_id_validation_preserves_a_valid_github_identifier() -> None:
     assert validate_delivery_id(" 123e4567-e89b-12d3-a456-426614174000 ") == (
         "123e4567-e89b-12d3-a456-426614174000"
     )
+
+
+def test_pull_request_event_title_collapses_internal_whitespace() -> None:
+    webhook = GitHubPullRequestWebhook.model_validate(
+        {
+            "action": "opened",
+            "number": 1,
+            "repository": {"full_name": "cipher-v/patchproof", "private": False},
+            "pull_request": {
+                "base": {"sha": "a" * 40},
+                "head": {"sha": "b" * 40},
+                "updated_at": datetime(2026, 8, 25, tzinfo=UTC),
+                "title": "  Normalize   this\n title  ",
+            },
+            "installation": {"id": 156402136},
+        }
+    )
+
+    event = webhook.to_event("phase8-live-proof")
+
+    assert event.title == "Normalize this title"
