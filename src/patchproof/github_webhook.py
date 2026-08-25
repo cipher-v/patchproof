@@ -84,7 +84,7 @@ class GitHubPullRequestWebhook(BaseModel):
             base_sha=self.pull_request.base.sha,
             head_sha=self.pull_request.head.sha,
             head_updated_at=self.pull_request.updated_at,
-            title=(self.pull_request.title.strip() or "Untitled pull request")[:300],
+            title=(" ".join(self.pull_request.title.split()) or "Untitled pull request")[:300],
             body=(self.pull_request.body or "")[:8_000],
             installation_id=self.installation.id if self.installation else None,
         )
