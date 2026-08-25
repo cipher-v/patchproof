@@ -2,16 +2,16 @@
 
 ## Status
 
-**DEPLOYED; BLOCKED ON SIGNED WEBHOOK-TO-CHECK PROOF.** Project `patchproof-506606` now has the
+**COMPLETE.** Project `patchproof-506606` has the
 documented Firestore database, rate-limited Cloud Tasks queue, three secrets, four service
 identities, Artifact Registry image, private executor, and public control service in
 `asia-south1`. Both revisions are Ready. Public control `/livez` and authenticated private executor
 `/livez` return HTTP 200; unauthenticated executor access returns HTTP 403.
 
-The remaining blocker is outside the deployed backend: GitHub App 4711074 has `Checks: write` but
-its App webhook is inactive and its event list does not include `pull_request`. Until that setting
-is enabled and one genuine signed delivery produces a durable run and GitHub Check, Phase 8 remains
-incomplete.
+GitHub App 4711074 is active with `pull_request`, `Checks: write`, `Pull requests: read`, JSON
+delivery, and SSL verification. PR #1 produced a genuine signed event, completed the task/private
+executor/evidence path, and published a successful GitHub Check. The exact sanitized record is
+`deploy/results/phase8-deployment.json`.
 
 ## Problem and architecture
 
@@ -354,6 +354,31 @@ so `/livez` is the visible liveness path and `/healthz` remains the HTTP startup
 The sanitized machine-readable record is `deploy/results/phase8-deployment.json`. Two diagnostic
 APIs and every temporary probe service/task were removed after use.
 
+## Signed webhook-to-Check proof
+
+PR #1 first delivered `opened` as GitHub delivery
+`9b53d270-a06c-11f1-8050-32a231862e26`; control returned HTTP 202 and completed run
+`2386649f-56b9-44c8-833e-ddf440a05483`. That run correctly published a neutral abstention after
+both bounded candidate attempts made test-construction errors. The evidence hash still matched and
+publication succeeded, proving the fail-closed path without mislabeling it as discriminating.
+
+Adding the real regression test produced `synchronize` delivery
+`233bb130-a06d-11f1-91a5-e6ae17f545f2`, again accepted with HTTP 202. Current run
+`695eaa20-7db3-492f-a57e-9819ebb54087` selected the whitespace-normalization claim and one generated
+artifact with SHA-256 `910e1959f639abd9b253e5114fcc23fae250d3db54b96a964d231a0a1bdcbefd`.
+The identical artifact asserted unsuccessfully on BASE and passed on HEAD. Mechanical evidence was
+`DISCRIMINATING` / `BASE_ASSERTION_FAILED_HEAD_PASSED`; semantic assessment marked the assertion
+`RELATED` with confidence 1.0 and concluded `CLAIM_SUPPORTED_FOR_SCENARIO`.
+
+Firestore evidence SHA-256
+`9593d2a0b8092898c4951595793654bb87e4e2cfe03a42f0b3e107a8045d1d6c` was recomputed from the stored
+canonical JSON and matched. Publication succeeded on its first attempt as GitHub Check 97764451438,
+whose API record is `completed` / `success`, names the exact HEAD
+`745283fedf88ebb7b1e038b3893e152cee89687a`, and uses the run UUID as its external ID. Cloud Run
+request records independently show webhook 202, task route 200, private executor challenge 200,
+and task completion 200. PR #1 was then squash-merged as
+`4a71927adcf727ed5332480b1c089f9983e2e8f7`.
+
 ## Tests and checks
 
 Final checkpoint commands executed on 2026-08-25:
@@ -366,7 +391,7 @@ uv run pytest -q
 ```
 
 - Ruff: all formatting and lint checks passed.
-- Pytest: **209 passed, 1 live Gemini test skipped, 2 dependency warnings** in 72.67 seconds.
+- Pytest: **210 passed, 1 live Gemini test skipped, 2 dependency warnings** in 73.11 seconds.
 - New cloud tests: 15, all included in the passing full suite.
 - Frozen dependency lock: resolved 74 packages without a lock change.
 - `deploy/gcp/deploy.ps1`: PowerShell AST parse succeeded.
@@ -384,18 +409,19 @@ authorization, executor wire fidelity and fail-closed errors, control-to-executo
 propagation, artifact identity, and Firestore
 acceptance/supersession/evidence/publication/failure semantics through a deterministic fake. The
 separate live proof covers service readiness, public/private ingress, IAM separation,
-Firestore/queue configuration, image identity, and HTTP startup/liveness. A genuine signed task and
-GitHub publication path still needs the external GitHub App setting described below.
+Firestore/queue configuration, image identity, HTTP startup/liveness, signed GitHub ingress,
+authenticated task dispatch, private execution, durable evidence, and retry-safe Check publication.
 
 ## Limitations and trade-offs
 
-- The GitHub App webhook is inactive and lacks the `pull_request` event subscription, so no genuine
-  signed delivery, Cloud Task execution, Firestore evidence document, or GitHub Check is captured.
+- The first real PR run used both candidate attempts but abstained because the generated tests first
+  imported a nonexistent type and then omitted a required payload field. The synchronized run had
+  repository-grounded regression-test context and succeeded with one candidate. This is honest
+  evidence of both the bounded repair limit and the value of concrete test context.
 - One bounded historical Gemini workflow reached a matching discriminating result after its single
   allowed repair. Because changed tests were visible and only one case ran, blind and aggregate
   historical candidate quality remains unmeasured.
-- Firestore, Cloud Tasks, Secret Manager, and Cloud Run IAM are configured live, but their complete
-  composition still requires the signed webhook-to-Check run.
+- The deployed proof is one non-blind repository case, not an aggregate success-rate estimate.
 - Control holds one task request while calling executor; this preserves credentials but consumes a
   control request for the execution duration.
 - Phase 6 makes execution failures durably terminal. Task retry mainly protects dispatch and
@@ -421,13 +447,12 @@ task ingress later, but adds cost and deployment surface without changing the cu
 6. Why can one image still provide two credential boundaries?
 7. What does scale-to-zero trade for lower idle cost?
 8. Why is this constrained execution, not malicious-code sandboxing?
-9. What evidence is missing before claiming a real Google Cloud deployment?
+9. Which independent records complete the real Google Cloud deployment claim?
 
-## Unblocking Phase 8
+## Phase 8 completion boundary
 
-In GitHub App 4711074, activate the webhook with the deployed
-`CONTROL_URL/webhooks/github`, retain the existing secret, grant Pull requests read permission if
-GitHub requires it, and subscribe to the Pull request event. Then open or synchronize a bounded PR
-in `cipher-v/patchproof` and capture the signed delivery, run UUID, completed task, Firestore
-run/evidence, executor/control logs, and resulting GitHub Check. Only then can Phase 8 become
-complete.
+Phase 8 is complete because the repository retains the build/image/revision configuration, GitHub
+delivery IDs, immutable run and HEAD identities, content-addressed Firestore evidence, Cloud Run
+request outcomes, and independently queried GitHub Check identity. Phase 9 can build a read-only
+dashboard and demo narrative over this evidence; it must not broaden the security or quality claims
+recorded here.

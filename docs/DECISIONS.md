@@ -529,5 +529,21 @@ but has not necessarily been implemented yet.
   native exit codes, embedding secrets in CLI literals, making executor public, or replacing the
   ASGI server after the deployed app's other public routes proved healthy.
 - **Consequence:** The script is reliable on the observed Windows/SDK 581 path and the runtime
-  identities remain narrow. The deployed backend is proven, but Phase 8 remains incomplete until
-  the GitHub App webhook is activated/subscribed and a genuine PR produces a Check.
+  identities remain narrow. The later signed PR proof completed the remaining deployed composition
+  claim.
+
+## ADR-041 — Preserve abstention and success as separate live deployment evidence
+
+- **Context:** PR #1's first signed delivery traversed the entire deployed system and published a
+  neutral Check, but both generated candidate tests contained construction mistakes. A synchronized
+  revision with a repository regression test produced a valid candidate and discriminating result.
+- **Choice:** Retain both run identities and evidence hashes. Treat the first as proof of bounded
+  fail-closed publication, not candidate success; treat the second as the completion proof for the
+  signed webhook, task, private executor, durable evidence, semantic assessment, and Check path.
+- **Why:** Replacing or hiding the abstention would overstate reliability, while rejecting it as
+  infrastructure failure would ignore that every deployment boundary worked correctly.
+- **Alternative rejected:** Repeatedly redelivering the same revision until stochastic success,
+  deleting the neutral Check, or claiming aggregate quality from the successful synchronized run.
+- **Consequence:** Phase 8 is complete at the composition boundary. Candidate-quality measurement
+  remains limited and explicit, and Phase 9 must present both outcomes without turning the success
+  Check into a whole-PR correctness claim.

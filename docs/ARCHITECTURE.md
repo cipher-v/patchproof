@@ -1,6 +1,6 @@
 # Architecture
 
-## Current architecture (Phase 8, deployed; end-to-end proof pending)
+## Current architecture (Phase 8 complete and deployed)
 
 The implemented slices connect through a durable run identity and an injectable, idempotent
 dispatcher. The ingestion slice is:
@@ -196,8 +196,8 @@ dispatch, and publication. The private executor receives immutable identities, a
 contract, and a hashed artifact, then independently refetches and validates them before returning
 bounded facts. It receives no GitHub write credential, Gemini key, or Firestore permission. This
 composition and its deployment script are implemented and live in project `patchproof-506606`.
-The remaining proof gap is a genuine signed GitHub delivery through the task, executor, evidence,
-and GitHub Check path.
+PR #1 exercised a genuine signed GitHub delivery through the task, executor, evidence, and GitHub
+Check path.
 
 ## Intended evidence flow
 
@@ -217,9 +217,8 @@ PR diff -> changed symbols -> selected or abstained claim -> candidate test arti
 Webhook authentication, PR identity capture, local dispatch boundary, context, claim selection or
 abstention, bounded candidate/repair, installation, BASE/HEAD execution, mechanical classification,
 semantic relevance assessment, evidence persistence, and GitHub Check publication are connected.
-The dispatcher and Firestore adapter implement those cloud boundaries, and the resources are live.
-The GitHub App webhook still needs activation plus a `pull_request` subscription before the first
-deployed end-to-end capture can be made.
+The dispatcher and Firestore adapter implement those cloud boundaries, the resources are live, and
+the first deployed end-to-end capture is recorded in `deploy/results/phase8-deployment.json`.
 
 ## Architectural invariants
 

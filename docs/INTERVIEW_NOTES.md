@@ -484,14 +484,16 @@ validated argv, minimal child environments, hashes, timeouts, and bounded logs. 
 execution for trusted allowlisted repositories. It is not proof of safe arbitrary malicious code:
 there is no outbound-network block, syscall sandbox, or complete supply-chain containment.
 
-## Why is Phase 8 still blocked?
+## What completed Phase 8?
 
-The backend is deployed. Cloud Build produced a pinned image digest; both Cloud Run revisions are
-Ready; public control and authenticated executor liveness return 200; anonymous executor access is
-denied; and live Firestore, Tasks, Secret Manager, IAM, and scaling configuration match the bounded
-design. The GitHub App still has an inactive webhook and no `pull_request` event subscription.
-Therefore no signed delivery, durable task/evidence path, or GitHub Check has been captured. Phase 8
-is blocked on that final external configuration and end-to-end proof, not on cloud deployment.
+Cloud Build produced a pinned image digest; both Cloud Run revisions are Ready; public control and
+authenticated executor liveness return 200; anonymous executor access is denied; and live
+Firestore, Tasks, Secret Manager, IAM, and scaling configuration match the bounded design. GitHub
+App 4711074 then delivered PR #1's signed `synchronize` event. Run
+`695eaa20-7db3-492f-a57e-9819ebb54087` passed through the OIDC task route and private executor,
+persisted hash-verified evidence, observed BASE assertion failure / HEAD pass, and published
+successful Check 97764451438. That closes the deployment-composition proof while remaining only one
+non-blind candidate-quality case.
 
 ## What did the container smoke find that native tests did not?
 

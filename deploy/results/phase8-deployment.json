@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "captured_at": "2026-08-25",
-  "status": "DEPLOYED_PENDING_SIGNED_WEBHOOK_TO_CHECK_PROOF",
+  "status": "COMPLETE_SIGNED_WEBHOOK_TO_CHECK_PROVEN",
   "project_id": "patchproof-506606",
   "project_number": "571762094707",
   "region": "asia-south1",
@@ -67,9 +67,68 @@
     "installation_id": 156402136,
     "repository": "cipher-v/patchproof",
     "checks_permission": "write",
-    "pull_request_event_subscribed": false,
-    "webhook_configuration_endpoint_status": 404,
-    "blocker": "Activate the App webhook and subscribe to pull_request in GitHub settings."
+    "pull_requests_permission": "read",
+    "pull_request_event_subscribed": true,
+    "webhook_configuration_endpoint_status": 200,
+    "webhook_url": "https://patchproof-control-q26kc4fdba-el.a.run.app/webhooks/github",
+    "content_type": "json",
+    "ssl_verification": true
+  },
+  "live_proof": {
+    "pull_request": {
+      "number": 1,
+      "url": "https://github.com/cipher-v/patchproof/pull/1",
+      "merged": true,
+      "merge_commit": "4a71927adcf727ed5332480b1c089f9983e2e8f7"
+    },
+    "initial_abstention": {
+      "delivery_guid": "9b53d270-a06c-11f1-8050-32a231862e26",
+      "delivery_http_status": 202,
+      "run_id": "2386649f-56b9-44c8-833e-ddf440a05483",
+      "head_sha": "d1b3af3666336ff79d88b92e68e09c2f6918caec",
+      "evidence_sha256": "b52aed0d2650d533ce7b71390b634de0932521b09de40ae6f3f6371f2cc085c5",
+      "candidate_attempts": 2,
+      "mechanical_status": "ENVIRONMENTAL",
+      "claim_outcome": "INSUFFICIENT_EVIDENCE",
+      "check_run_id": 97763556013,
+      "check_status": "completed",
+      "check_conclusion": "neutral",
+      "publication_attempts": 1
+    },
+    "successful_run": {
+      "delivery_guid": "233bb130-a06d-11f1-91a5-e6ae17f545f2",
+      "delivery_event": "pull_request",
+      "delivery_action": "synchronize",
+      "delivery_http_status": 202,
+      "run_id": "695eaa20-7db3-492f-a57e-9819ebb54087",
+      "head_sha": "745283fedf88ebb7b1e038b3893e152cee89687a",
+      "lifecycle": "TERMINAL",
+      "terminal_reason": "COMPLETED",
+      "publication_state": "PUBLISHED",
+      "evidence_sha256": "9593d2a0b8092898c4951595793654bb87e4e2cfe03a42f0b3e107a8045d1d6c",
+      "evidence_hash_recomputed": true,
+      "claim_id": "claim-normalize-pr-title-whitespace",
+      "candidate_attempts": 1,
+      "artifact_sha256": "910e1959f639abd9b253e5114fcc23fae250d3db54b96a964d231a0a1bdcbefd",
+      "base_status": "ASSERTION_FAILED",
+      "head_status": "PASSED",
+      "mechanical_status": "DISCRIMINATING",
+      "differential_pattern": "BASE_ASSERTION_FAILED_HEAD_PASSED",
+      "semantic_relation": "RELATED",
+      "semantic_confidence": 1.0,
+      "claim_outcome": "CLAIM_SUPPORTED_FOR_SCENARIO",
+      "check_run_id": 97764451438,
+      "check_url": "https://github.com/cipher-v/patchproof/runs/97764451438",
+      "check_status": "completed",
+      "check_conclusion": "success",
+      "publication_attempts": 1,
+      "publication_last_error": null,
+      "cloud_run_requests": {
+        "webhook_http_status": 202,
+        "task_route_http_status": 200,
+        "private_executor_http_status": 200
+      }
+    }
   },
   "cleanup": {
     "temporary_cloud_run_services_remaining": 0,
@@ -80,8 +139,9 @@
     ]
   },
   "limitations": [
-    "No genuine signed GitHub pull_request delivery has reached the control service.",
-    "No Cloud Task has completed the deployed semantic and private-executor workflow.",
-    "No deployed evidence document or GitHub Check has been captured."
+    "The successful deployed proof is one non-blind repository case, not an aggregate candidate-quality estimate.",
+    "The initial delivery correctly abstained after two model-generated test-construction errors, exposing the bounded one-repair limit.",
+    "The executor is constrained and credentialless but is not a hardened hostile-code sandbox.",
+    "The evidence dashboard and final demo polish remain Phase 9 work."
   ]
 }

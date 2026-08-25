@@ -9,7 +9,7 @@ weak evidence, and publish a conservative claim-scoped report.
 
 ## Project status
 
-**Phase 8 — deployed to Google Cloud, blocked on signed webhook-to-Check proof.** PatchProof reads
+**Phase 8 complete — Phase 9 dashboard/demo polish remains.** PatchProof reads
 immutable BASE/HEAD Git objects, derives changed Python symbols with the AST, and ranks bounded
 diff, source, test, import, and reference evidence. One logical stateless, tool-free Google ADK
 agent using Gemini 3.6 Flash may select one grounded claim and propose one structured pytest
@@ -43,11 +43,14 @@ script are checked in. Cloud Build pushed image digest
 `sha256:0660d901df33535d83df1695f8ef61493c4ca435f36005f8f9708576f06757b8`;
 the control and executor revisions are Ready; public control liveness and authenticated private
 executor liveness return HTTP 200; unauthenticated executor access returns HTTP 403; and Firestore
-plus the rate-limited task queue are live in `asia-south1`. The remaining Phase 8 blocker is GitHub
-App configuration: the App has `Checks: write`, but its webhook is inactive and it is not subscribed
-to pull-request events, so no signed webhook-to-GitHub-Check capture exists yet. The bounded
-historical Gemini smoke proves one successful claim-to-evidence path, not an aggregate agent success
-rate. Hostile-code isolation and the dashboard are also not implemented.
+plus the rate-limited task queue are live in `asia-south1`. GitHub App 4711074 is active with the
+required event and permissions. PR #1 produced signed `opened` and `synchronize` deliveries; the
+successful immutable run `695eaa20-7db3-492f-a57e-9819ebb54087` traversed Cloud Tasks and the
+private executor, persisted hash-verified evidence, observed BASE assertion failure / HEAD pass,
+and published successful GitHub Check 97764451438. The first delivery also demonstrated honest
+abstention after two invalid model-generated candidates. These live cases prove the deployed
+composition, not an aggregate agent success rate. Hostile-code isolation and the Phase 9 dashboard
+are not implemented.
 
 ## Supported scope
 
