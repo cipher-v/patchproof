@@ -27,6 +27,7 @@ from patchproof.model_reliability import (
 from patchproof.models import ChallengeResult
 
 _MODEL_PATTERN = re.compile(r"gemini-(\d+)\.(\d+)-[a-z0-9.-]+")
+DEFAULT_ASSESSMENT_MAX_OUTPUT_TOKENS = 4_096
 
 EVIDENCE_ASSESSOR_INSTRUCTION = """
 You are PatchProof's single semantic agent performing its final evidence-assessment task.
@@ -73,7 +74,7 @@ class AdkGeminiEvidenceAssessor:
         self,
         *,
         model_name: str = DEFAULT_CLAIM_MODEL,
-        max_output_tokens: int = 700,
+        max_output_tokens: int = DEFAULT_ASSESSMENT_MAX_OUTPUT_TOKENS,
         timeout_seconds: float = 60.0,
     ) -> None:
         match = _MODEL_PATTERN.fullmatch(model_name)
@@ -94,6 +95,9 @@ class AdkGeminiEvidenceAssessor:
             generate_content_config=types.GenerateContentConfig(
                 temperature=0.1,
                 max_output_tokens=max_output_tokens,
+                thinking_config=types.ThinkingConfig(
+                    thinking_level=types.ThinkingLevel.LOW,
+                ),
             ),
             timeout=timeout_seconds,
         )

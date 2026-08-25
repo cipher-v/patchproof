@@ -210,10 +210,10 @@ three local tags for the same image ID:
 patchproof:precloud
 patchproof-control:precloud
 patchproof-executor:precloud
-image: sha256:35def83d78af6a43b7d08530628feb61b09a69bdc319b21cfbfb9a26280841b8
+image: sha256:6853db587b33e116d079b97de5a23eb93f1810819256634eed24d9ec31294801
 ```
 
-The image is 124,846,251 bytes and runs as numeric non-root user `10001`. Inspected versions were
+The post-fix image is 124,853,415 bytes and runs as numeric non-root user `10001`. Inspected versions were
 Python 3.12.14, PatchProof 0.1.0, uv 0.12.3, Google ADK 2.7.1, Firestore 2.28.1, Cloud Tasks 2.24.0,
 and Uvicorn 0.52.4.
 
@@ -233,6 +233,10 @@ composition; its injectable boundaries remain covered by the 14 cloud tests.
 
 Both Uvicorn logs contained only normal startup, `0.0.0.0:8080` listening, health request, and
 shutdown messages. No application error or warning appeared.
+
+After the Gemini/context reliability changes, the shared image was rebuilt from scratch and the
+executor health check was repeated successfully. Direct image inspection confirmed the deployed
+code carries claim cap `8192`, thinking level `LOW`, and source cap `262144`.
 
 ### Container executor smoke
 
@@ -284,6 +288,27 @@ point where it could reproduce or contradict that oracle. Usage was not retained
 current claim-validation exception does not carry the raw response's usage metadata. This is an
 observed agent-quality/reliability limitation, not a credential or historical-fixture failure.
 
+The output policy was then corrected without weakening schema or character validation. Gemini 3.x
+thinking shares the output allowance, so all three structured tasks now request low thinking and
+use bounded caps sized above their existing visible-response limits: 8,192 tokens for claim
+selection, 12,000 for candidate generation, and 4,096 for assessment. Invalid claim output carries
+safe usage metadata and the raw-response SHA-256 into the sanitized durable SQLite/Firestore worker
+failure while discarding the raw text. Regression tests pin these settings, schema migration, and
+accounting behavior.
+
+Exactly one post-fix attempt was made on the same case. It returned complete structured JSON in
+4.97 seconds using 1,289 prompt, 382 output, and 1,671 total tokens in one provider attempt. Strict
+grounding then rejected its selected claim because deterministic context contained zero changed
+symbols and zero snippets. Candidate generation and BASE/HEAD execution again did not run, so the
+result remained **INVALID / no claim support** and did not reproduce the stored oracle.
+
+Offline diagnosis showed that the changed production and test files were 171,808 and 241,043 bytes,
+both beyond the old 160,000-byte source-scan cap. The still-hard cap is now 256 KiB. A regression
+test covers changed Python files above the previous boundary, and deterministic retrieval on the
+exact immutable PR now returns `chunked`, `ChunkedTests`, `ChunkedTests.test_negative`, and bounded
+source/test snippets. No third Gemini call was made after that fix; useful candidate generation is
+therefore still unproven rather than selectively rerun until success.
+
 A separate read-only preflight verified that the GitHub App credentials can mint an installation
 token and that its single selected repository is `cipher-v/patchproof`. The selected Google Cloud
 project was also confirmed active and billing-enabled. No cloud API was enabled and no resource was
@@ -301,7 +326,7 @@ uv run pytest -q
 ```
 
 - Ruff: all formatting and lint checks passed.
-- Pytest: **206 passed, 1 live Gemini test skipped, 2 dependency warnings** in 83.56 seconds.
+- Pytest: **208 passed, 1 live Gemini test skipped, 2 dependency warnings** in 116.54 seconds.
 - New cloud tests: 14, all included in the passing full suite.
 - Frozen dependency lock: resolved 74 packages without a lock change.
 - `deploy/gcp/deploy.ps1`: PowerShell AST parse succeeded.
@@ -322,8 +347,9 @@ deterministic fake. They do not prove real Google IAM or deployed requests.
 ## Limitations and trade-offs
 
 - No cloud resources exist yet, so visible deployment proof is blocked.
-- One real Gemini historical attempt failed closed on truncated structured claim JSON before
-  candidate generation. Historical candidate quality and token use therefore remain unmeasured.
+- The initial and single post-fix historical Gemini attempts both failed closed before candidate
+  generation. The post-fix run retained token use and exposed a now-fixed context-size boundary,
+  but historical candidate quality remains unmeasured because no third call was made.
 - Local control health used SQLite mode. Firestore/Cloud Tasks/Secret Manager/IAM behavior still
   requires actual GCP deployment proof.
 - Control holds one task request while calling executor; this preserves credentials but consumes a

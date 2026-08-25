@@ -174,6 +174,27 @@ def test_malformed_or_schema_violating_model_output_is_rejected(
         )
 
 
+def test_invalid_model_output_retains_usage_and_hash_without_retaining_text(
+    context_repository_history: ContextRepositoryHistory,
+) -> None:
+    context = _context(context_repository_history)
+    response_text = '{"disposition":"SELECTED","claim":'
+    agent = BehavioralClaimAgent(model=FakeClaimModel(response_text))
+
+    with pytest.raises(InvalidClaimAgentOutput) as captured:
+        asyncio.run(
+            agent.select_claim(
+                context=context,
+                narrative=PullRequestNarrative.from_untrusted(title="A truncated response"),
+            )
+        )
+
+    assert captured.value.usage is not None
+    assert captured.value.usage.total_tokens == 165
+    assert captured.value.raw_response_sha256 == hashlib.sha256(response_text.encode()).hexdigest()
+    assert response_text not in str(captured.value)
+
+
 def test_hallucinated_affected_symbol_is_rejected(
     context_repository_history: ContextRepositoryHistory,
 ) -> None:

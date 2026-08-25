@@ -486,3 +486,23 @@ but has not necessarily been implemented yet.
   symlink, or adding every supported repository's test dependencies to the PatchProof image.
 - **Consequence:** Supported installed contracts currently need a Python-prefixed test command; new
   interpreter forms require explicit validation and tests rather than heuristic command rewriting.
+
+## ADR-039 — Budget Gemini thinking separately from visible structured-response validation
+
+- **Context:** A live historical claim response ended mid-JSON under a 1,400-token generation cap.
+  Gemini 3.x thinking consumes the same output allowance, while PatchProof separately enforces
+  strict schemas and 12,000/20,000-character visible response limits.
+- **Choice:** Use low thinking and hard generation caps of 8,192, 12,000, and 4,096 tokens for claim,
+  candidate, and assessment tasks. Persist usage plus the raw-response hash on invalid claim output
+  in the sanitized worker failure, never its raw text. Raise the per-Python-file retrieval cap from
+  160,000 bytes to a still-bounded 256 KiB after the post-fix smoke exposed two immutable files just
+  beyond the old limit.
+- **Why:** Generation needs enough shared thinking/output capacity to finish its constrained JSON;
+  deterministic schemas, response-character limits, one transient retry, and the candidate repair
+  limit remain the actual safety and cost boundaries. The source cap must cover the chosen
+  historical case before function-level grounding can be evaluated.
+- **Alternative rejected:** Unlimited output, repeated live attempts until success, disabling
+  grounding, accepting truncated JSON, or removing source-scan bounds.
+- **Consequence:** The first post-fix call proved complete structured output and usage retention but
+  stopped at the old context boundary. Offline retrieval now proves the exact PR is groundable; no
+  third model call was made, so historical candidate quality remains explicitly unproven.

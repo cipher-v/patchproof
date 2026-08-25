@@ -24,6 +24,7 @@ from patchproof.model_reliability import (
 )
 
 DEFAULT_CLAIM_MODEL = "gemini-3.6-flash"
+DEFAULT_CLAIM_MAX_OUTPUT_TOKENS = 8_192
 _MODEL_PATTERN = re.compile(r"gemini-(\d+)\.(\d+)-[a-z0-9.-]+")
 
 CLAIM_AGENT_INSTRUCTION = """
@@ -60,7 +61,7 @@ class AdkGeminiClaimModel:
         self,
         *,
         model_name: str = DEFAULT_CLAIM_MODEL,
-        max_output_tokens: int = 1_400,
+        max_output_tokens: int = DEFAULT_CLAIM_MAX_OUTPUT_TOKENS,
         timeout_seconds: float = 60.0,
     ) -> None:
         match = _MODEL_PATTERN.fullmatch(model_name)
@@ -81,6 +82,9 @@ class AdkGeminiClaimModel:
             generate_content_config=types.GenerateContentConfig(
                 temperature=0.1,
                 max_output_tokens=max_output_tokens,
+                thinking_config=types.ThinkingConfig(
+                    thinking_level=types.ThinkingLevel.LOW,
+                ),
             ),
             timeout=timeout_seconds,
         )

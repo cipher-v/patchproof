@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Protocol
 from uuid import UUID, uuid4
 
+from patchproof.claim_agent import ModelUsage
 from patchproof.workflow import (
     PublicationState,
     PullRequestEvent,
@@ -88,6 +89,8 @@ class RunFailureRecord:
     summary: str
     retryable: bool
     created_at: datetime
+    model_usage: ModelUsage | None = None
+    raw_response_sha256: str | None = None
 
 
 class VerificationRunStore(Protocol):
@@ -122,6 +125,8 @@ class VerificationRunStore(Protocol):
         error_code: str,
         summary: str,
         retryable: bool,
+        model_usage: ModelUsage | None = None,
+        raw_response_sha256: str | None = None,
     ) -> RunFailureRecord: ...
 
     def get_failure(self, run_id: UUID) -> RunFailureRecord | None: ...
@@ -444,6 +449,8 @@ class SqliteVerificationRunStore:
         error_code: str,
         summary: str,
         retryable: bool,
+        model_usage: ModelUsage | None = None,
+        raw_response_sha256: str | None = None,
     ) -> RunFailureRecord:
         """Atomically record one sanitized failure and terminate an active current run."""
         if re.fullmatch(r"[A-Z][A-Z0-9_]{2,63}", error_code) is None:
@@ -451,6 +458,11 @@ class SqliteVerificationRunStore:
         bounded_summary = summary.strip()[:500]
         if not bounded_summary:
             raise ValueError("worker failure summary must not be empty")
+        if (
+            raw_response_sha256 is not None
+            and re.fullmatch(r"[0-9a-f]{64}", raw_response_sha256) is None
+        ):
+            raise ValueError("worker failure response hash must be lowercase SHA-256")
         now = self._now()
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -479,8 +491,9 @@ class SqliteVerificationRunStore:
             connection.execute(
                 """
                 INSERT INTO run_failures(
-                    run_id, phase, error_code, summary, retryable, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    run_id, phase, error_code, summary, retryable, created_at,
+                    model_usage_json, raw_response_sha256
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(run_id),
@@ -489,6 +502,8 @@ class SqliteVerificationRunStore:
                     bounded_summary,
                     int(retryable),
                     now.isoformat(),
+                    model_usage.model_dump_json() if model_usage is not None else None,
+                    raw_response_sha256,
                 ),
             )
             row = connection.execute(
@@ -562,7 +577,9 @@ class SqliteVerificationRunStore:
                     error_code TEXT NOT NULL,
                     summary TEXT NOT NULL,
                     retryable INTEGER NOT NULL,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    model_usage_json TEXT,
+                    raw_response_sha256 TEXT
                 );
 
                 CREATE UNIQUE INDEX IF NOT EXISTS one_current_run_per_pull_request
@@ -584,6 +601,15 @@ class SqliteVerificationRunStore:
             ):
                 if name not in columns:
                     connection.execute(f"ALTER TABLE runs ADD COLUMN {name} {definition}")
+            failure_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(run_failures)")
+            }
+            for name, definition in (
+                ("model_usage_json", "TEXT"),
+                ("raw_response_sha256", "TEXT"),
+            ):
+                if name not in failure_columns:
+                    connection.execute(f"ALTER TABLE run_failures ADD COLUMN {name} {definition}")
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path, timeout=5.0, isolation_level=None)
@@ -681,6 +707,10 @@ class SqliteVerificationRunStore:
             summary=row["summary"],
             retryable=bool(row["retryable"]),
             created_at=datetime.fromisoformat(row["created_at"]),
+            model_usage=ModelUsage.model_validate_json(row["model_usage_json"])
+            if row["model_usage_json"] is not None
+            else None,
+            raw_response_sha256=row["raw_response_sha256"],
         )
 
     def _now(self) -> datetime:

@@ -166,8 +166,10 @@ def test_firestore_optimistic_transition_and_terminal_failure() -> None:
         error_code="WORKSPACE_FAILED",
         summary="Executor failed closed.",
         retryable=True,
+        raw_response_sha256="2" * 64,
     )
     assert queued.lifecycle is RunLifecycle.QUEUED
     assert failure.retryable is True
+    assert failure.raw_response_sha256 == "2" * 64
     assert store.get_failure(run.run_id) == failure
     assert store.get_run(run.run_id).terminal_reason is TerminalReason.FAILED

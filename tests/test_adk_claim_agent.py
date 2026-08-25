@@ -12,6 +12,7 @@ from google.genai import types
 import patchproof.adk_claim_agent as adk_module
 from patchproof.adk_claim_agent import (
     CLAIM_AGENT_INSTRUCTION,
+    DEFAULT_CLAIM_MAX_OUTPUT_TOKENS,
     DEFAULT_CLAIM_MODEL,
     AdkGeminiClaimModel,
     ClaimAgentInvocationError,
@@ -60,7 +61,15 @@ def test_adk_agent_is_one_stateless_tool_free_structured_agent() -> None:
     assert model.agent.tools == []
     assert model.agent.timeout == 60.0
     assert model.agent.generate_content_config.temperature == 0.1
-    assert model.agent.generate_content_config.max_output_tokens == 1_400
+    assert (
+        model.agent.generate_content_config.max_output_tokens
+        == DEFAULT_CLAIM_MAX_OUTPUT_TOKENS
+        == 8_192
+    )
+    assert (
+        model.agent.generate_content_config.thinking_config.thinking_level
+        is types.ThinkingLevel.LOW
+    )
     assert "UNTRUSTED DATA" in CLAIM_AGENT_INSTRUCTION
     assert "no tools" in CLAIM_AGENT_INSTRUCTION
     assert "never hidden chain-of-thought" in CLAIM_AGENT_INSTRUCTION

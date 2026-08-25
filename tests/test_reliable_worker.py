@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from patchproof.claim_agent import InvalidClaimAgentOutput
+from patchproof.claim_agent import InvalidClaimAgentOutput, ModelUsage
 from patchproof.reliable_worker import EvidenceWorkerError, ReliableEvidenceWorker
 from patchproof.storage import SqliteVerificationRunStore
 from patchproof.workflow import PullRequestEvent, RunLifecycle, TerminalReason
@@ -40,7 +40,22 @@ def test_worker_persists_sanitized_terminal_failure_without_provider_text(
         )
     ).run
     sensitive = "invalid response containing secret-provider-payload"
-    workflow = FailingWorkflow(InvalidClaimAgentOutput(sensitive))
+    usage = ModelUsage(
+        model_name="gemini-3.6-flash",
+        model_version="gemini-3.6-flash",
+        prompt_tokens=1_289,
+        output_tokens=382,
+        total_tokens=1_671,
+        duration_seconds=4.97,
+    )
+    response_hash = "1" * 64
+    workflow = FailingWorkflow(
+        InvalidClaimAgentOutput(
+            sensitive,
+            usage=usage,
+            raw_response_sha256=response_hash,
+        )
+    )
     worker = ReliableEvidenceWorker(workflow=workflow, store=store)
 
     with pytest.raises(EvidenceWorkerError) as captured:
@@ -52,6 +67,8 @@ def test_worker_persists_sanitized_terminal_failure_without_provider_text(
     assert durable.terminal_reason is TerminalReason.FAILED
     assert failure.error_code == "MODEL_OUTPUT_INVALID"
     assert failure.retryable is False
+    assert failure.model_usage == usage
+    assert failure.raw_response_sha256 == response_hash
     assert sensitive not in failure.summary
     assert sensitive not in str(captured.value)
     assert store.get_evidence(run.run_id) is None

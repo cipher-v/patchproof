@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -62,6 +63,49 @@ def test_retriever_reads_commits_not_uncommitted_worktree_content(
 
     assert "SECRET_UNCOMMITTED_WORKTREE_CONTENT" not in context.model_dump_json()
     assert "return max(candidates" in context.diff
+
+
+def test_default_budget_retains_symbols_from_a_changed_oversized_python_file(
+    context_repository_history: ContextRepositoryHistory,
+) -> None:
+    history = context_repository_history
+    module = history.path / "workspace.py"
+    module.write_text(
+        module.read_text(encoding="utf-8") + "# padding\n" * 21_000,
+        encoding="utf-8",
+    )
+    assert 192 * 1_024 < module.stat().st_size < ContextBudget().max_source_file_bytes
+    subprocess.run(
+        ("git", "-C", str(history.path), "add", "workspace.py"),
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ("git", "-C", str(history.path), "commit", "-m", "pad changed module"),
+        check=True,
+        capture_output=True,
+    )
+    large_head_sha = subprocess.run(
+        ("git", "-C", str(history.path), "rev-parse", "HEAD"),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    context = DeterministicContextRetriever(source_repository=history.path).retrieve(
+        base_sha=history.base_sha,
+        head_sha=large_head_sha,
+    )
+
+    assert any(
+        symbol.path == "workspace.py"
+        and symbol.qualified_name == "WorkspaceResolver.choose_workspace"
+        for symbol in context.changed_symbols
+    )
+    assert any(
+        snippet.kind is SnippetKind.CHANGED_SYMBOL and snippet.path == "workspace.py"
+        for snippet in context.snippets
+    )
 
 
 def test_context_json_and_individual_sections_obey_small_budgets(

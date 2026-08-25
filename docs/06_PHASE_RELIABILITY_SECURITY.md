@@ -64,7 +64,9 @@ loop. `ModelUsage.provider_attempts` records whether one or two provider attempt
 `ReliableEvidenceWorker` is the top-level local worker boundary. If the workflow raises, it maps
 the exception to a stable error code and bounded operator-safe summary. For a current nonterminal
 run, SQLite atomically transitions the run to terminal `FAILED` and inserts one immutable
-`run_failures` record containing the phase, code, retryability, summary, and timestamp.
+`run_failures` record containing the phase, code, retryability, summary, and timestamp. Invalid
+claim output additionally retains typed model usage and the raw-response SHA-256 for audit; the
+same optional fields are represented by Firestore.
 
 The first failure record wins on replay. Provider response text, repository-controlled exception
 text, credentials, and stack traces are not stored in that record or returned in the public

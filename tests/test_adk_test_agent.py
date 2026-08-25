@@ -12,6 +12,7 @@ from google.genai import types
 import patchproof.adk_test_agent as adk_module
 from patchproof.adk_test_agent import (
     CANDIDATE_AGENT_INSTRUCTION,
+    DEFAULT_CANDIDATE_MAX_OUTPUT_TOKENS,
     AdkGeminiCandidateModel,
     CandidateAgentInvocationError,
 )
@@ -89,7 +90,15 @@ def test_candidate_adapter_is_the_same_logical_stateless_tool_free_agent() -> No
     assert model.agent.tools == []
     assert model.agent.timeout == 60.0
     assert model.agent.generate_content_config.temperature == 0.1
-    assert model.agent.generate_content_config.max_output_tokens == 4_500
+    assert (
+        model.agent.generate_content_config.max_output_tokens
+        == DEFAULT_CANDIDATE_MAX_OUTPUT_TOKENS
+        == 12_000
+    )
+    assert (
+        model.agent.generate_content_config.thinking_config.thinking_level
+        is types.ThinkingLevel.LOW
+    )
     assert "UNTRUSTED DATA" in CANDIDATE_AGENT_INSTRUCTION
     assert "must not propose or execute commands" in CANDIDATE_AGENT_INSTRUCTION
 

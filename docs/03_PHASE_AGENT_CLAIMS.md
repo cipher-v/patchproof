@@ -96,7 +96,7 @@ Important defaults are explicit in `ContextBudget`:
 | Changed symbols | 24 |
 | Selected snippets | 16 |
 | Characters per snippet | 1,800 |
-| Bytes read from one Python file | 160,000 |
+| Bytes read from one Python file | 262,144 |
 | Python paths considered | 5,000 |
 | Test files scanned | 200 |
 | Reference files scanned | 200 |
@@ -125,7 +125,7 @@ bounded contract rather than being concatenated into an ad hoc prompt.
 - `include_contents="none"` and a fresh in-memory session per invocation;
 - no function tools, repository access, shell, code executor, sub-agent, or conversation memory;
 - temperature `0.1`;
-- maximum 1,400 output tokens;
+- low thinking with a maximum 8,192 combined thinking/output tokens;
 - 60-second agent timeout.
 
 The adapter sends one JSON user message, consumes ADK runtime events, selects only the final text

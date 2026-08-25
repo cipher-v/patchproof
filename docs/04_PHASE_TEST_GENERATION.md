@@ -108,7 +108,7 @@ extras.
 - `CandidateModelRequest` and `CandidateTestProposal` Pydantic schemas;
 - no tools and no prior conversation contents;
 - temperature 0.1;
-- 4,500 maximum output tokens;
+- low thinking with a maximum 12,000 combined thinking/output tokens;
 - a 60-second provider timeout;
 - fresh in-memory ADK session identity per invocation;
 - final-response SHA-256 and model/token/duration accounting in the controller;

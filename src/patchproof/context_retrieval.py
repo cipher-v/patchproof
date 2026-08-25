@@ -188,7 +188,7 @@ class ContextBudget:
     max_symbols: int = 24
     max_snippets: int = 16
     max_snippet_chars: int = 1_800
-    max_source_file_bytes: int = 160_000
+    max_source_file_bytes: int = 256 * 1_024
     max_python_paths: int = 5_000
     max_test_files_scanned: int = 200
     max_reference_files_scanned: int = 200

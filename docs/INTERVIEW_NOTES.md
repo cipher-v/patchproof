@@ -516,6 +516,14 @@ BASE/HEAD candidate result, semantic decision, or retained usage total to compar
 discriminating developer oracle. This negative result is the live measurement: provider wiring and
 credentials worked, while useful historical candidate generation remains unproven.
 
+The truncated-output diagnosis led to low-thinking structured calls and larger hard generation
+caps that remain above separate visible-response character budgets. A single post-fix attempt then
+returned valid JSON and retained 1,671 total tokens, but grounding rejected the claim because the
+changed 171,808-byte production file and 241,043-byte test file exceeded the old 160,000-byte scan
+cap. That cap is now a still-bounded 256 KiB, and offline retrieval of the exact PR returns the
+changed function, changed test class/method, and snippets. No third model call was made, so this is
+mechanical proof of the context fix, not a claim that Gemini can now generate a useful candidate.
+
 ## Future interview checklist (answers must follow implementation)
 
 - How could the design later support TypeScript without weakening the Python implementation?

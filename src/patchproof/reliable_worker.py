@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from uuid import UUID
 
-from patchproof.claim_agent import InvalidClaimAgentOutput
+from patchproof.claim_agent import InvalidClaimAgentOutput, ModelUsage
 from patchproof.context_retrieval import ContextRetrievalError
 from patchproof.evidence_workflow import EvidenceReport, EvidenceWorkflow
 from patchproof.execution_contract import ExecutionContractError
@@ -34,6 +34,8 @@ class ClassifiedWorkerFailure:
     code: WorkerFailureCode
     summary: str
     retryable: bool
+    model_usage: ModelUsage | None = None
+    raw_response_sha256: str | None = None
 
 
 class EvidenceWorkerError(RuntimeError):
@@ -66,6 +68,8 @@ class ReliableEvidenceWorker:
                     error_code=failure.code,
                     summary=failure.summary,
                     retryable=failure.retryable,
+                    model_usage=failure.model_usage,
+                    raw_response_sha256=failure.raw_response_sha256,
                 )
             raise EvidenceWorkerError(failure) from error
 
@@ -82,6 +86,8 @@ class ReliableEvidenceWorker:
                 code=WorkerFailureCode.MODEL_OUTPUT_INVALID,
                 summary="A semantic task returned invalid or ungrounded structured output.",
                 retryable=False,
+                model_usage=error.usage,
+                raw_response_sha256=error.raw_response_sha256,
             )
         if isinstance(error, ContextRetrievalError):
             return ClassifiedWorkerFailure(

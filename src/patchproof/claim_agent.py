@@ -217,7 +217,18 @@ class StructuredClaimModel(Protocol):
 
 
 class InvalidClaimAgentOutput(ValueError):
-    """Raised when model output is malformed, ungrounded, or outside the response budget."""
+    """Malformed or ungrounded output with safe accounting facts retained for audit."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        usage: ModelUsage | None = None,
+        raw_response_sha256: str | None = None,
+    ) -> None:
+        self.usage = usage
+        self.raw_response_sha256 = raw_response_sha256
+        super().__init__(message)
 
 
 class ClaimAgentResult(BaseModel):
@@ -257,19 +268,33 @@ class BehavioralClaimAgent:
         if len(request.model_dump_json()) > self.max_input_json_chars:
             raise ValueError("claim-agent input exceeds the configured character budget")
         response = await self.model.invoke(request)
+        response_hash = hashlib.sha256(response.text.encode("utf-8")).hexdigest()
         if len(response.text) > self.max_response_chars:
-            raise InvalidClaimAgentOutput("claim model response exceeds the configured budget")
+            raise InvalidClaimAgentOutput(
+                "claim model response exceeds the configured budget",
+                usage=response.usage,
+                raw_response_sha256=response_hash,
+            )
         try:
             selection = ClaimSelection.model_validate_json(response.text)
         except ValidationError as error:
             raise InvalidClaimAgentOutput(
-                "claim model returned invalid structured output"
+                "claim model returned invalid structured output",
+                usage=response.usage,
+                raw_response_sha256=response_hash,
             ) from error
-        self._validate_grounding(selection, context)
+        try:
+            self._validate_grounding(selection, context)
+        except InvalidClaimAgentOutput as error:
+            raise InvalidClaimAgentOutput(
+                str(error),
+                usage=response.usage,
+                raw_response_sha256=response_hash,
+            ) from error
         return ClaimAgentResult(
             selection=selection,
             usage=response.usage,
-            raw_response_sha256=hashlib.sha256(response.text.encode("utf-8")).hexdigest(),
+            raw_response_sha256=response_hash,
         )
 
     @staticmethod

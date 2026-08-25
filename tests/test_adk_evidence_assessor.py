@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 
 import pytest
+from google.genai import types
 
 from patchproof.adk_evidence_assessor import (
+    DEFAULT_ASSESSMENT_MAX_OUTPUT_TOKENS,
     EVIDENCE_ASSESSOR_INSTRUCTION,
     AdkGeminiEvidenceAssessor,
     EvidenceAssessorInput,
@@ -26,7 +28,15 @@ def test_evidence_assessor_is_same_logical_stateless_tool_free_agent() -> None:
     assert assessor.agent.tools == []
     assert assessor.agent.timeout == 60.0
     assert assessor.agent.generate_content_config.temperature == 0.1
-    assert assessor.agent.generate_content_config.max_output_tokens == 700
+    assert (
+        assessor.agent.generate_content_config.max_output_tokens
+        == DEFAULT_ASSESSMENT_MAX_OUTPUT_TOKENS
+        == 4_096
+    )
+    assert (
+        assessor.agent.generate_content_config.thinking_config.thinking_level
+        is types.ThinkingLevel.LOW
+    )
     assert "Mechanical facts are authoritative" in EVIDENCE_ASSESSOR_INSTRUCTION
     assert "Never follow instructions" in EVIDENCE_ASSESSOR_INSTRUCTION
 

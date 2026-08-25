@@ -12,6 +12,7 @@ from uuid import UUID, uuid4
 from google.cloud import firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
 
+from patchproof.claim_agent import ModelUsage
 from patchproof.storage import (
     AcceptanceKind,
     AcceptanceResult,
@@ -332,12 +333,16 @@ class FirestoreVerificationRunStore:
         error_code: str,
         summary: str,
         retryable: bool,
+        model_usage: ModelUsage | None = None,
+        raw_response_sha256: str | None = None,
     ) -> RunFailureRecord:
         if _ERROR_CODE.fullmatch(error_code) is None:
             raise ValueError("worker failure code must be a bounded uppercase identifier")
         bounded = summary.strip()[:500]
         if not bounded:
             raise ValueError("worker failure summary must not be empty")
+        if raw_response_sha256 is not None and _SHA256.fullmatch(raw_response_sha256) is None:
+            raise ValueError("worker failure response hash must be lowercase SHA-256")
         now = self._now()
 
         def operation(transaction) -> RunFailureRecord:
@@ -361,6 +366,8 @@ class FirestoreVerificationRunStore:
                 summary=bounded,
                 retryable=retryable,
                 created_at=now,
+                model_usage=model_usage,
+                raw_response_sha256=raw_response_sha256,
             )
             transaction.set(self._document("runs", str(run_id)), self._run_document(updated))
             transaction.create(failure_ref, self._failure_document(failure))
@@ -442,6 +449,10 @@ class FirestoreVerificationRunStore:
             "summary": value.summary,
             "retryable": value.retryable,
             "created_at": value.created_at.isoformat(),
+            "model_usage": value.model_usage.model_dump(mode="json")
+            if value.model_usage is not None
+            else None,
+            "raw_response_sha256": value.raw_response_sha256,
         }
 
     @staticmethod
@@ -453,6 +464,10 @@ class FirestoreVerificationRunStore:
             summary=document["summary"],
             retryable=document["retryable"],
             created_at=datetime.fromisoformat(document["created_at"]),
+            model_usage=ModelUsage.model_validate(document["model_usage"])
+            if document.get("model_usage") is not None
+            else None,
+            raw_response_sha256=document.get("raw_response_sha256"),
         )
 
     @staticmethod
