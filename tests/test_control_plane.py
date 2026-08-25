@@ -34,7 +34,10 @@ def _payload(
             "base": {"sha": base_sha},
             "head": {"sha": head_sha},
             "updated_at": updated_at,
+            "title": "Bounded PR title",
+            "body": "Bounded PR body",
         },
+        "installation": {"id": 4242},
     }
 
 
@@ -95,6 +98,35 @@ def test_valid_pull_request_delivery_creates_a_durable_run(api_parts) -> None:
     assert str(runs[0].run_id) == response_body["run_id"]
     assert runs[0].base_sha == "a" * 40
     assert runs[0].head_sha == "b" * 40
+    assert runs[0].title == "Bounded PR title"
+    assert runs[0].body == "Bounded PR body"
+    assert runs[0].installation_id == 4242
+
+
+def test_authenticated_current_run_is_dispatched_by_durable_identity(
+    writable_test_directory: Path,
+) -> None:
+    class RecordingDispatcher:
+        def __init__(self) -> None:
+            self.run_ids = []
+
+        def dispatch(self, run_id) -> None:
+            self.run_ids.append(run_id)
+
+    settings = ControlPlaneSettings(
+        webhook_secret=_SECRET,
+        allowed_repositories=frozenset({"Owner/Repository"}),
+        database_path=writable_test_directory / "dispatch.db",
+    )
+    store = SqliteVerificationRunStore(settings.database_path)
+    dispatcher = RecordingDispatcher()
+    client = ApiClient(create_app(settings=settings, store=store, dispatcher=dispatcher))
+    body = _body(_payload())
+
+    response = client.post("/webhooks/github", content=body, headers=_headers(body))
+
+    assert response.status_code == 202
+    assert [str(run_id) for run_id in dispatcher.run_ids] == [response.json()["run_id"]]
 
 
 def test_duplicate_delivery_is_acknowledged_without_a_second_run(api_parts) -> None:

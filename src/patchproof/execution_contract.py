@@ -122,6 +122,10 @@ class ExecutionContractLoader:
             raise ExecutionContractError(
                 "repository execution contract could not be read"
             ) from error
+        return self.load_bytes(raw)
+
+    def load_bytes(self, raw: bytes) -> ExecutionContract:
+        """Validate contract bytes read from an immutable Git object."""
         if not raw or len(raw) > self.max_bytes:
             raise ExecutionContractError("repository execution contract is empty or oversized")
         try:

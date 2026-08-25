@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import re
 import sqlite3
 from collections.abc import Callable
 from contextlib import closing
@@ -50,6 +52,44 @@ class ConcurrentRunUpdateError(RuntimeError):
     """Raised when optimistic state versioning detects a stale writer."""
 
 
+class StoredEvidenceConflictError(RuntimeError):
+    """Raised if a caller tries to replace immutable evidence for one run."""
+
+
+@dataclass(frozen=True, slots=True)
+class StoredEvidence:
+    """Content-addressed serialized evidence retained independently of workflow state."""
+
+    run_id: UUID
+    document_json: str
+    sha256: str
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class CheckPublication:
+    """Retry metadata for one run's single logical GitHub Check."""
+
+    run_id: UUID
+    payload_sha256: str
+    check_run_id: int | None
+    attempt_count: int
+    last_error: str | None
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class RunFailureRecord:
+    """Sanitized terminal worker failure separated from evidence and provider details."""
+
+    run_id: UUID
+    phase: RunPhase
+    error_code: str
+    summary: str
+    retryable: bool
+    created_at: datetime
+
+
 class VerificationRunStore(Protocol):
     """Persistence contract used by the control plane."""
 
@@ -62,6 +102,29 @@ class VerificationRunStore(Protocol):
     def transition_run(
         self, *, run_id: UUID, expected_version: int, transition: RunTransition
     ) -> VerificationRun: ...
+
+    def save_evidence(self, *, run_id: UUID, document_json: str, sha256: str) -> StoredEvidence: ...
+
+    def get_evidence(self, run_id: UUID) -> StoredEvidence | None: ...
+
+    def begin_publication(self, *, run_id: UUID, payload_sha256: str) -> CheckPublication: ...
+
+    def get_publication(self, run_id: UUID) -> CheckPublication | None: ...
+
+    def set_check_run_id(self, *, run_id: UUID, check_run_id: int) -> CheckPublication: ...
+
+    def record_publication_error(self, *, run_id: UUID, error: str) -> CheckPublication: ...
+
+    def fail_run(
+        self,
+        *,
+        run_id: UUID,
+        error_code: str,
+        summary: str,
+        retryable: bool,
+    ) -> RunFailureRecord: ...
+
+    def get_failure(self, run_id: UUID) -> RunFailureRecord | None: ...
 
 
 class SqliteVerificationRunStore:
@@ -129,13 +192,17 @@ class SqliteVerificationRunStore:
                         connection.execute(
                             """
                             UPDATE runs
-                            SET head_updated_at = ?, event_action = ?, updated_at = ?,
+                            SET head_updated_at = ?, event_action = ?, title = ?, body = ?,
+                                installation_id = ?, updated_at = ?,
                                 version = version + 1
                             WHERE run_id = ?
                             """,
                             (
                                 event.head_updated_at.isoformat(),
                                 event.action,
+                                event.title,
+                                event.body,
+                                event.installation_id,
                                 now.isoformat(),
                                 str(run.run_id),
                             ),
@@ -181,6 +248,9 @@ class SqliteVerificationRunStore:
                 base_sha=event.base_sha,
                 head_sha=event.head_sha,
                 head_updated_at=event.head_updated_at,
+                title=event.title,
+                body=event.body,
+                installation_id=event.installation_id,
                 lifecycle=RunLifecycle.TERMINAL if is_stale else RunLifecycle.ACCEPTED,
                 phase=RunPhase.CONTEXT,
                 terminal_reason=TerminalReason.SUPERSEDED if is_stale else None,
@@ -242,6 +312,199 @@ class SqliteVerificationRunStore:
             connection.commit()
             return updated
 
+    def save_evidence(self, *, run_id: UUID, document_json: str, sha256: str) -> StoredEvidence:
+        """Insert one immutable evidence document, or return an identical prior insert."""
+        if hashlib.sha256(document_json.encode("utf-8")).hexdigest() != sha256:
+            raise ValueError("evidence SHA-256 does not match serialized evidence")
+        now = self._now()
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._require_run(connection, run_id)
+            row = connection.execute(
+                "SELECT * FROM evidence_records WHERE run_id = ?", (str(run_id),)
+            ).fetchone()
+            if row is None:
+                connection.execute(
+                    """
+                    INSERT INTO evidence_records(run_id, document_json, sha256, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (str(run_id), document_json, sha256, now.isoformat()),
+                )
+                row = connection.execute(
+                    "SELECT * FROM evidence_records WHERE run_id = ?", (str(run_id),)
+                ).fetchone()
+            elif row["sha256"] != sha256 or row["document_json"] != document_json:
+                raise StoredEvidenceConflictError("stored evidence cannot be overwritten")
+            connection.commit()
+            return self._row_to_evidence(row)
+
+    def get_evidence(self, run_id: UUID) -> StoredEvidence | None:
+        """Load the immutable evidence document for a run, if computation completed."""
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT * FROM evidence_records WHERE run_id = ?", (str(run_id),)
+            ).fetchone()
+        return self._row_to_evidence(row) if row is not None else None
+
+    def begin_publication(self, *, run_id: UUID, payload_sha256: str) -> CheckPublication:
+        """Start or retry publication without changing immutable evidence or its payload."""
+        if re.fullmatch(r"[0-9a-f]{64}", payload_sha256) is None:
+            raise ValueError("publication payload hash must be a lowercase SHA-256 value")
+        now = self._now()
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._require_run(connection, run_id)
+            row = connection.execute(
+                "SELECT * FROM check_publications WHERE run_id = ?", (str(run_id),)
+            ).fetchone()
+            if row is None:
+                connection.execute(
+                    """
+                    INSERT INTO check_publications(
+                        run_id, payload_sha256, check_run_id, attempt_count, last_error, updated_at
+                    ) VALUES (?, ?, NULL, 1, NULL, ?)
+                    """,
+                    (str(run_id), payload_sha256, now.isoformat()),
+                )
+            else:
+                if row["payload_sha256"] != payload_sha256:
+                    raise StoredEvidenceConflictError("publication payload cannot be replaced")
+                connection.execute(
+                    """
+                    UPDATE check_publications
+                    SET attempt_count = attempt_count + 1, last_error = NULL, updated_at = ?
+                    WHERE run_id = ?
+                    """,
+                    (now.isoformat(), str(run_id)),
+                )
+            row = connection.execute(
+                "SELECT * FROM check_publications WHERE run_id = ?", (str(run_id),)
+            ).fetchone()
+            connection.commit()
+            return self._row_to_publication(row)
+
+    def get_publication(self, run_id: UUID) -> CheckPublication | None:
+        """Load publication metadata without incrementing the attempt counter."""
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT * FROM check_publications WHERE run_id = ?", (str(run_id),)
+            ).fetchone()
+        return self._row_to_publication(row) if row is not None else None
+
+    def set_check_run_id(self, *, run_id: UUID, check_run_id: int) -> CheckPublication:
+        """Remember the remote Check identity; assigning a different ID is forbidden."""
+        if check_run_id <= 0:
+            raise ValueError("GitHub Check run ID must be positive")
+        now = self._now()
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM check_publications WHERE run_id = ?", (str(run_id),)
+            ).fetchone()
+            if row is None:
+                raise RunNotFoundError("publication attempt has not started")
+            prior = row["check_run_id"]
+            if prior is not None and prior != check_run_id:
+                raise StoredEvidenceConflictError("GitHub Check identity cannot be replaced")
+            connection.execute(
+                "UPDATE check_publications SET check_run_id = ?, updated_at = ? WHERE run_id = ?",
+                (check_run_id, now.isoformat(), str(run_id)),
+            )
+            row = connection.execute(
+                "SELECT * FROM check_publications WHERE run_id = ?", (str(run_id),)
+            ).fetchone()
+            connection.commit()
+            return self._row_to_publication(row)
+
+    def record_publication_error(self, *, run_id: UUID, error: str) -> CheckPublication:
+        """Persist a bounded non-secret failure summary for operational retry."""
+        now = self._now()
+        bounded = error.strip()[:1_000] or "GitHub Check publication failed"
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE check_publications SET last_error = ?, updated_at = ? WHERE run_id = ?
+                """,
+                (bounded, now.isoformat(), str(run_id)),
+            )
+            if cursor.rowcount != 1:
+                raise RunNotFoundError("publication attempt has not started")
+            row = connection.execute(
+                "SELECT * FROM check_publications WHERE run_id = ?", (str(run_id),)
+            ).fetchone()
+            connection.commit()
+            return self._row_to_publication(row)
+
+    def fail_run(
+        self,
+        *,
+        run_id: UUID,
+        error_code: str,
+        summary: str,
+        retryable: bool,
+    ) -> RunFailureRecord:
+        """Atomically record one sanitized failure and terminate an active current run."""
+        if re.fullmatch(r"[A-Z][A-Z0-9_]{2,63}", error_code) is None:
+            raise ValueError("worker failure code must be a bounded uppercase identifier")
+        bounded_summary = summary.strip()[:500]
+        if not bounded_summary:
+            raise ValueError("worker failure summary must not be empty")
+        now = self._now()
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            current = self._require_run(connection, run_id)
+            prior = connection.execute(
+                "SELECT * FROM run_failures WHERE run_id = ?", (str(run_id),)
+            ).fetchone()
+            if prior is not None:
+                connection.commit()
+                return self._row_to_failure(prior)
+            updated = apply_run_transition(
+                current,
+                RunTransition(
+                    lifecycle=RunLifecycle.TERMINAL,
+                    terminal_reason=TerminalReason.FAILED,
+                ),
+                updated_at=now,
+            )
+            values = self._run_values(updated)
+            assignments = ", ".join(f"{column} = ?" for column in values if column != "run_id")
+            parameters = [value for column, value in values.items() if column != "run_id"]
+            connection.execute(
+                f"UPDATE runs SET {assignments} WHERE run_id = ?",
+                (*parameters, str(run_id)),
+            )
+            connection.execute(
+                """
+                INSERT INTO run_failures(
+                    run_id, phase, error_code, summary, retryable, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(run_id),
+                    current.phase,
+                    error_code,
+                    bounded_summary,
+                    int(retryable),
+                    now.isoformat(),
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM run_failures WHERE run_id = ?", (str(run_id),)
+            ).fetchone()
+            connection.commit()
+            return self._row_to_failure(row)
+
+    def get_failure(self, run_id: UUID) -> RunFailureRecord | None:
+        """Load one sanitized terminal worker failure, if present."""
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT * FROM run_failures WHERE run_id = ?", (str(run_id),)
+            ).fetchone()
+        return self._row_to_failure(row) if row is not None else None
+
     def _initialize(self) -> None:
         with closing(self._connect()) as connection:
             connection.executescript(
@@ -255,6 +518,9 @@ class SqliteVerificationRunStore:
                     base_sha TEXT NOT NULL,
                     head_sha TEXT NOT NULL,
                     head_updated_at TEXT NOT NULL,
+                    title TEXT NOT NULL DEFAULT 'Untitled pull request',
+                    body TEXT NOT NULL DEFAULT '',
+                    installation_id INTEGER,
                     lifecycle TEXT NOT NULL,
                     phase TEXT NOT NULL,
                     terminal_reason TEXT,
@@ -274,6 +540,31 @@ class SqliteVerificationRunStore:
                     received_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS evidence_records (
+                    run_id TEXT PRIMARY KEY REFERENCES runs(run_id),
+                    document_json TEXT NOT NULL,
+                    sha256 TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS check_publications (
+                    run_id TEXT PRIMARY KEY REFERENCES runs(run_id),
+                    payload_sha256 TEXT NOT NULL,
+                    check_run_id INTEGER,
+                    attempt_count INTEGER NOT NULL,
+                    last_error TEXT,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS run_failures (
+                    run_id TEXT PRIMARY KEY REFERENCES runs(run_id),
+                    phase TEXT NOT NULL,
+                    error_code TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    retryable INTEGER NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
                 CREATE UNIQUE INDEX IF NOT EXISTS one_current_run_per_pull_request
                     ON runs(repository, pr_number)
                     WHERE revision_state = 'CURRENT';
@@ -285,6 +576,14 @@ class SqliteVerificationRunStore:
                     ON runs(repository, pr_number, base_sha, head_sha, head_updated_at);
                 """
             )
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(runs)")}
+            for name, definition in (
+                ("title", "TEXT NOT NULL DEFAULT 'Untitled pull request'"),
+                ("body", "TEXT NOT NULL DEFAULT ''"),
+                ("installation_id", "INTEGER"),
+            ):
+                if name not in columns:
+                    connection.execute(f"ALTER TABLE runs ADD COLUMN {name} {definition}")
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path, timeout=5.0, isolation_level=None)
@@ -325,6 +624,9 @@ class SqliteVerificationRunStore:
             "base_sha": run.base_sha,
             "head_sha": run.head_sha,
             "head_updated_at": run.head_updated_at.isoformat(),
+            "title": run.title,
+            "body": run.body,
+            "installation_id": run.installation_id,
             "lifecycle": run.lifecycle,
             "phase": run.phase,
             "terminal_reason": run.terminal_reason,
@@ -349,6 +651,37 @@ class SqliteVerificationRunStore:
         if row is None:
             raise RunNotFoundError(f"verification run not found: {run_id}")
         return self._row_to_run(row)
+
+    @staticmethod
+    def _row_to_evidence(row: sqlite3.Row) -> StoredEvidence:
+        return StoredEvidence(
+            run_id=UUID(row["run_id"]),
+            document_json=row["document_json"],
+            sha256=row["sha256"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
+
+    @staticmethod
+    def _row_to_publication(row: sqlite3.Row) -> CheckPublication:
+        return CheckPublication(
+            run_id=UUID(row["run_id"]),
+            payload_sha256=row["payload_sha256"],
+            check_run_id=row["check_run_id"],
+            attempt_count=row["attempt_count"],
+            last_error=row["last_error"],
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+
+    @staticmethod
+    def _row_to_failure(row: sqlite3.Row) -> RunFailureRecord:
+        return RunFailureRecord(
+            run_id=UUID(row["run_id"]),
+            phase=RunPhase(row["phase"]),
+            error_code=row["error_code"],
+            summary=row["summary"],
+            retryable=bool(row["retryable"]),
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
 
     def _now(self) -> datetime:
         value = self.clock()

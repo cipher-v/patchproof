@@ -195,6 +195,7 @@ class ModelUsage(BaseModel):
     total_tokens: int | None = Field(default=None, ge=0)
     cached_tokens: int | None = Field(default=None, ge=0)
     duration_seconds: float = Field(ge=0)
+    provider_attempts: int = Field(default=1, ge=1, le=2)
 
 
 @dataclass(frozen=True, slots=True)

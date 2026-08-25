@@ -1,9 +1,9 @@
 # Architecture
 
-## Current architecture (Phase 4)
+## Current architecture (Phase 8, deploy-ready but not deployed)
 
-Three implemented local slices share typed domain models but are not yet orchestrated together.
-The ingestion slice is:
+The implemented local slices now connect through a durable run identity and an injectable,
+idempotent dispatcher. The ingestion slice is:
 
 ```text
 GitHub webhook bytes
@@ -18,7 +18,7 @@ validated PR event
 full BASE SHA + full HEAD SHA
         |
         v
-VerificationRunStore protocol
+VerificationRunStore + dispatcher(run_id)
         |
         v
 SQLite transaction
@@ -51,11 +51,10 @@ base ref + head ref + immutable TestArtifact
              ChallengeResult
 ```
 
-Both are local Python components. The control plane records an `ACCEPTED` run but does not yet
-queue it or invoke the executor. Mechanical evidence is implemented in the executor; an ingested
-run's evidence and semantic claim outcome remain unset.
+The local SQLite adapter remains available for development. The deployment composition replaces it
+with transactional Firestore and implements the dispatcher with a deterministic named Cloud Task.
 
-The Phase 3–4 semantic slice is also local and independently callable:
+The Phase 3–5 workflow is local and independently callable by a worker:
 
 ```text
 immutable BASE SHA + immutable HEAD SHA
@@ -107,6 +106,22 @@ PR title/body + optional linked-issue excerpts
              v
  CandidateGenerationSnapshot
  parent ID/hash + model usage + response hash
+             |
+             v
+ credential-minimized bounded process runner
+ validated install + identical BASE/HEAD replay
+             |
+             v
+ mechanical self-rejection -> optional one repair
+             |
+             v
+ constrained semantic relevance assessment
+             |
+             v
+ immutable evidence JSON + SHA-256
+             |
+             v
+ retry-safe GitHub Check publication
 ```
 
 The retriever reads committed Git objects, not uncommitted working-tree content. The model never
@@ -114,39 +129,74 @@ searches the repository and does not receive the whole repository. Its output mu
 exact changed symbol and cite ranges contained in selected deterministic snippets. The live model
 test is opt-in and successfully returned a real structured Gemini response.
 
-Candidate proposals contain source and audit rationale, never commands. The contract accepts only
-bounded argument arrays matching predefined install/test templates; subprocess execution does not
-use a shell. The existing runner is now contract-bound and refuses artifact paths outside the
-configured generated-test directories.
+Candidate proposals contain source and audit rationale, never commands. The workflow reads the
+same contract from both immutable trees, derives committed paths from HEAD, and requires the
+executor to hold that contract. Validated install arrays and pytest commands execute without a
+shell. Every candidate execution and semantic/model provenance record is content-addressed.
 
-There is still no GitHub API narrative client, task service, cloud component, orchestration
-between slices, installation runner, execution-driven candidate loop, or result publication.
+Installation and pytest child processes receive an explicit environment allowlist with isolated
+home/cache/temp paths, never a copy of the control-plane environment. Output is drained into
+bounded buffers, commands run without a shell, and timeout terminates the process tree. Logical
+semantic calls retry at most once and only for explicit transient provider failures. A worker
+exception becomes one immutable, sanitized terminal failure record rather than leaving a run
+indefinitely active.
 
-## Target cloud architecture (future phases)
+GitHub Check publication uses a short-lived GitHub App installation token, run ID `external_id`,
+remote-ID recovery, immutable payload hashes, and separate retry state. Publication code can only
+load stored evidence; it cannot access Gemini, repositories, workspaces, or pytest.
+
+The Phase 7 evaluation slice reuses the execution core without entering the production workflow:
+
+```text
+versioned benchmark manifest + hashed hidden artifacts
+                         |
+                         v
+public GitHub PR ref fetch + exact SHA verification
+                         |
+             +-----------+-----------+
+             v                       v
+historical developer oracle    controlled weak candidate
+real BASE -> real PR HEAD       buggy BASE -> same BASE
+             +-----------+-----------+
+                         v
+             shared raw execution facts
+                 /                 \
+                v                   v
+        HEAD-only policy     PatchProof BASE/HEAD policy
+                 \                 /
+                  raw JSON -> derived JSON/Markdown
+```
+
+Reference oracles never enter the historical repositories and are injected after checkout. The
+current benchmark measures executor and evidence-policy behavior, not live Gemini generation.
+
+## Implemented cloud composition
 
 ```text
 GitHub pull-request event
           |
           v
-Cloud Run control plane -- ADK/Gemini semantic decisions
-      |          |
-      |          +--> Firestore workflow and evidence records
-      v
-Cloud Tasks
+Cloud Run control -- webhook + Firestore + task enqueue
       |
       v
-Cloud Run executor -- checkout, validated commands, pytest, bounded results
+Cloud Tasks -- deterministic run ID + Google OIDC
       |
-      +--> Firestore result/evidence
-                    |
-                    v
-             control plane --> GitHub Check
+      v
+control task route -- ADK/Gemini + orchestration
+      |
+      v
+private Cloud Run executor -- checkout + validated pytest
+      |
+      v
+bounded facts -> control -> Firestore -> GitHub Check
 ```
 
-The planned control plane owns orchestration, model access, GitHub App credentials, durable state
-transitions, and publication. The planned executor receives immutable revision identifiers and a
-validated execution contract, then returns bounded execution facts. It does not receive GitHub
-write credentials or model credentials.
+The control plane owns orchestration, model access, GitHub App credentials, durable state, task
+dispatch, and publication. The private executor receives immutable identities, a validated
+contract, and a hashed artifact, then independently refetches and validates them before returning
+bounded facts. It receives no GitHub write credential, Gemini key, or Firestore permission. This
+composition and its deployment script are implemented, but a live Google Cloud deployment has not
+yet been performed or claimed.
 
 ## Intended evidence flow
 
@@ -163,10 +213,12 @@ PR diff -> changed symbols -> selected or abstained claim -> candidate test arti
                                             claim-scoped conclusion
 ```
 
-Webhook authentication, PR identity capture, local workflow persistence, bounded PR context,
-claim selection/abstention, artifact BASE/HEAD execution, and mechanical classification are
-implemented as separate slices. Candidate generation and bounded repair are also implemented;
-semantic execution assessment, dispatch between the slices, and publication remain planned.
+Webhook authentication, PR identity capture, local dispatch boundary, context, claim selection or
+abstention, bounded candidate/repair, installation, BASE/HEAD execution, mechanical classification,
+semantic relevance assessment, evidence persistence, and GitHub Check publication are connected.
+The dispatcher and Firestore adapter now implement those cloud boundaries. Actual resource
+creation and end-to-end deployed proof remain blocked on Google Cloud CLI authentication/project
+selection.
 
 ## Architectural invariants
 
@@ -177,6 +229,11 @@ semantic execution assessment, dispatch between the slices, and publication rema
   agent identity; claim selection may abstain and candidate generation has a two-call ceiling.
 - Generated test commands never come from the model; only validated contract argument arrays are
   executable, without a command shell.
+- Repository child processes receive only an explicit operational environment allowlist; model,
+  webhook, and GitHub write credentials are not inherited.
+- Subprocess time and retained stdout/stderr are bounded before execution facts enter evidence.
+- A logical semantic call may retry once only for an explicit transient failure; malformed output
+  and policy failures do not retry.
 - Candidate source must pass deterministic path, syntax, test-shape, import, and selected-call
   checks before it becomes one immutable hashed `TestArtifact`.
 - The same test bytes and identifier are replayed on immutable BASE and HEAD revisions.
@@ -185,7 +242,16 @@ semantic execution assessment, dispatch between the slices, and publication rema
 - Lifecycle, workflow phase, terminal reason, evidence outcome, and publication state remain
   separate dimensions.
 - Publication retries do not repeat model or executor work.
+- Current worker failures terminate durably with stable codes and sanitized summaries.
+- Every executed candidate remains auditable even when it self-rejects and triggers repair.
+- GitHub tokens and private keys never enter workflow/evidence persistence.
 - Old revisions remain auditable after a newer HEAD supersedes them.
 - GitHub delivery replay and revision replay are distinct idempotency boundaries.
 - At most one stored run occurrence is current for a repository and pull request.
 - Public claims remain narrower than the technical mechanism.
+- Benchmark summaries are derived from checked-in raw rows with explicit denominators; unmeasured
+  agent metrics remain unmeasured rather than being inferred from reference-oracle performance.
+- A Cloud Task carries only a durable run UUID, uses a deterministic name, and is accepted only
+  with an audience- and email-pinned Google OIDC identity.
+- The executor Cloud Run identity has no project roles or secret mounts; only the control identity
+  can invoke it, and executor independently revalidates commits, contract, artifact, and allowlist.

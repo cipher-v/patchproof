@@ -13,6 +13,11 @@ from google.genai import types
 
 from patchproof.adk_claim_agent import DEFAULT_CLAIM_MODEL
 from patchproof.claim_agent import ModelUsage
+from patchproof.model_reliability import (
+    ModelInvocationFailure,
+    is_transient_event_code,
+    is_transient_provider_error,
+)
 from patchproof.test_generation import (
     CandidateModelRequest,
     CandidateTestProposal,
@@ -44,7 +49,7 @@ chain-of-thought. Output only the configured structured response.
 """.strip()
 
 
-class CandidateAgentInvocationError(RuntimeError):
+class CandidateAgentInvocationError(ModelInvocationFailure):
     """Raised when ADK cannot produce one final structured candidate response."""
 
 
@@ -114,7 +119,10 @@ class AdkGeminiCandidateModel:
                 new_message=message,
             ):
                 if event.error_code or event.error_message:
-                    raise CandidateAgentInvocationError("ADK candidate invocation failed")
+                    raise CandidateAgentInvocationError(
+                        "ADK candidate invocation failed",
+                        retryable=is_transient_event_code(event.error_code),
+                    )
                 model_version = event.model_version or model_version
                 if event.usage_metadata is not None:
                     prompt_tokens = self._maximum(
@@ -137,7 +145,8 @@ class AdkGeminiCandidateModel:
             raise
         except Exception as error:
             raise CandidateAgentInvocationError(
-                "ADK candidate invocation did not complete"
+                "ADK candidate invocation did not complete",
+                retryable=is_transient_provider_error(error),
             ) from error
         duration = time.perf_counter() - started
         if final_text is None:

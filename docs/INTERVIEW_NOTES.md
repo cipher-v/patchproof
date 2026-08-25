@@ -1,20 +1,21 @@
 # Interview Notes
 
-These notes describe implemented behavior through Phase 4. Future-system questions are retained
+These notes describe implemented behavior through Phase 7. Future-system questions are retained
 as a study checklist without invented implementation answers.
 
 ## What exists now?
 
-PatchProof currently has three local slices. The deterministic BASE/HEAD challenge resolves full
+PatchProof now connects its local slices through a durable run identity. The BASE/HEAD challenge resolves full
 SHAs, creates detached worktrees, executes identical hashed test bytes, parses JUnit results, and
 classifies mechanical evidence. The FastAPI control plane authenticates bounded GitHub webhook
 bodies, filters supported public allowlisted PR events, and persists idempotent workflow records in
 SQLite with stale/supersession handling. The semantic slice retrieves bounded context, selects and
 grounds one claim, and can now generate, validate, hash, and optionally repair one pytest candidate
 under a strict execution contract. The same logical ADK/Gemini agent identity performs isolated
-schema-specific tasks without tools or history. The slices are not yet orchestrated. PatchProof
-does not yet execute generated candidates from workflow state, persist model lineage, or publish
-GitHub results. The real Gemini smoke test has successfully returned a structured abstention.
+schema-specific tasks without tools or history. The workflow executes validated installs and
+candidate bytes, self-rejects weak evidence, persists complete lineage, constrains final semantic
+assessment, and publishes retry-safe claim-scoped GitHub Checks. The dispatcher and store are local
+boundaries pending cloud deployment. The real Gemini smoke test returned a structured abstention.
 
 ## Why Python 3.12?
 
@@ -285,9 +286,233 @@ it must not ask Gemini to regenerate source per revision. The Phase 1 runner ver
 before and after both executions, while Phase 4 prevents an existing repository path from being
 selected as the injection target.
 
+## Why does PatchProof self-reject a candidate that passes both revisions?
+
+Passing HEAD proves only that a generated assertion is compatible with HEAD. If BASE also passes,
+the scenario does not distinguish the change and cannot support the selected counterfactual claim.
+PatchProof retains that execution, spends at most one repair, and otherwise abstains.
+
+## Why can final semantic assessment not override mechanical evidence?
+
+The model is useful for judging whether an assertion actually represents the grounded claim, but
+it did not execute the code. Deterministic policy permits claim support only for BASE assertion
+failure / HEAD pass and potential regression only for the reverse pattern. An unrelated or
+uncertain assertion becomes insufficient evidence.
+
+## What prevents publication retry from rerunning expensive work?
+
+Execution first writes a content-addressed evidence document and terminal claim outcome.
+`GitHubCheckPublisher` can access only the store and Checks client; it has no claim/candidate model,
+repository, workspace, or pytest dependency. It formats every retry from the same stored JSON.
+
+## How is an ambiguous GitHub Check create recovered?
+
+The run UUID is the Check `external_id`. Before POSTing without a known remote ID, the client lists
+same-name Checks on the immutable HEAD and searches for that external ID. A remotely successful
+POST whose response was lost is therefore recovered and PATCHed rather than duplicated.
+
+## Why is a successful GitHub Check not a whole-PR verdict?
+
+The green result means one generated scenario provided evidence consistent with one selected
+claim. The Check title, summary, conclusion, and disclaimer stay claim/scenario scoped, and include
+the exact BASE, HEAD, candidate, and evidence hashes. Untested behavior remains unaddressed.
+
+## Why is an environment allowlist stronger than deleting known secrets?
+
+A denylist is correct only for credential names known today. A newly introduced token, cloud
+credential path, or application secret would be inherited until someone remembered to update the
+list. PatchProof constructs repository-child environments from a short operational allowlist, so
+unknown ambient values stay outside the boundary by default. Isolated home, cache, and temporary
+paths also reduce accidental reuse of user-level configuration. This is credential separation,
+not a sandbox: the child still has the worker's permitted network and filesystem access.
+
+## Why is output truncated during capture instead of after execution?
+
+`subprocess.run(capture_output=True)` retains every byte before application code can slice the
+result. A repository can therefore exhaust memory with output even if the final report is small.
+PatchProof drains both pipes concurrently, retains only bounded prefixes, and discards the rest
+while continuing to read. This avoids pipe deadlock and makes the retained-memory claim true at
+the process boundary.
+
+## What exactly does a process timeout stop?
+
+The runner starts a process group and, on timeout, asks the operating system to terminate the
+process tree. It then directly kills the parent if tree termination did not succeed. The result is
+classified as timed out with bounded output; it is not mistaken for an assertion failure. This is
+best-effort host process control, not a CPU/memory quota or proof that every external side effect
+was prevented before termination.
+
+## Which model failures are retried?
+
+Only explicit timeouts, transport/network errors, throttling, provider server errors, and selected
+deadline/conflict status codes. The identical logical request gets one retry, for a maximum of two
+provider attempts. Malformed JSON, schema/grounding errors, candidate validation failures, and
+ordinary client errors do not retry. Candidate repair remains an independent one-repair budget.
+
+## How does a worker failure become durable without leaking untrusted text?
+
+The worker maps known exception types to stable codes such as `MODEL_OUTPUT_INVALID` or
+`WORKSPACE_FAILED` and fixed bounded summaries. SQLite applies terminal `FAILED` state and inserts
+the first failure record in one transaction. Provider bodies, repository exception strings,
+tokens, and traces are excluded from the durable/public error; internal exception chaining remains
+available to controlled runtime logging.
+
+## What happens to duplicate, stale, and superseded work?
+
+Delivery ID and revision occurrence remain separate idempotency keys. A delivery replay does not
+dispatch twice, a stale observation cannot replace the current revision, and a genuinely newer
+HEAD makes an active older occurrence terminal/superseded. Both the workflow and publisher reject
+superseded runs, preserving their audit history without allowing stale results to appear current.
+
+## How are GitHub publication failures classified?
+
+Network errors, 408/409/425/429, and 5xx responses are retryable. Other non-success responses and
+a missing installation ID are terminal. Retry reloads only the immutable stored evidence and
+recovers a remote Check using `external_id`; it never repeats Gemini or pytest. Error messages use
+status categories and never persist GitHub response bodies or installation tokens.
+
+## What security does Phase 6 honestly provide?
+
+Validated argv without a shell, path and AST checks, immutable hashes, credential-minimized child
+environments, bounded time/output, sanitized durable failures, and separation of model/executor/
+publication authority. It does not provide hostile-code containment, outbound-network denial,
+syscall filtering, read-only filesystems, CPU or memory quotas, or full supply-chain security.
+Those stronger controls require the deployed executor boundary and still must be described
+precisely rather than as “enterprise-grade security.”
+
+## Why use genuine historical PRs instead of only synthetic fixtures?
+
+Synthetic fixtures are excellent for deterministic edge cases, but their code shape and failure
+mode were chosen by the implementer. Historical PRs add external provenance: an upstream author
+identified a bug, changed production code, and added a regression assertion. PatchProof Bench pins
+the actual BASE and PR HEAD commits and verifies the fetched PR ref, so checkout and execution are
+tested against real repository structure rather than only our own examples.
+
+## What is a hidden/reference oracle?
+
+It is a developer-written regression assertion used to establish the expected historical
+counterfactual. PatchProof stores a small adapted standalone version outside the checked-out
+repository, hashes it, and injects it only for execution. A future Gemini run must exclude these
+oracle files and the fixed test diff from model context. The oracle scores generation; it must not
+become a hint to generation.
+
+## How is false support measured without relying on an LLM judge?
+
+Scenario truth comes from immutable historical provenance or controlled construction, and support
+comes from deterministic policy. For the controlled no-op scenario, the same buggy revision plays
+BASE and HEAD while a weak but valid candidate passes both. HEAD-only acceptance emits support even
+though the fix is absent; PatchProof mechanically rejects it as non-discriminating.
+
+The report publishes two rates. `false/support` asks what fraction of all strong supports were
+false. `false/negative` asks what fraction of negative scenarios received false support. Counts and
+denominators remain in raw and summary JSON. In the recorded eight-scenario policy comparison,
+HEAD-only had 4/8 false supports and false-supported 4/4 negatives; PatchProof had 0/4 false strong
+supports and 0/4 negatives.
+
+## Why is the 4/4 oracle result not a Gemini benchmark result?
+
+Because the artifacts came from developer regressions, not Gemini. The result proves that the
+checkout, injection, identical-byte replay, pytest parsing, and evidence policy reproduce four real
+fixes. It does not tell us how often the model selects the right claim, generates a valid test, or
+abstains appropriately. The report labels live generation, semantic accuracy, token use, and model
+latency as unmeasured instead of borrowing the oracle score.
+
+## What did the humanize collection failure reveal?
+
+`humanize` generates `_version.py` during its packaging build, so direct imports from an
+uninstalled source checkout failed on both revisions. That is an environmental result, not a bug
+oracle failure. The standalone artifacts now install an in-memory test-only version module before
+importing production code. No upstream production file is changed. The incident illustrates why
+historical benchmarks need environment normalization and why collection errors cannot count as
+counterfactual evidence.
+
+## How does PatchProof Bench prevent cherry-picking?
+
+The strict manifest defines the complete run. `run_benchmark()` iterates every case and writes
+results only after all scenarios and controlled checks complete. Raw JSON retains BASE/HEAD status,
+hashes, bounded output, timing, truth, mechanics, and both strategy decisions. Summary JSON and
+Markdown are regenerated from those rows rather than edited by hand. Artifact tampering fails hash
+verification before any clone.
+
+## Why does Cloud Tasks carry only a run ID?
+
+Firestore is the authoritative record. A task needs only the stable identity required to reload it.
+This avoids duplicating mutable state and prevents secrets, PR prose, candidate code, and commands
+from entering the queue. The task name is derived from the UUID, so a duplicate enqueue resolves to
+`AlreadyExists` and is treated as the same dispatch.
+
+## Why does Cloud Tasks call control before executor?
+
+The candidate does not exist at webhook time. The control task must retrieve context and run the
+bounded semantic steps first. It then sends the private executor a validated contract, immutable
+SHAs, and hashed candidate. Cloud Tasks still provides asynchronous webhook decoupling while the
+executor remains a separate credential boundary.
+
+## How is the public task route authenticated?
+
+GitHub needs public control ingress, so Cloud Run IAM cannot make the whole control service private.
+Cloud Tasks signs an OIDC token for a dedicated no-role account. PatchProof verifies Google's
+signature and pins audience, issuer, verified email, and exact account before processing the UUID.
+GitHub webhook authentication remains a separate HMAC mechanism.
+
+## How does Firestore preserve current-run and idempotency semantics?
+
+Delivery, revision, and current-PR identities are separate documents. Acceptance reads them inside
+one transaction and writes the new run plus pointers together. Concurrent changes to the same
+current pointer cause Firestore transaction retry, so a transaction reevaluates stale/supersession
+logic against the winner rather than blindly creating a second current record.
+
+## What credentials does each deployed service have?
+
+Control can transact Firestore, enqueue Tasks, read only the three PatchProof secrets, invoke only
+the executor, call Gemini, and mint GitHub App installation tokens. Executor has no project role or
+secret mount. The task identity has no project role and exists only as the signed callback subject.
+The Cloud Tasks service agent may mint tokens only for that task identity.
+
+## Does using one image weaken service separation?
+
+No. Image bytes define possible code, while the Cloud Run revision defines active role, identity,
+ingress, secret mounts, environment, resources, and IAM. Executor startup selects only its app and
+has no permission to resolve control secrets. Separate images could reduce code surface further,
+but do not replace identity separation.
+
+## What security does Cloud Run provide, and what does PatchProof not claim?
+
+The deployment adds separate service identities, IAM-private executor ingress, ephemeral instance
+filesystems, bounded instance/request resources, and no executor secret mounts. Existing code adds
+validated argv, minimal child environments, hashes, timeouts, and bounded logs. This is constrained
+execution for trusted allowlisted repositories. It is not proof of safe arbitrary malicious code:
+there is no outbound-network block, syscall sandbox, or complete supply-chain containment.
+
+## Why is Phase 8 still blocked?
+
+Code and infrastructure are locally verified, but no authenticated Google Cloud project was
+available and `gcloud` is not installed. Docker Desktop was available for the pre-cloud checkpoint:
+the shared production image built, both service health paths responded, and the production
+execution core reproduced BASE assertion failure / HEAD pass inside the container. That is local
+container proof, not Cloud Run, Firestore, Tasks, OIDC, Secret Manager, or GitHub publication proof.
+A real deployment and signed PR-to-GitHub-Check capture are required before claiming visible cloud
+deployment.
+
+## What did the container smoke find that native tests did not?
+
+The first production smoke installed the fixture's locked dependencies into its workspace `.venv`
+but then ran the contract with the container's global Python, which could not import the fixture's
+pytest. An attempted fix that resolved `.venv/bin/python` was still wrong because the Linux symlink
+resolved to the global interpreter before launch. PatchProof now invokes the un-resolved workspace
+virtual-environment path, preserving Python's environment detection, and the fixture declares its
+own pytest dependency. The regression test proves the selected executable is inside the repository
+workspace. The container rerun then produced the expected identical-artifact BASE-fail/HEAD-pass
+classification.
+
+## Was a real historical Gemini candidate measured in the pre-cloud checkpoint?
+
+No. Neither `GOOGLE_API_KEY` nor `GEMINI_API_KEY` was available in the process, user, or machine
+environment, and there was no local `.env`. The earlier credential-gated live test proves the
+configured `gemini-3.6-flash` endpoint can return a structured abstention for empty diff context;
+it does not measure claim extraction or candidate quality on a historical bug. That one-case
+measurement remains required and must follow the existing bounded generation and repair policy.
+
 ## Future interview checklist (answers must follow implementation)
 
-- What security does Cloud Run provide, and what does PatchProof explicitly not claim?
-- How is false support measured without relying only on an LLM judge?
-- Which externally visible actions are safe to retry after end-to-end orchestration exists?
 - How could the design later support TypeScript without weakening the Python implementation?

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import time
 import uuid
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
@@ -95,11 +96,11 @@ class GitWorkspaceManager:
                 completed = self._run_git(("worktree", "remove", "--force", str(path)), check=False)
                 if completed.returncode != 0 and path.exists():
                     cleanup_failures.append(completed.stderr.strip() or str(path))
-                    shutil.rmtree(path, ignore_errors=True)
+                    self._remove_tree(path)
 
             self._run_git(("worktree", "prune"), check=False)
             if run_root.exists():
-                shutil.rmtree(run_root, ignore_errors=True)
+                self._remove_tree(run_root)
             if cleanup_failures or run_root.exists():
                 details = "; ".join(cleanup_failures) or str(run_root)
                 message = f"failed to clean temporary worktrees: {details}"
@@ -107,6 +108,16 @@ class GitWorkspaceManager:
                     active_error.add_note(message)
                 else:
                     raise GitWorkspaceError(message)
+
+    @staticmethod
+    def _remove_tree(path: Path) -> None:
+        """Retry disposal briefly for Windows scanners releasing vanished cache entries."""
+        for attempt in range(20):
+            shutil.rmtree(path, ignore_errors=True)
+            if not path.exists():
+                return
+            if attempt < 19:
+                time.sleep(0.1)
 
     def _run_git(
         self, arguments: Sequence[str], *, check: bool = True

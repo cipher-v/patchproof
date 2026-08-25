@@ -82,6 +82,9 @@ class PullRequestEvent(BaseModel):
     base_sha: str
     head_sha: str
     head_updated_at: datetime
+    title: str = Field(default="Untitled pull request", min_length=1, max_length=300)
+    body: str = Field(default="", max_length=8_000)
+    installation_id: int | None = Field(default=None, gt=0)
 
     @field_validator("repository")
     @classmethod
@@ -117,6 +120,9 @@ class VerificationRun(BaseModel):
     base_sha: str
     head_sha: str
     head_updated_at: datetime
+    title: str = Field(default="Untitled pull request", min_length=1, max_length=300)
+    body: str = Field(default="", max_length=8_000)
+    installation_id: int | None = Field(default=None, gt=0)
     lifecycle: RunLifecycle
     phase: RunPhase
     terminal_reason: TerminalReason | None = None

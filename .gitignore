@@ -5,6 +5,7 @@ __pycache__/
 .pytest_cache/
 .test-runs/
 .ruff_cache/
+.uv-cache/
 .mypy_cache/
 .coverage
 coverage.xml
@@ -26,6 +27,9 @@ dist/
 
 # Local control-plane state
 data/
+
+# Reproducible benchmark checkout/workspace cache
+.patchproof-bench/
 
 # Editors and operating systems
 .idea/

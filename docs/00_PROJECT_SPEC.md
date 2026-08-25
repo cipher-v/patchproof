@@ -2,7 +2,7 @@
 
 ## Document status
 
-This document is the source of truth for the product boundary as of Phase 4. Sections describing
+This document is the source of truth for the product boundary as of Phase 7. Sections describing
 the target system are design commitments, not claims that those features are already implemented.
 Implemented behavior consists of the Python project foundation described under "Phase 0
 implementation," the deterministic executor documented in
@@ -12,7 +12,11 @@ control plane and durable workflow state documented in
 bounded deterministic context retriever and structured claim-selection agent documented in
 [`03_PHASE_AGENT_CLAIMS.md`](03_PHASE_AGENT_CLAIMS.md), plus the execution contract and bounded
 candidate generation/repair boundary documented in
-[`04_PHASE_TEST_GENERATION.md`](04_PHASE_TEST_GENERATION.md).
+[`04_PHASE_TEST_GENERATION.md`](04_PHASE_TEST_GENERATION.md), the end-to-end evidence workflow in
+[`05_PHASE_EVIDENCE_WORKFLOW.md`](05_PHASE_EVIDENCE_WORKFLOW.md), and the reliability/security
+boundary in [`06_PHASE_RELIABILITY_SECURITY.md`](06_PHASE_RELIABILITY_SECURITY.md).
+The reproducible historical executor/policy benchmark and its explicit agent-evaluation limits are
+documented in [`07_PHASE_EVALUATION.md`](07_PHASE_EVALUATION.md).
 
 ## Problem
 
@@ -114,9 +118,9 @@ Repository execution will be governed by a validated `.patchproof.yaml` contract
 Python version, predefined installation and test commands, allowed test paths, and a timeout. This
 contract is implemented in Phase 4 as a strict, bounded YAML mapping whose commands are argument
 arrays selected from deterministic templates. The model never receives or supplies those command
-values. Installation execution and end-to-end orchestration remain later-phase work.
+values. Phase 5 executes those validated arrays on both revisions as part of orchestration.
 
-As of Phase 4, deterministic code implements GitHub webhook HMAC validation, bounded payload
+As of Phase 6, deterministic code implements GitHub webhook HMAC validation, bounded payload
 handling, public-repository allowlisting, full BASE/HEAD SHA capture, delivery/revision
 idempotency, local SQLite persistence, explicit state transitions, and stale/superseded revision
 history. Phase 1's BASE/HEAD executor is also implemented. Deterministic Git/AST context retrieval
@@ -125,9 +129,14 @@ slice. The agent uses an explicit Gemini 3.6 Flash model and must select at most
 or abstain; its live integration test has completed successfully. The same logical agent can now
 propose a structured pytest candidate through a separate task schema. Deterministic code validates
 the candidate path, syntax, test shape, imports, selected unsafe calls, immutable content hash, and
-at-most-two/one-repair lineage against `.patchproof.yaml`. No orchestration connects these slices
-yet. Candidate execution feedback, cloud task dispatch, Firestore, and GitHub Check publication
-remain target behavior rather than current claims.
+at-most-two/one-repair lineage against `.patchproof.yaml`. Local orchestration now connects claim,
+candidate, install, BASE/HEAD execution, self-rejection/repair, constrained assessment, immutable
+evidence persistence, GitHub App installation authentication, and retry-safe Check publication.
+Repository processes now use an explicit credential-minimized environment, bounded streaming
+output, and process-tree timeouts. Semantic tasks retry once only for explicit transient provider
+failures, and worker exceptions become sanitized durable terminal failures. Cloud task dispatch,
+Firestore, deployed repository lifecycle, and hostile-code isolation remain target behavior rather
+than current claims.
 
 ## Target architecture
 
@@ -188,13 +197,19 @@ Prohibited claims:
 - PatchProof safely runs arbitrary malicious repositories.
 - PatchProof understands every repository.
 
-## Evaluation direction
+## Evaluation status and direction
 
-The later benchmark must contain at least four genuine historical bug-fix PRs across at least two
-lightweight pure-Python repositories, with immutable SHAs and withheld developer regression tests
-where available. It must include negative and failure scenarios and retain raw results. The most
-important metric is false support: how often PatchProof gives strong support to an incomplete or
-incorrect patch. No benchmark numbers will be published before measurement.
+Phase 7 now contains four genuine historical bug-fix PRs across `more-itertools` and `humanize`,
+with immutable BASE/HEAD SHAs and hash-checked developer regression oracles held outside the
+historical repositories. The recorded run reproduced all four oracle differentials, rejected four
+controlled weak/no-op candidates, and retained raw results plus explicit false-support
+denominators. It also ran 18 controlled failure/recovery cases selected by nine explicit test
+nodes.
+
+Those results measure reference-oracle replay and deterministic evidence policy. They do not
+measure live Gemini candidate generation, semantic accuracy, or a representative production false
+support rate. Those metrics remain future measured work and must retain all attempts without
+cherry-picking.
 
 ## Hackathon and post-hackathon boundary
 
@@ -263,7 +278,7 @@ uv run ruff format --check .
 
 ### Phase 0 verification
 
-All final commands ran from `E:\patchproof` with uv's cache redirected to the ignored,
+All final commands ran from the repository root with uv's cache redirected to the ignored,
 workspace-local `.uv-cache` directory because the managed development sandbox could not access
 uv's normal user cache.
 

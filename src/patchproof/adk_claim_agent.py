@@ -17,6 +17,11 @@ from patchproof.claim_agent import (
     ModelUsage,
     RawClaimModelResponse,
 )
+from patchproof.model_reliability import (
+    ModelInvocationFailure,
+    is_transient_event_code,
+    is_transient_provider_error,
+)
 
 DEFAULT_CLAIM_MODEL = "gemini-3.6-flash"
 _MODEL_PATTERN = re.compile(r"gemini-(\d+)\.(\d+)-[a-z0-9.-]+")
@@ -44,7 +49,7 @@ Do not claim that a pull request is correct. Output only the configured structur
 """.strip()
 
 
-class ClaimAgentInvocationError(RuntimeError):
+class ClaimAgentInvocationError(ModelInvocationFailure):
     """Raised when ADK cannot produce one final structured response."""
 
 
@@ -115,7 +120,10 @@ class AdkGeminiClaimModel:
             ):
                 if event.error_code or event.error_message:
                     detail = event.error_code or "model event error"
-                    raise ClaimAgentInvocationError(f"ADK claim invocation failed: {detail}")
+                    raise ClaimAgentInvocationError(
+                        "ADK claim invocation failed",
+                        retryable=is_transient_event_code(detail),
+                    )
                 model_version = event.model_version or model_version
                 if event.usage_metadata is not None:
                     prompt_tokens = self._maximum(
@@ -137,7 +145,10 @@ class AdkGeminiClaimModel:
         except ClaimAgentInvocationError:
             raise
         except Exception as error:
-            raise ClaimAgentInvocationError("ADK claim invocation did not complete") from error
+            raise ClaimAgentInvocationError(
+                "ADK claim invocation did not complete",
+                retryable=is_transient_provider_error(error),
+            ) from error
         duration = time.perf_counter() - started
         if final_text is None:
             raise ClaimAgentInvocationError("ADK claim invocation returned no final text")

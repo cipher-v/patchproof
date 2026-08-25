@@ -330,6 +330,36 @@ class DeterministicContextRetriever:
         )
         return self._fit_json_budget(context)
 
+    def committed_paths(self, revision_sha: str, *, max_paths: int = 20_000) -> frozenset[str]:
+        """Return the complete bounded path set from one immutable tree for overwrite checks."""
+        if max_paths <= 0:
+            raise ValueError("committed path budget must be positive")
+        revision = self._resolve_sha(revision_sha, RevisionRole.HEAD)
+        output = self._run_git(("ls-tree", "-r", "-z", "--name-only", revision.sha)).stdout
+        raw_paths = output.rstrip(b"\0").split(b"\0") if output else []
+        if len(raw_paths) > max_paths:
+            raise ContextRetrievalError(
+                "immutable repository path count exceeds the safe overwrite-check budget"
+            )
+        return frozenset(self._decode_path(path) for path in raw_paths)
+
+    def read_committed_file(self, *, revision_sha: str, path: str, max_bytes: int = 8_192) -> bytes:
+        """Read one bounded file directly from an immutable Git tree."""
+        if max_bytes <= 0:
+            raise ValueError("committed file byte budget must be positive")
+        revision = self._resolve_sha(revision_sha, RevisionRole.HEAD)
+        normalized_path = self._decode_path(path.encode("utf-8"))
+        completed = self._run_git(("show", f"{revision.sha}:{normalized_path}"), check=False)
+        if completed.returncode != 0:
+            raise ContextRetrievalError(
+                f"required committed file is unavailable: {normalized_path}"
+            )
+        if len(completed.stdout) > max_bytes:
+            raise ContextRetrievalError(
+                f"required committed file exceeds its byte budget: {normalized_path}"
+            )
+        return completed.stdout
+
     def _resolve_sha(self, value: str, role: RevisionRole) -> Revision:
         requested = Revision(role=role, sha=value)
         completed = self._run_git(("rev-parse", "--verify", f"{requested.sha}^{{commit}}"))

@@ -1,0 +1,12 @@
+.git
+.venv
+.uv-cache
+.pytest_cache
+.ruff_cache
+benchmarks/cache
+benchmarks/results
+data
+tests
+docs
+__pycache__
+*.pyc

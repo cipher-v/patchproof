@@ -44,6 +44,8 @@ class GitHubPullRequestPayload(BaseModel):
     base: GitHubRevisionPayload
     head: GitHubRevisionPayload
     updated_at: datetime
+    title: str = "Untitled pull request"
+    body: str | None = None
 
     @field_validator("updated_at")
     @classmethod
@@ -51,6 +53,14 @@ class GitHubPullRequestPayload(BaseModel):
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("pull request updated_at must include a timezone")
         return value.astimezone(UTC)
+
+
+class GitHubInstallationPayload(BaseModel):
+    """GitHub App installation identity used for repository-scoped API tokens."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: int = Field(gt=0)
 
 
 class GitHubPullRequestWebhook(BaseModel):
@@ -62,6 +72,7 @@ class GitHubPullRequestWebhook(BaseModel):
     number: int = Field(gt=0)
     repository: GitHubRepositoryPayload
     pull_request: GitHubPullRequestPayload
+    installation: GitHubInstallationPayload | None = None
 
     def to_event(self, delivery_id: str) -> PullRequestEvent:
         """Convert authenticated GitHub input to the storage boundary model."""
@@ -73,6 +84,9 @@ class GitHubPullRequestWebhook(BaseModel):
             base_sha=self.pull_request.base.sha,
             head_sha=self.pull_request.head.sha,
             head_updated_at=self.pull_request.updated_at,
+            title=(self.pull_request.title.strip() or "Untitled pull request")[:300],
+            body=(self.pull_request.body or "")[:8_000],
+            installation_id=self.installation.id if self.installation else None,
         )
 
 

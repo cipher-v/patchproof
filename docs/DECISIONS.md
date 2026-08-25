@@ -252,8 +252,8 @@ but has not necessarily been implemented yet.
   evidence naturally leads to later abstention instead of another hidden retry.
 - **Alternative rejected:** Agent-decided looping or automatic retries until a test passes, because
   they weaken cost and evidence integrity.
-- **Consequence:** Controller state is currently in memory and not crash-durable. Phase 5 must map
-  the lineage into workflow persistence before end-to-end orchestration.
+- **Consequence:** Controller state is in memory while generating, then Phase 5 maps the complete
+  bounded lineage and every execution into one immutable evidence record.
 
 ## ADR-021 — Use task-specific schemas under one logical ADK agent identity
 
@@ -265,6 +265,224 @@ but has not necessarily been implemented yet.
   chat history, or a second decision-maker.
 - **Alternative rejected:** A multi-agent claim-writer/test-writer conversation and one giant union
   schema, because the former adds orchestration and the latter weakens per-call validation.
-- **Consequence:** There are two thin task adapters but one logical semantic component. Common ADK
+- **Consequence:** There are three thin task adapters but one logical semantic component. Common ADK
   event normalization may be consolidated later if doing so improves reliability without hiding
   the task boundaries.
+
+## ADR-022 — Self-reject weak candidates and retain every execution
+
+- **Context:** A valid generated test can pass or fail on both revisions and therefore provide no
+  counterfactual evidence. Discarding that run would erase why repair occurred.
+- **Choice:** Mechanically non-discriminating/invalid/environmental results may spend the one repair
+  slot. Persist every evaluated candidate and abstain after the second weak result.
+- **Why:** This makes repair explainable without creating retry-until-green pressure.
+- **Alternative rejected:** Publishing any passing HEAD test or looping until BASE fails, because
+  neither establishes a trustworthy differential.
+- **Consequence:** Evidence documents may contain two bounded execution pairs; both remain auditable.
+
+## ADR-023 — Let semantic assessment narrow, never override, mechanics
+
+- **Context:** BASE failure / HEAD pass is mechanical discrimination but not proof that the
+  assertion represents the selected claim.
+- **Choice:** Use the same stateless, tool-free agent for one final structured relevance task, then
+  deterministically restrict outcomes by the mechanical pattern and assertion relation.
+- **Why:** Semantic interpretation is useful, while execution facts stay authoritative.
+- **Alternative rejected:** Directly mapping every differential to support or letting the model
+  rewrite statuses.
+- **Consequence:** Uncertain or unrelated assertions become `INSUFFICIENT_EVIDENCE`.
+
+## ADR-024 — Persist immutable evidence separately from workflow state
+
+- **Context:** Publication must survive crashes and retries without repeating expensive work.
+- **Choice:** Store one content-addressed JSON evidence document per run and keep lifecycle,
+  outcome, and publication state in the small run record.
+- **Why:** Idempotent identical writes and conflicting-write rejection create a replay boundary.
+- **Alternative rejected:** Reconstructing reports from live services or storing only final prose.
+- **Consequence:** A post-insert crash can reconcile terminal state from evidence without Gemini or
+  pytest; schema migrations must preserve both tables.
+
+## ADR-025 — Recover GitHub Check identity before creating on retry
+
+- **Context:** A POST can succeed remotely while the response or local ID write is lost.
+- **Choice:** Send run ID as `external_id`, persist payload hash/remote ID, and list HEAD Checks by
+  name to recover an ambiguous create before another POST.
+- **Why:** Ordinary idempotency state alone cannot close the remote-success/local-failure gap.
+- **Alternative rejected:** Blind POST retry, because it can create duplicate Checks.
+- **Consequence:** Publication retry uses only stored evidence and PATCHes a known/recovered Check.
+
+## ADR-026 — Use short-lived GitHub App installation tokens
+
+- **Context:** Checks write access should not use a long-lived personal token or enter executor
+  persistence.
+- **Choice:** Retain webhook installation ID, sign a bounded app JWT, mint a short-lived
+  installation token, cache it near expiry, and give it only to the Checks client.
+- **Why:** GitHub Apps provide repository-scoped identity and explicit `Checks: write` permission.
+- **Alternative rejected:** Personal access tokens and persisting installation tokens.
+- **Consequence:** App ID/private key remain runtime secrets; Secret Manager integration is Phase 8.
+
+## ADR-027 — Construct a minimal child environment instead of copying the worker environment
+
+- **Context:** Installation and pytest execute repository-controlled code. Copying `os.environ`
+  would expose Gemini credentials, GitHub write credentials, webhook secrets, and unrelated host
+  configuration to that code.
+- **Choice:** Inherit a small named set of process/TLS variables, create isolated home/cache/temp
+  paths, and add only fixed non-interactive Python/uv/pytest settings.
+- **Why:** Secrets are absent by construction rather than relying on an incomplete denylist.
+- **Alternative rejected:** Copying the environment and deleting known secret names, because new
+  credentials could be added later and silently cross the boundary.
+- **Consequence:** Some repositories that depend on ambient environment configuration are
+  unsupported. This separation does not itself prevent network or filesystem access.
+
+## ADR-028 — Bound subprocess output while draining and terminate the process tree on timeout
+
+- **Context:** Truncating logs only after `capture_output` returns still permits unbounded worker
+  memory growth, and killing only a parent can leave descendant processes running.
+- **Choice:** Drain stdout/stderr concurrently into bounded prefix buffers, continue discarding
+  excess bytes, start a process group, and terminate the tree on the configured timeout with a
+  direct parent-kill fallback.
+- **Why:** Memory retention and elapsed time become enforceable at the execution boundary, and
+  noisy output cannot deadlock a child on a full pipe.
+- **Alternative rejected:** Post-hoc string slicing and parent-only timeout handling.
+- **Consequence:** Only output prefixes are evidence. CPU, memory, network, syscall, and filesystem
+  isolation still require the Phase 8 deployment boundary.
+
+## ADR-029 — Retry one semantic provider attempt only for explicit transient failures
+
+- **Context:** Network, timeout, throttling, and provider-server failures can be temporary, while
+  retrying malformed output or policy rejection spends cost without changing the inputs.
+- **Choice:** Give each logical semantic task one initial provider attempt and at most one retry,
+  restricted to explicit transient exception/status categories. Record provider-attempt count.
+- **Why:** The policy tolerates a narrow class of infrastructure faults without creating an
+  unbounded loop or weakening candidate/repair limits.
+- **Alternative rejected:** No retries, broad exception retries, exponential retry loops, and
+  “retry until valid/green.”
+- **Consequence:** A second transient failure terminates the worker; future cloud orchestration may
+  create a new run occurrence under a separately bounded task policy.
+
+## ADR-030 — Persist sanitized terminal worker failures separately from evidence
+
+- **Context:** An exception after a run enters `RUNNING` could strand it, and persisting raw
+  provider or repository exceptions could disclose credentials or adversarial text.
+- **Choice:** Map failures to stable codes and fixed bounded summaries, atomically transition the
+  current run to terminal `FAILED`, and insert one immutable `run_failures` record. Stored evidence
+  remains reserved for completed claim-scoped product outcomes.
+- **Why:** Operators get durable, retry-aware failure state without treating operational failure
+  as evidence or storing unsafe exception prose.
+- **Alternative rejected:** Leaving failed runs active, overwriting the first failure on retry, or
+  copying raw exception strings into durable state.
+- **Consequence:** Detailed stack traces remain an ephemeral internal logging concern. Phase 6
+  records retryability but does not automatically reschedule work.
+
+## ADR-031 — Pin historical benchmark cases by PR identity and full BASE/HEAD SHAs
+
+- **Context:** Branch names move, upstream test suites evolve, and an untraceable fixture cannot
+  establish that an evaluation case represents a genuine historical bug fix.
+- **Choice:** Version a strict manifest containing public GitHub repository/PR URLs, merged time,
+  full BASE and PR HEAD SHAs, upstream test path, behavioral claim, and hashes of local reference
+  and controlled artifacts. Fetch the PR ref and require its resolved commit to equal the manifest.
+- **Why:** Anyone can audit the provenance and rerun the exact revision pair even after the default
+  branch changes.
+- **Alternative rejected:** Tags, moving branches, issue descriptions without commits, and
+  hand-written cases presented as historical evidence.
+- **Consequence:** A force-deleted upstream PR ref or repository outage can block a fresh clone;
+  the checked-in raw report remains auditable, and repository caches allow offline reruns.
+
+## ADR-032 — Use developer tests as hidden reference oracles, not as generated candidates
+
+- **Context:** Historical developer regressions provide an independent behavioral oracle, but
+  showing them to Gemini would leak the expected answer and invalidate generation measurement.
+- **Choice:** Adapt each small developer assertion into a standalone hash-checked oracle stored
+  outside the source checkout and inject it only during evaluation execution.
+- **Why:** The oracle can establish whether BASE/HEAD mechanics reproduce the historical fix while
+  remaining excludable from future model retrieval and prompts.
+- **Alternative rejected:** Including fixed-revision test diffs in model context or claiming a
+  developer oracle was generated by PatchProof.
+- **Consequence:** Current 4/4 reproduction measures executor/policy capability with ideal
+  artifacts, not Gemini candidate-generation quality.
+
+## ADR-033 — Derive transparent policy metrics from complete raw rows
+
+- **Context:** A false-support percentage can be manipulated by hiding failures, omitting negative
+  cases, or changing its denominator. Zero can also mean “no false supports” or “nothing measured.”
+- **Choice:** Persist every manifest scenario first, derive summaries from raw JSON, report counts
+  alongside both false-support/all-support and false-support/all-negative rates, and serialize zero
+  denominators as `null`. List unmeasured comparisons explicitly.
+- **Why:** The result is recalculable and difficult to overstate. A reviewer can inspect every
+  execution status, artifact hash, decision, output, and timing.
+- **Alternative rejected:** Hand-maintained headline numbers, LLM-only judging, and silently
+  dropping environmental or non-discriminating cases.
+- **Consequence:** The initial humanize collection failures remained visible during development;
+  the full manifest was rerun after a test-only reproducibility shim, and the final raw report
+  contains the complete successful run rather than a mixture of incompatible harness versions.
+
+## ADR-034 — Use Firestore transactions behind the existing store contract
+
+- **Context:** Multiple scale-to-zero control instances can receive concurrent/replayed webhooks;
+  a local SQLite file is neither shared nor durable across Cloud Run instances.
+- **Choice:** Implement the complete `VerificationRunStore` behavior in Firestore with transaction-
+  protected delivery, revision, and current-PR documents plus immutable evidence/publication data.
+- **Why:** It preserves the already-tested workflow interface while making compare-and-update state
+  shared and durable without operating a database server.
+- **Alternative rejected:** Cloud SQL for this small deployment and non-transactional document
+  writes, because the former adds cost/operations and the latter can create competing current runs.
+- **Consequence:** Firestore document size/index limits apply, and production behavior still needs
+  emulator/real-service integration proof beyond deterministic adapter tests.
+
+## ADR-035 — Put only a deterministically named run identity in Cloud Tasks
+
+- **Context:** Webhook retries must not create duplicate work, and queued payloads should not become
+  another store for secrets, untrusted prose, candidate source, or commands.
+- **Choice:** Name each task from the run UUID, store only `{"run_id": ...}`, authenticate it with a
+  dedicated OIDC identity, and treat `AlreadyExists` as successful dispatch.
+- **Why:** Firestore remains the source of truth and Cloud Tasks supplies directed delivery,
+  throttling, and bounded retry without duplicating sensitive state.
+- **Alternative rejected:** Pub/Sub fan-out, random task names, and full workflow snapshots in tasks.
+- **Consequence:** Task-name retention limits immediate recreation of the same named task; replay
+  must always be safe against the durable run record.
+
+## ADR-036 — Separate credentialed control from a private credentialless executor
+
+- **Context:** Repository dependencies and tests execute code outside PatchProof's authorship. A
+  process that can see the GitHub App key or Gemini key would violate the credential boundary even
+  if child-process environment filtering failed.
+- **Choice:** Run control and executor as separate Cloud Run services and service accounts. Only
+  control has Firestore/Tasks/secrets/GitHub/model authority; executor has no project role or secret
+  mount and accepts only control's audience-bound identity token.
+- **Why:** Credential absence is enforced by deployment identity as well as process policy.
+- **Alternative rejected:** One credential-rich worker container and executor access to Firestore.
+- **Consequence:** The control/executor request protocol must be hash-checked and the control task
+  waits synchronously for bounded executor facts. This is least privilege, not a hostile-code
+  sandbox or network-isolation claim.
+
+## ADR-037 — Authenticate the task route in application code on public control ingress
+
+- **Context:** GitHub cannot call an IAM-private Cloud Run service, but the same two-service control
+  deployment also hosts the Cloud Tasks callback.
+- **Choice:** Keep control publicly reachable for webhook HMAC verification and separately verify
+  Google's task OIDC signature, audience, issuer, verified email, and exact caller account on the
+  task route.
+- **Why:** It avoids a third always-defined service while preventing an unauthenticated caller from
+  starting a durable run by UUID.
+- **Alternative rejected:** Leaving the task route public, relying only on an unverified header, or
+  adding a third service before the current deployment is proven.
+- **Consequence:** Token-certificate verification is application responsibility. A future dedicated
+  IAM-private orchestration service is possible if operational evidence justifies it.
+
+## ADR-038 — Execute installed contracts through the repository virtual environment path
+
+- **Context:** The production container installs each allowed repository contract into a workspace
+  `.venv`. Invoking the container interpreter after installation cannot see repository-only test
+  dependencies. Resolving `.venv/bin/python` is also incorrect on Linux because that symlink may
+  collapse back to the container interpreter path before process launch.
+- **Choice:** When dependency installation is enabled and the validated contract starts with
+  `python`, replace only that executable with the workspace `.venv/bin/python` path without
+  resolving its symlink. Keep the validated remaining arguments unchanged. Disable uv's shared
+  cache for the untrusted child environment and retain bounded cleanup retries for Windows file
+  release latency.
+- **Why:** Launching through the virtual-environment path activates Python's virtual-environment
+  prefix semantics and makes the exact locked repository dependencies visible while preserving the
+  contract's fixed argument array.
+- **Alternative rejected:** Calling the container's global Python, resolving the virtual-environment
+  symlink, or adding every supported repository's test dependencies to the PatchProof image.
+- **Consequence:** Supported installed contracts currently need a Python-prefixed test command; new
+  interpreter forms require explicit validation and tests rather than heuristic command rewriting.

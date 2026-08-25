@@ -6,7 +6,6 @@ import ast
 import hashlib
 import os
 import shutil
-import subprocess
 import time
 import uuid
 import xml.etree.ElementTree as element_tree
@@ -14,6 +13,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from patchproof.execution_contract import ExecutionContract
+from patchproof.execution_runtime import (
+    BoundedSubprocessRunner,
+    ChildProcessEnvironmentPolicy,
+    remove_runtime_directory,
+)
 from patchproof.models import ExecutionResult, Revision, TestArtifact, TestExecutionStatus
 
 
@@ -157,6 +161,9 @@ class PytestRunner:
         contract: ExecutionContract,
         python_executable: Path,
         parser: PytestJUnitParser | None = None,
+        install_dependencies: bool = False,
+        processes: BoundedSubprocessRunner | None = None,
+        environment_policy: ChildProcessEnvironmentPolicy | None = None,
     ) -> None:
         self.python_executable = python_executable.resolve()
         self.contract = contract
@@ -165,6 +172,9 @@ class PytestRunner:
         )
         self.timeout_seconds = contract.timeout_seconds
         self.parser = parser or PytestJUnitParser()
+        self.install_dependencies = install_dependencies
+        self.processes = processes or BoundedSubprocessRunner()
+        self.environment_policy = environment_policy or ChildProcessEnvironmentPolicy()
 
     def run(
         self, *, workspace: Path, revision: Revision, artifact: TestArtifact
@@ -210,6 +220,21 @@ class PytestRunner:
                 detail=f"refusing to overwrite repository path: {artifact.relative_path}",
             )
 
+        if self.install_dependencies:
+            installation_error = self._install(workspace)
+            if installation_error is not None:
+                detail, stdout, stderr, exit_code = installation_error
+                return self._early_result(
+                    revision=revision,
+                    artifact=artifact,
+                    status=TestExecutionStatus.PROCESS_ERROR,
+                    started_at=started_at,
+                    detail=detail,
+                    stdout=stdout,
+                    stderr=stderr,
+                    exit_code=exit_code,
+                )
+
         try:
             artifact_path.parent.mkdir(parents=True, exist_ok=True)
             if not artifact_path.parent.resolve().is_relative_to(workspace):
@@ -246,7 +271,7 @@ class PytestRunner:
         try:
             report_path = result_directory / "pytest.xml"
             command = (
-                *self.command_prefix,
+                *self._test_command(workspace),
                 "-p",
                 "no:cacheprovider",
                 "--color=no",
@@ -259,24 +284,14 @@ class PytestRunner:
                 f"--junitxml={report_path}",
                 artifact.node_id,
             )
-            environment = os.environ.copy()
-            environment.pop("PYTEST_ADDOPTS", None)
-            environment["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
-            environment["PYTHONDONTWRITEBYTECODE"] = "1"
-
-            try:
-                completed = subprocess.run(
-                    command,
-                    cwd=workspace,
-                    env=environment,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    timeout=self.timeout_seconds,
-                    check=False,
-                )
-            except subprocess.TimeoutExpired as error:
+            environment = self.environment_policy.build(runtime_root=result_directory / "runtime")
+            completed = self.processes.run(
+                command,
+                cwd=workspace,
+                environment=environment,
+                timeout_seconds=self.timeout_seconds,
+            )
+            if completed.timed_out:
                 return ExecutionResult(
                     revision=revision,
                     test_node_id=artifact.node_id,
@@ -287,11 +302,11 @@ class PytestRunner:
                     collected_count=0,
                     exit_code=None,
                     duration_seconds=time.monotonic() - started_at,
-                    stdout=self._timeout_output(error.stdout),
-                    stderr=self._timeout_output(error.stderr),
+                    stdout=completed.stdout,
+                    stderr=completed.stderr,
                     detail=f"pytest exceeded the {self.timeout_seconds:g}-second timeout",
                 )
-            except OSError as error:
+            if completed.start_error is not None:
                 return ExecutionResult(
                     revision=revision,
                     test_node_id=artifact.node_id,
@@ -302,12 +317,12 @@ class PytestRunner:
                     collected_count=0,
                     exit_code=None,
                     duration_seconds=time.monotonic() - started_at,
-                    detail=f"pytest process could not start: {error}",
+                    detail=completed.start_error,
                 )
 
             parsed = self.parser.parse(
                 report_path=report_path,
-                exit_code=completed.returncode,
+                exit_code=completed.returncode or 0,
                 stdout=completed.stdout,
                 stderr=completed.stderr,
             )
@@ -328,12 +343,58 @@ class PytestRunner:
         finally:
             shutil.rmtree(result_directory, ignore_errors=True)
 
+    def _test_command(self, workspace: Path) -> tuple[str, ...]:
+        """Use the repository environment after installation for `python -m pytest`."""
+        if not self.install_dependencies or self.contract.test.command[0] != "python":
+            return self.command_prefix
+        executable = (
+            workspace / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        )
+        return (str(executable.absolute()), *self.contract.test.command[1:])
+
     @staticmethod
     def _safe_artifact_path(workspace: Path, relative_path: str) -> Path:
         artifact_path = (workspace / Path(*relative_path.split("/"))).resolve()
         if not artifact_path.is_relative_to(workspace):
             raise ValueError("artifact path resolves outside the revision workspace")
         return artifact_path
+
+    def _install(self, workspace: Path) -> tuple[str, str, str, int | None] | None:
+        """Run only validated contract argument arrays, without a command shell."""
+        captured_stdout: list[str] = []
+        captured_stderr: list[str] = []
+        runtime_root = workspace.parent / f".patchproof-install-{uuid.uuid4().hex}"
+        try:
+            environment = self.environment_policy.build(runtime_root=runtime_root)
+            for command in self.contract.install:
+                completed = self.processes.run(
+                    command,
+                    cwd=workspace,
+                    environment=environment,
+                    timeout_seconds=self.timeout_seconds,
+                )
+                captured_stdout.append(completed.stdout)
+                captured_stderr.append(completed.stderr)
+                if completed.timed_out:
+                    return (
+                        "dependency installation exceeded the "
+                        f"{self.timeout_seconds:g}-second timeout",
+                        "".join(captured_stdout)[:12_000],
+                        "".join(captured_stderr)[:12_000],
+                        None,
+                    )
+                if completed.start_error is not None:
+                    return ("dependency installation could not start", "", "", None)
+                if completed.returncode != 0:
+                    return (
+                        f"dependency installation failed with exit code {completed.returncode}",
+                        "".join(captured_stdout)[:12_000],
+                        "".join(captured_stderr)[:12_000],
+                        completed.returncode,
+                    )
+            return None
+        finally:
+            remove_runtime_directory(runtime_root)
 
     @staticmethod
     def _syntax_error(artifact: TestArtifact) -> str | None:
@@ -352,14 +413,6 @@ class PytestRunner:
             return None
 
     @staticmethod
-    def _timeout_output(output: str | bytes | None) -> str:
-        if output is None:
-            return ""
-        if isinstance(output, bytes):
-            return output.decode("utf-8", errors="replace")
-        return output
-
-    @staticmethod
     def _early_result(
         *,
         revision: Revision,
@@ -367,6 +420,9 @@ class PytestRunner:
         status: TestExecutionStatus,
         started_at: float,
         detail: str,
+        stdout: str = "",
+        stderr: str = "",
+        exit_code: int | None = None,
     ) -> ExecutionResult:
         return ExecutionResult(
             revision=revision,
@@ -376,7 +432,9 @@ class PytestRunner:
             artifact_sha256_after=None,
             status=status,
             collected_count=0,
-            exit_code=None,
+            exit_code=exit_code,
             duration_seconds=time.monotonic() - started_at,
+            stdout=stdout,
+            stderr=stderr,
             detail=detail,
         )

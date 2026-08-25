@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "methodology": "REFERENCE_ORACLE_POLICY_REPLAY",
+  "manifest_sha256": "400e0dad159779997ba24853499d21d88da539e0d4a9bb3cec7881b49fd3b39c",
+  "historical_cases": 4,
+  "repositories": 2,
+  "scenarios": 8,
+  "historical_oracles_reproduced": 4,
+  "weak_candidates_rejected": 4,
+  "controlled_selections": 9,
+  "controlled_checks": 18,
+  "controlled_checks_passed": 18,
+  "controlled_recovery_rate": 1.0,
+  "mean_challenge_latency_seconds": 1.9822500000154832,
+  "agent_candidate_generation": "NOT_MEASURED_NO_CREDENTIALS",
+  "unmeasured_comparisons": [
+    "existing upstream test-suite baseline",
+    "live Gemini candidate generation",
+    "end-to-end semantic claim accuracy",
+    "model calls and token usage"
+  ],
+  "strategy_metrics": [
+    {
+      "strategy": "HEAD_ONLY",
+      "evaluated_scenarios": 8,
+      "strong_supports": 8,
+      "true_supports": 4,
+      "false_supports": 4,
+      "no_supports": 0,
+      "false_support_rate": 0.5,
+      "negative_false_support_rate": 1.0,
+      "positive_support_rate": 1.0
+    },
+    {
+      "strategy": "PATCHPROOF_BASE_HEAD",
+      "evaluated_scenarios": 8,
+      "strong_supports": 4,
+      "true_supports": 4,
+      "false_supports": 0,
+      "no_supports": 4,
+      "false_support_rate": 0.0,
+      "negative_false_support_rate": 0.0,
+      "positive_support_rate": 1.0
+    }
+  ]
+}

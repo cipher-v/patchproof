@@ -6,6 +6,7 @@ import os
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from typing import Protocol
 from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Request, Response, status
@@ -83,6 +84,12 @@ class WebhookResponse(BaseModel):
     revision_state: RevisionState | None = None
 
 
+class VerificationRunDispatcher(Protocol):
+    """Idempotently hand an accepted durable run identity to an execution worker."""
+
+    def dispatch(self, run_id: UUID) -> None: ...
+
+
 async def _read_bounded_body(request: Request, *, maximum_bytes: int) -> bytes:
     """Read an ASGI body without buffering more than the configured limit."""
     content_length = request.headers.get("content-length")
@@ -108,6 +115,7 @@ def create_app(
     *,
     settings: ControlPlaneSettings | None = None,
     store: VerificationRunStore | None = None,
+    dispatcher: VerificationRunDispatcher | None = None,
 ) -> FastAPI:
     """Create an injectable control-plane application without hidden global resources."""
     resolved_settings = settings or ControlPlaneSettings.from_environment()
@@ -115,6 +123,7 @@ def create_app(
     app = FastAPI(title="PatchProof Control Plane", version="0.1.0")
     app.state.settings = resolved_settings
     app.state.run_store = resolved_store
+    app.state.run_dispatcher = dispatcher
 
     @app.get("/healthz")
     async def health() -> dict[str, str]:
@@ -169,6 +178,18 @@ def create_app(
         except ValidationError as error:
             raise HTTPException(status_code=400, detail="invalid pull-request identity") from error
         acceptance = resolved_store.accept_pull_request(event)
+        if (
+            dispatcher is not None
+            and acceptance.run.revision_state is RevisionState.CURRENT
+            and acceptance.run.lifecycle is not RunLifecycle.TERMINAL
+        ):
+            try:
+                dispatcher.dispatch(acceptance.run.run_id)
+            except Exception as error:
+                raise HTTPException(
+                    status_code=503,
+                    detail="verification dispatch is temporarily unavailable",
+                ) from error
         if acceptance.kind is AcceptanceKind.CREATED:
             disposition = WebhookDisposition.ACCEPTED
             detail = "verification run accepted"

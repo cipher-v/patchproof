@@ -231,7 +231,7 @@ Firestore behavior, Gemini output, or GitHub publication.
 
 ## Commands and observed results
 
-Commands were run from `E:\patchproof` with uv's cache directed to the ignored workspace-local
+Commands were run from the repository root with uv's cache directed to the ignored workspace-local
 `.uv-cache` because the managed sandbox cannot use the normal user cache.
 
 | Command | Observed result |

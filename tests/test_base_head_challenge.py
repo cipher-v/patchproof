@@ -114,6 +114,25 @@ def test_runner_rejects_artifact_outside_execution_contract_path(
     assert "outside the execution contract" in (result.base.detail or "")
 
 
+def test_installed_python_contract_uses_repository_virtual_environment(
+    writable_test_directory: Path,
+) -> None:
+    workspace = writable_test_directory / "workspace"
+    workspace.mkdir()
+    runner = PytestRunner(
+        contract=ExecutionContract.model_validate(_CONTRACT_DATA),
+        python_executable=Path(sys.executable),
+        install_dependencies=True,
+    )
+
+    command = runner._test_command(workspace)
+
+    expected = (
+        workspace / ".venv" / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+    )
+    assert command == (str(expected.absolute()), "-m", "pytest")
+
+
 @pytest.mark.parametrize(
     ("test_name", "body", "base_status", "head_status", "evidence_status", "pattern"),
     [

@@ -301,7 +301,7 @@ credentialed run completed the live test successfully in 9.85 seconds.
 
 ## Commands and observed results
 
-Commands ran from `E:\patchproof` with uv's cache directed to the ignored workspace-local cache.
+Commands ran from the repository root with uv's cache directed to the ignored workspace-local cache.
 
 | Command | Observed result |
 | --- | --- |

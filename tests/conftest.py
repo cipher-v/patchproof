@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import stat
 import subprocess
@@ -46,10 +47,41 @@ def _git(repository: Path, *arguments: str) -> str:
     return completed.stdout.strip()
 
 
+def _uv_lock(repository: Path) -> None:
+    environment = os.environ.copy()
+    environment["UV_CACHE_DIR"] = str((Path.cwd() / ".uv-cache").resolve())
+    completed = subprocess.run(
+        ("uv", "lock", "--offline", "--directory", str(repository)),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=environment,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(completed.stderr or completed.stdout)
+
+
 def _remove_readonly(function, path: str, _error) -> None:
     """Allow fixture cleanup to remove Git's read-only object files on Windows."""
-    Path(path).chmod(stat.S_IWRITE)
-    function(path)
+    try:
+        Path(path).chmod(stat.S_IWRITE)
+        function(path)
+    except FileNotFoundError:
+        return
+
+
+_EXECUTION_CONTRACT = """version: 1
+python: "3.12"
+install:
+  - ["uv", "sync", "--frozen"]
+test:
+  command: ["python", "-m", "pytest"]
+allowed_test_paths:
+  - "tests/patchproof_generated/"
+timeout_seconds: 30
+"""
 
 
 @pytest.fixture
@@ -75,13 +107,14 @@ def repository_history(writable_test_directory: Path) -> RepositoryHistory:
     _git(repository, "config", "commit.gpgsign", "false")
 
     module = repository / "calculator.py"
+    (repository / ".patchproof.yaml").write_text(_EXECUTION_CONTRACT, encoding="utf-8")
     module.write_text(
         '"""Tiny behavior used by the PatchProof executor tests."""\n\n'
         "def add(left: int, right: int) -> int:\n"
         "    return left - right\n",
         encoding="utf-8",
     )
-    _git(repository, "add", "calculator.py")
+    _git(repository, "add", "calculator.py", ".patchproof.yaml")
     _git(repository, "commit", "-m", "introduce buggy addition")
     base_sha = _git(repository, "rev-parse", "HEAD")
 
@@ -116,6 +149,19 @@ def context_repository_history(writable_test_directory: Path) -> ContextReposito
     _git(repository, "config", "commit.gpgsign", "false")
 
     (repository / "tests").mkdir()
+    (repository / ".patchproof.yaml").write_text(_EXECUTION_CONTRACT, encoding="utf-8")
+    (repository / "pyproject.toml").write_text(
+        """[project]
+name = "patchproof-context-fixture"
+version = "0.0.0"
+requires-python = ">=3.12,<3.13"
+
+[dependency-groups]
+dev = ["pytest>=8.3,<10"]
+""",
+        encoding="utf-8",
+    )
+    _uv_lock(repository)
     (repository / "workspace.py").write_text(
         """from collections.abc import Sequence
 
@@ -148,7 +194,16 @@ def test_empty_candidates_have_no_workspace() -> None:
 """,
         encoding="utf-8",
     )
-    _git(repository, "add", "workspace.py", "consumer.py", "tests/test_workspace.py")
+    _git(
+        repository,
+        "add",
+        "workspace.py",
+        "consumer.py",
+        "tests/test_workspace.py",
+        ".patchproof.yaml",
+        "pyproject.toml",
+        "uv.lock",
+    )
     _git(repository, "commit", "-m", "add workspace selection")
     base_sha = _git(repository, "rev-parse", "HEAD")
 
