@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -73,6 +74,13 @@ class HardModeCaseKind(StrEnum):
     LOCAL_SYNTHETIC = "LOCAL_SYNTHETIC"
 
 
+class HardModePacingPolicy(StrEnum):
+    """Predeclared pacing applied uniformly between completed cases."""
+
+    NONE = "NONE"
+    BETWEEN_CASES = "BETWEEN_CASES"
+
+
 class HardModeProtocol(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -86,6 +94,19 @@ class HardModeProtocol(BaseModel):
     transient_provider_retries_per_logical_call: Literal[1]
     narrative_policy: str = Field(min_length=1, max_length=1_000)
     withholding_policy: str = Field(min_length=1, max_length=1_000)
+    pacing_policy: HardModePacingPolicy = HardModePacingPolicy.NONE
+    inter_case_delay_seconds: float = Field(default=0.0, ge=0.0, le=300.0)
+
+    @model_validator(mode="after")
+    def validate_pacing(self) -> HardModeProtocol:
+        if (
+            self.pacing_policy is HardModePacingPolicy.NONE and self.inter_case_delay_seconds != 0
+        ) or (
+            self.pacing_policy is HardModePacingPolicy.BETWEEN_CASES
+            and self.inter_case_delay_seconds <= 0
+        ):
+            raise ValueError("hard-mode pacing policy and delay are inconsistent")
+        return self
 
 
 class HardModeCase(BaseModel):
@@ -592,7 +613,12 @@ def _load_gate(path: Path, manifest_sha256: str, case_count: int) -> dict[str, A
 
 
 def _attempt_document(attempt: CandidateAttempt) -> dict[str, Any]:
-    return EvidenceWorkflow._attempt_evidence(attempt).model_dump(mode="json")
+    document = EvidenceWorkflow._attempt_evidence(attempt).model_dump(mode="json")
+    if attempt.malformed_output_diagnostic is not None:
+        document["local_malformed_output_diagnostic"] = (
+            attempt.malformed_output_diagnostic.model_dump(mode="json")
+        )
+    return document
 
 
 def _append_journal(path: Path, document: dict[str, Any]) -> None:
@@ -600,6 +626,42 @@ def _append_journal(path: Path, document: dict[str, Any]) -> None:
         journal.write(json.dumps(document, sort_keys=True, ensure_ascii=False) + "\n")
         journal.flush()
         os.fsync(journal.fileno())
+
+
+def _pace_between_cases(
+    *,
+    protocol: HardModeProtocol,
+    journal_path: Path,
+    completed_case_id: str,
+    next_case_id: str,
+) -> None:
+    if protocol.pacing_policy is HardModePacingPolicy.NONE:
+        return
+    delay = protocol.inter_case_delay_seconds
+    _append_journal(
+        journal_path,
+        {
+            "event": "INTER_CASE_PACING_STARTED",
+            "at": _utc_now(),
+            "completed_case_id": completed_case_id,
+            "next_case_id": next_case_id,
+            "declared_delay_seconds": delay,
+        },
+    )
+    started = time.perf_counter()
+    time.sleep(delay)
+    actual = time.perf_counter() - started
+    _append_journal(
+        journal_path,
+        {
+            "event": "INTER_CASE_PACING_COMPLETED",
+            "at": _utc_now(),
+            "completed_case_id": completed_case_id,
+            "next_case_id": next_case_id,
+            "declared_delay_seconds": delay,
+            "actual_delay_seconds": actual,
+        },
+    )
 
 
 async def _run_live_case(
@@ -795,7 +857,14 @@ def run_live(
     )
     started_at = _utc_now()
     results: list[dict[str, Any]] = []
-    for case in manifest.cases:
+    for case_index, case in enumerate(manifest.cases):
+        if case_index:
+            _pace_between_cases(
+                protocol=manifest.protocol,
+                journal_path=journal_path,
+                completed_case_id=manifest.cases[case_index - 1].case_id,
+                next_case_id=case.case_id,
+            )
         _append_journal(
             journal_path,
             {"event": "CASE_STARTED", "at": _utc_now(), "case_id": case.case_id},
@@ -835,6 +904,8 @@ def run_live(
         "manifest_sha256": manifest_sha256,
         "oracle_gate_sha256": _sha256(gate_path.read_bytes()),
         "model_name": manifest.protocol.model_name,
+        "pacing_policy": str(manifest.protocol.pacing_policy),
+        "inter_case_delay_seconds": manifest.protocol.inter_case_delay_seconds,
         "python_version": platform.python_version(),
         "platform": platform.platform(),
         "started_at": started_at,

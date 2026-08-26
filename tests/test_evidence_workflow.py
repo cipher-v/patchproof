@@ -74,7 +74,9 @@ class FakeClaimModel:
 
 class FakeCandidateModel:
     def __init__(self, *proposals: CandidateTestProposal) -> None:
-        self.responses = deque(proposal.model_dump_json() for proposal in proposals)
+        self.responses = deque(
+            proposal.model_dump_json(include={"source", "rationale"}) for proposal in proposals
+        )
         self.calls = 0
 
     async def invoke(self, request) -> RawCandidateModelResponse:
@@ -160,7 +162,7 @@ def _proposal(candidate_id: str, candidates: list[str]) -> CandidateTestProposal
         test_function="test_workspace_specificity",
         source=(
             "from workspace import WorkspaceResolver\n\n\n"
-            "def test_workspace_specificity() -> None:\n"
+            "def test_patchproof_generated_behavior() -> None:\n"
             f"    candidates = {candidates!r}\n"
             "    assert WorkspaceResolver.choose_workspace(candidates) == "
             "'org/team/project'\n"
@@ -231,7 +233,7 @@ def test_non_discriminating_candidate_repairs_then_persists_and_publication_retr
     assert report.claim_outcome is ClaimOutcome.CLAIM_SUPPORTED_FOR_SCENARIO
     assert report.base_execution.status == "ASSERTION_FAILED"
     assert report.head_execution.status == "PASSED"
-    assert report.candidate_attempts[1].parent_candidate_id == "candidate-non-discriminating"
+    assert report.candidate_attempts[1].parent_candidate_id == "candidate-initial"
     assert len(report.candidate_evaluations) == 2
     assert (
         report.candidate_evaluations[0].mechanical_status

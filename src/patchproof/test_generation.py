@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import json
 import re
 import sys
 import textwrap
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import PurePosixPath
-from typing import Protocol
+from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
@@ -23,6 +24,9 @@ from patchproof.structured_output import StrictGeminiOutputModel
 _CANDIDATE_ID_PATTERN = re.compile(r"candidate-[a-z0-9][a-z0-9-]{0,58}")
 _TEST_FUNCTION_PATTERN = re.compile(r"test_[a-zA-Z0-9_]{1,120}")
 _TEST_FILENAME_PATTERN = re.compile(r"test_[a-zA-Z0-9_]+\.py")
+_DIAGNOSTIC_FIELD_PATTERN = re.compile(r"[^A-Za-z0-9_.\-\[\]$]")
+_CANDIDATE_DRAFT_FIELDS = frozenset({"source", "rationale"})
+_GENERATED_TEST_FUNCTION = "test_patchproof_generated_behavior"
 _BLOCKED_IMPORT_ROOTS = {
     "asyncio.subprocess",
     "ctypes",
@@ -77,6 +81,14 @@ class CandidateAttemptStatus(StrEnum):
     INVALID_MODEL_OUTPUT = "INVALID_MODEL_OUTPUT"
 
 
+class CandidateJsonParseStatus(StrEnum):
+    """Whether a candidate response was parseable JSON without retaining its body."""
+
+    NOT_ATTEMPTED = "NOT_ATTEMPTED"
+    INVALID = "INVALID"
+    VALID = "VALID"
+
+
 class CandidateIssueCode(StrEnum):
     """Stable reasons a proposal cannot become an executable artifact."""
 
@@ -123,6 +135,24 @@ class CandidateTestProposal(StrictGeminiOutputModel):
         if _TEST_FUNCTION_PATTERN.fullmatch(value) is None:
             raise ValueError("test function must be a bounded pytest test_* identifier")
         return value
+
+
+class CandidateTestDraft(StrictGeminiOutputModel):
+    """Provider-visible semantic output; PatchProof assigns control-plane metadata."""
+
+    source: str = Field(
+        min_length=1,
+        max_length=16_000,
+        description=(
+            "Complete UTF-8 Python source defining exactly one top-level pytest function "
+            f"named {_GENERATED_TEST_FUNCTION}."
+        ),
+    )
+    rationale: str = Field(
+        min_length=1,
+        max_length=700,
+        description="Concise audit summary of the observable behavior tested.",
+    )
 
 
 class CandidateFeedback(BaseModel):
@@ -209,6 +239,136 @@ class CandidateValidationError(ValueError):
         super().__init__("; ".join(f"{issue.code}: {issue.message}" for issue in issues))
 
 
+class CandidateOutputDiagnostic(BaseModel):
+    """Bounded structure-only diagnostics for malformed local benchmark output."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    stage: Literal["RESPONSE_BUDGET", "DRAFT_SCHEMA", "NORMALIZED_PROPOSAL"]
+    response_sha256: str = Field(pattern=r"[0-9a-f]{64}")
+    response_chars: int = Field(ge=0)
+    raw_body_retained: Literal[False] = False
+    response_budget_exceeded: bool
+    json_parse_status: CandidateJsonParseStatus
+    json_error_line: int | None = Field(default=None, ge=1)
+    json_error_column: int | None = Field(default=None, ge=1)
+    top_level_kind: Literal["object", "array", "string", "number", "boolean", "null", "unknown"]
+    expected_fields_present: tuple[str, ...] = Field(max_length=2)
+    expected_fields_missing: tuple[str, ...] = Field(max_length=2)
+    unexpected_fields: tuple[str, ...] = Field(max_length=8)
+    unexpected_field_count: int = Field(ge=0)
+    source_present: bool
+    source_json_type: str | None = Field(default=None, max_length=20)
+    source_chars: int | None = Field(default=None, ge=0)
+    source_sha256: str | None = Field(default=None, pattern=r"[0-9a-f]{64}")
+    validation_errors: tuple[str, ...] = Field(max_length=8)
+    diagnostic_truncated: bool
+
+
+def _json_kind(value: object) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, (int, float)):
+        return "number"
+    return "unknown"
+
+
+def _candidate_output_diagnostic(
+    *,
+    response_text: str,
+    response_sha256: str,
+    stage: Literal["RESPONSE_BUDGET", "DRAFT_SCHEMA", "NORMALIZED_PROPOSAL"],
+    response_budget_exceeded: bool,
+    validation_error: ValidationError | None = None,
+) -> CandidateOutputDiagnostic:
+    """Describe JSON shape and validation failures without retaining response content."""
+    parsed: object = None
+    parse_status = CandidateJsonParseStatus.NOT_ATTEMPTED
+    error_line: int | None = None
+    error_column: int | None = None
+    if not response_budget_exceeded:
+        try:
+            parsed = json.loads(response_text)
+        except json.JSONDecodeError as error:
+            parse_status = CandidateJsonParseStatus.INVALID
+            error_line = error.lineno
+            error_column = error.colno
+        else:
+            parse_status = CandidateJsonParseStatus.VALID
+
+    expected_present: tuple[str, ...] = ()
+    expected_missing: tuple[str, ...] = tuple(sorted(_CANDIDATE_DRAFT_FIELDS))
+    unexpected_fields: tuple[str, ...] = ()
+    unexpected_count = 0
+    source_present = False
+    source_type: str | None = None
+    source_chars: int | None = None
+    source_sha256: str | None = None
+    diagnostic_truncated = False
+    if isinstance(parsed, dict):
+        keys = set(parsed)
+        expected_present = tuple(sorted(keys & _CANDIDATE_DRAFT_FIELDS))
+        expected_missing = tuple(sorted(_CANDIDATE_DRAFT_FIELDS - keys))
+        unexpected = sorted(keys - _CANDIDATE_DRAFT_FIELDS)
+        unexpected_count = len(unexpected)
+        sanitized = tuple(_DIAGNOSTIC_FIELD_PATTERN.sub("?", key)[:80] for key in unexpected[:8])
+        unexpected_fields = sanitized
+        diagnostic_truncated = len(unexpected) > len(sanitized) or any(
+            len(key) > 80 for key in unexpected[:8]
+        )
+        source_present = "source" in parsed
+        if source_present:
+            source = parsed["source"]
+            source_type = _json_kind(source)
+            if isinstance(source, str):
+                source_chars = len(source)
+                source_sha256 = hashlib.sha256(source.encode("utf-8")).hexdigest()
+
+    errors: list[str] = []
+    if validation_error is not None:
+        for item in validation_error.errors(
+            include_url=False, include_context=False, include_input=False
+        ):
+            location = ".".join(str(part) for part in item["loc"]) or "$"
+            location = _DIAGNOSTIC_FIELD_PATTERN.sub("?", location)[:80]
+            error_type = _DIAGNOSTIC_FIELD_PATTERN.sub("?", item["type"])[:80]
+            errors.append(f"{location}:{error_type}")
+        if len(errors) > 8:
+            diagnostic_truncated = True
+            errors = errors[:8]
+
+    return CandidateOutputDiagnostic(
+        stage=stage,
+        response_sha256=response_sha256,
+        response_chars=len(response_text),
+        response_budget_exceeded=response_budget_exceeded,
+        json_parse_status=parse_status,
+        json_error_line=error_line,
+        json_error_column=error_column,
+        top_level_kind=(
+            _json_kind(parsed) if parse_status is CandidateJsonParseStatus.VALID else "unknown"
+        ),
+        expected_fields_present=expected_present,
+        expected_fields_missing=expected_missing,
+        unexpected_fields=unexpected_fields,
+        unexpected_field_count=unexpected_count,
+        source_present=source_present,
+        source_json_type=source_type,
+        source_chars=source_chars,
+        source_sha256=source_sha256,
+        validation_errors=tuple(errors),
+        diagnostic_truncated=diagnostic_truncated,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ValidatedCandidate:
     """A validated proposal tied to one immutable replay artifact and its imports."""
@@ -233,6 +393,7 @@ class CandidateAttempt:
     feedback: CandidateFeedback | None
     usage: ModelUsage
     raw_response_sha256: str
+    malformed_output_diagnostic: CandidateOutputDiagnostic | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -504,22 +665,61 @@ class BoundedCandidateTestGenerator:
         issue: CandidateValidationIssue | None = None
         proposal: CandidateTestProposal | None = None
         validated: ValidatedCandidate | None = None
+        diagnostic: CandidateOutputDiagnostic | None = None
+        issues: tuple[CandidateValidationIssue, ...] = ()
         status = CandidateAttemptStatus.INVALID_MODEL_OUTPUT
         if len(response.text) > self.max_response_chars:
             issue = CandidateValidationIssue(
                 code=CandidateIssueCode.RESPONSE_TOO_LARGE,
                 message="candidate model response exceeds the configured budget",
             )
+            diagnostic = _candidate_output_diagnostic(
+                response_text=response.text,
+                response_sha256=response_hash,
+                stage="RESPONSE_BUDGET",
+                response_budget_exceeded=True,
+            )
         else:
             try:
-                proposal = CandidateTestProposal.model_validate_json(response.text)
-            except ValidationError:
+                draft = CandidateTestDraft.model_validate_json(response.text)
+            except ValidationError as error:
                 issue = CandidateValidationIssue(
                     code=CandidateIssueCode.MALFORMED_OUTPUT,
                     message="candidate model returned invalid structured output",
                 )
+                diagnostic = _candidate_output_diagnostic(
+                    response_text=response.text,
+                    response_sha256=response_hash,
+                    stage="DRAFT_SCHEMA",
+                    response_budget_exceeded=False,
+                    validation_error=error,
+                )
             else:
-                if any(
+                suffix = "initial" if origin is CandidateOrigin.INITIAL else "repair"
+                try:
+                    proposal = CandidateTestProposal(
+                        candidate_id=f"candidate-{suffix}",
+                        target_path=(
+                            f"{self.contract.allowed_test_paths[0]}"
+                            f"test_patchproof_generated_{suffix}.py"
+                        ),
+                        test_function=_GENERATED_TEST_FUNCTION,
+                        source=draft.source,
+                        rationale=draft.rationale,
+                    )
+                except ValidationError as error:
+                    issue = CandidateValidationIssue(
+                        code=CandidateIssueCode.MALFORMED_OUTPUT,
+                        message="candidate model output could not be normalized safely",
+                    )
+                    diagnostic = _candidate_output_diagnostic(
+                        response_text=response.text,
+                        response_sha256=response_hash,
+                        stage="NORMALIZED_PROPOSAL",
+                        response_budget_exceeded=False,
+                        validation_error=error,
+                    )
+                if proposal is not None and any(
                     attempt.proposal is not None
                     and attempt.proposal.candidate_id == proposal.candidate_id
                     for attempt in self._attempts
@@ -529,7 +729,7 @@ class BoundedCandidateTestGenerator:
                         message="candidate IDs must be unique within one generation run",
                     )
                     status = CandidateAttemptStatus.REJECTED
-                else:
+                elif proposal is not None:
                     try:
                         validated = self.validator.validate(
                             proposal=proposal,
@@ -565,6 +765,7 @@ class BoundedCandidateTestGenerator:
             feedback=feedback,
             usage=response.usage,
             raw_response_sha256=response_hash,
+            malformed_output_diagnostic=diagnostic,
         )
         self._attempts.append(attempt)
         return attempt

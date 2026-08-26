@@ -23,7 +23,7 @@ from patchproof.claim_agent import (
     SupportingContextRef,
 )
 from patchproof.context_retrieval import PullRequestContext, RetrievalStats
-from patchproof.test_generation import CandidateModelRequest, CandidateTestProposal
+from patchproof.test_generation import CandidateModelRequest, CandidateTestDraft
 
 
 def _request() -> CandidateModelRequest:
@@ -68,12 +68,9 @@ def _request() -> CandidateModelRequest:
     )
 
 
-def _proposal() -> CandidateTestProposal:
-    return CandidateTestProposal(
-        candidate_id="candidate-example",
-        target_path="tests/patchproof_generated/test_example.py",
-        test_function="test_example_behavior",
-        source="def test_example_behavior() -> None:\n    assert True\n",
+def _draft() -> CandidateTestDraft:
+    return CandidateTestDraft(
+        source="def test_patchproof_generated_behavior() -> None:\n    assert 1 + 1 == 2\n",
         rationale="A narrow deterministic example.",
     )
 
@@ -85,7 +82,7 @@ def test_candidate_adapter_is_the_same_logical_stateless_tool_free_agent() -> No
     assert model.agent.name == "patchproof_agent"
     assert model.agent.model == "gemini-3.6-flash"
     assert model.agent.input_schema is CandidateModelRequest
-    assert model.agent.output_schema is CandidateTestProposal
+    assert model.agent.output_schema is CandidateTestDraft
     assert model.agent.include_contents == "none"
     assert model.agent.tools == []
     assert model.agent.timeout == 60.0
@@ -101,13 +98,21 @@ def test_candidate_adapter_is_the_same_logical_stateless_tool_free_agent() -> No
     )
     assert "UNTRUSTED DATA" in CANDIDATE_AGENT_INSTRUCTION
     assert "must not propose or execute commands" in CANDIDATE_AGENT_INSTRUCTION
+    assert "exactly two string fields named `source` and `rationale`" in (
+        CANDIDATE_AGENT_INSTRUCTION
+    )
+    assert "meaningful deterministic assertion" in CANDIDATE_AGENT_INSTRUCTION
+    assert "assert True" not in CANDIDATE_AGENT_INSTRUCTION
 
 
 def test_candidate_output_schema_omits_provider_unsupported_keywords() -> None:
-    schema_json = json.dumps(CandidateTestProposal.model_json_schema())
+    schema = CandidateTestDraft.model_json_schema()
+    schema_json = json.dumps(schema)
 
     assert "exclusiveMinimum" not in schema_json
     assert "additionalProperties" not in schema_json
+    assert set(schema["properties"]) == {"source", "rationale"}
+    assert set(schema["required"]) == {"source", "rationale"}
 
 
 @pytest.mark.parametrize("model_name", ["gemini-3.1-pro", "gemini-flash-latest", "other-3.6"])
@@ -117,7 +122,7 @@ def test_candidate_adapter_requires_explicit_gemini_3_5_or_newer(model_name: str
 
 
 def test_candidate_adapter_collects_final_text_and_usage_without_network(monkeypatch) -> None:
-    proposal = _proposal()
+    draft = _draft()
 
     class FakeSessionService:
         async def create_session(self, **_kwargs):
@@ -133,7 +138,7 @@ def test_candidate_adapter_collects_final_text_and_usage_without_network(monkeyp
             total_token_count=220,
             cached_content_token_count=4,
         )
-        content = types.Content(parts=[types.Part(text=proposal.model_dump_json())])
+        content = types.Content(parts=[types.Part(text=draft.model_dump_json())])
 
         @staticmethod
         def is_final_response() -> bool:
@@ -150,7 +155,7 @@ def test_candidate_adapter_collects_final_text_and_usage_without_network(monkeyp
     monkeypatch.setattr(adk_module, "Runner", FakeRunner)
     response = asyncio.run(AdkGeminiCandidateModel().invoke(_request()))
 
-    assert response.text == proposal.model_dump_json()
+    assert response.text == draft.model_dump_json()
     assert response.usage.model_version == "gemini-3.6-flash-001"
     assert response.usage.prompt_tokens == 140
     assert response.usage.output_tokens == 80

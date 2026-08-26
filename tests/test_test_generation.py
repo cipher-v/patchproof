@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from collections import deque
 
 import pytest
@@ -17,6 +18,7 @@ from patchproof.claim_agent import (
     SupportingContextRef,
 )
 from patchproof.context_retrieval import DeterministicContextRetriever, PullRequestContext
+from patchproof.evidence_workflow import EvidenceWorkflow
 from patchproof.execution_contract import ExecutionContract
 from patchproof.test_generation import (
     BoundedCandidateTestGenerator,
@@ -26,6 +28,7 @@ from patchproof.test_generation import (
     CandidateGenerationStateError,
     CandidateIssueCode,
     CandidateOrigin,
+    CandidateTestDraft,
     CandidateTestProposal,
     CandidateTestValidator,
     CandidateValidationError,
@@ -130,6 +133,23 @@ def _proposal(
     )
 
 
+def _draft(
+    *,
+    source: str | None = None,
+    rationale: str = "Exercises the observable selection behavior with competing path depths.",
+) -> CandidateTestDraft:
+    return CandidateTestDraft(
+        source=source
+        or (
+            "from workspace import WorkspaceResolver\n\n\n"
+            "def test_patchproof_generated_behavior() -> None:\n"
+            "    candidates = ['org', 'org/team', 'org/team/project']\n"
+            "    assert WorkspaceResolver.choose_workspace(candidates) == 'org/team/project'\n"
+        ),
+        rationale=rationale,
+    )
+
+
 def _generator(
     *,
     model: FakeCandidateModel,
@@ -154,8 +174,8 @@ def test_valid_candidate_becomes_one_immutable_hashed_replay_artifact(
     context_repository_history: ContextRepositoryHistory,
 ) -> None:
     context = _context(context_repository_history)
-    proposal = _proposal()
-    model = FakeCandidateModel(proposal.model_dump_json())
+    draft = _draft()
+    model = FakeCandidateModel(draft.model_dump_json())
     generator = _generator(model=model, context=context)
 
     attempt = asyncio.run(generator.generate_initial())
@@ -164,8 +184,13 @@ def test_valid_candidate_becomes_one_immutable_hashed_replay_artifact(
     assert attempt.origin is CandidateOrigin.INITIAL
     assert attempt.validated is not None
     artifact = attempt.validated.artifact
-    assert artifact.content == proposal.source.encode("utf-8")
-    assert artifact.node_id == f"{proposal.target_path}::{proposal.test_function}"
+    assert artifact.content == draft.source.encode("utf-8")
+    assert artifact.relative_path == (
+        "tests/patchproof_generated/test_patchproof_generated_initial.py"
+    )
+    assert artifact.node_id.endswith("::test_patchproof_generated_behavior")
+    assert attempt.proposal is not None
+    assert attempt.proposal.candidate_id == "candidate-initial"
     assert len(artifact.sha256) == 64
     assert attempt.validated.imported_roots == ("workspace",)
     assert generator.snapshot.latest_validated is attempt.validated
@@ -260,7 +285,7 @@ def test_validator_rejects_invalid_paths_source_imports_and_calls(
 def test_invalid_structured_output_is_recorded_without_an_artifact(
     context_repository_history: ContextRepositoryHistory,
 ) -> None:
-    model = FakeCandidateModel('{"candidate_id":"not enough"}')
+    model = FakeCandidateModel('{"source":"not enough"}')
     generator = _generator(model=model, context=_context(context_repository_history))
 
     attempt = asyncio.run(generator.generate_initial())
@@ -270,6 +295,9 @@ def test_invalid_structured_output_is_recorded_without_an_artifact(
     assert attempt.validated is None
     assert attempt.issues[0].code is CandidateIssueCode.MALFORMED_OUTPUT
     assert len(attempt.raw_response_sha256) == 64
+    assert attempt.malformed_output_diagnostic is not None
+    assert attempt.malformed_output_diagnostic.expected_fields_missing == ("rationale",)
+    assert attempt.malformed_output_diagnostic.raw_body_retained is False
 
 
 def test_candidate_schema_rejects_a_model_generated_command_field() -> None:
@@ -278,6 +306,59 @@ def test_candidate_schema_rejects_a_model_generated_command_field() -> None:
 
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         CandidateTestProposal.model_validate(document)
+
+
+def test_draft_rejects_control_plane_fields_and_records_only_sanitized_shape(
+    context_repository_history: ContextRepositoryHistory,
+) -> None:
+    source = _draft().source
+    response = CandidateTestProposal(
+        candidate_id="candidate-model-controlled",
+        target_path="tests/patchproof_generated/test_model_controlled.py",
+        test_function="test_patchproof_generated_behavior",
+        source=source,
+        rationale="Attempts to return redundant control-plane fields.",
+    ).model_dump_json()
+    attempt = asyncio.run(
+        _generator(
+            model=FakeCandidateModel(response),
+            context=_context(context_repository_history),
+        ).generate_initial()
+    )
+
+    assert attempt.status is CandidateAttemptStatus.INVALID_MODEL_OUTPUT
+    diagnostic = attempt.malformed_output_diagnostic
+    assert diagnostic is not None
+    assert diagnostic.expected_fields_missing == ()
+    assert diagnostic.unexpected_field_count == 3
+    assert diagnostic.unexpected_fields == ("candidate_id", "target_path", "test_function")
+    assert diagnostic.source_chars == len(source)
+    assert diagnostic.source_sha256 == hashlib.sha256(source.encode()).hexdigest()
+    assert source not in diagnostic.model_dump_json()
+    published = EvidenceWorkflow._attempt_evidence(attempt).model_dump(mode="json")
+    assert "malformed_output_diagnostic" not in published
+    assert "local_malformed_output_diagnostic" not in published
+
+
+def test_malformed_json_diagnostic_records_location_without_raw_body(
+    context_repository_history: ContextRepositoryHistory,
+) -> None:
+    response = '{"source":\n'
+    attempt = asyncio.run(
+        _generator(
+            model=FakeCandidateModel(response),
+            context=_context(context_repository_history),
+        ).generate_initial()
+    )
+
+    diagnostic = attempt.malformed_output_diagnostic
+    assert diagnostic is not None
+    assert diagnostic.json_parse_status == "INVALID"
+    assert diagnostic.json_error_line == 2
+    assert diagnostic.json_error_column == 1
+    assert diagnostic.top_level_kind == "unknown"
+    assert diagnostic.validation_errors == ("$:json_invalid",)
+    assert response not in diagnostic.model_dump_json()
 
 
 def test_candidate_schema_rejects_extra_dot_that_breaks_pytest_module_import() -> None:
@@ -291,14 +372,13 @@ def test_candidate_schema_rejects_extra_dot_that_breaks_pytest_module_import() -
 def test_one_repair_records_parent_lineage_and_exhausts_two_call_budget(
     context_repository_history: ContextRepositoryHistory,
 ) -> None:
-    initial_proposal = _proposal()
-    repaired_proposal = _proposal(
-        candidate_id="candidate-most-specific-workspace-repair",
-        target_path="tests/patchproof_generated/test_workspace_specificity_repair.py",
+    initial_draft = _draft()
+    repaired_draft = _draft(
+        rationale="Repairs the prior assertion while preserving the same observable behavior.",
     )
     model = FakeCandidateModel(
-        initial_proposal.model_dump_json(),
-        repaired_proposal.model_dump_json(),
+        initial_draft.model_dump_json(),
+        repaired_draft.model_dump_json(),
     )
     generator = _generator(model=model, context=_context(context_repository_history))
     initial = asyncio.run(generator.generate_initial())
@@ -313,12 +393,15 @@ def test_one_repair_records_parent_lineage_and_exhausts_two_call_budget(
     assert initial.validated is not None
     assert repaired.status is CandidateAttemptStatus.VALIDATED
     assert repaired.origin is CandidateOrigin.REPAIR
-    assert repaired.parent_candidate_id == initial_proposal.candidate_id
+    assert repaired.parent_candidate_id == "candidate-initial"
     assert repaired.parent_artifact_sha256 == initial.validated.artifact.sha256
     assert generator.snapshot.model_calls == 2
     assert generator.snapshot.repair_used
     assert len(generator.snapshot.attempts) == 2
-    assert model.requests[1].previous_candidate == initial_proposal
+    assert model.requests[1].previous_candidate == initial.proposal
+    assert repaired.proposal is not None
+    assert repaired.proposal.candidate_id == "candidate-repair"
+    assert repaired.proposal.target_path.endswith("test_patchproof_generated_repair.py")
     assert model.requests[1].feedback == feedback
     with pytest.raises(CandidateBudgetExceeded):
         asyncio.run(generator.repair(feedback=feedback))
@@ -328,7 +411,7 @@ def test_repair_before_initial_and_duplicate_initial_are_rejected_without_model_
     context_repository_history: ContextRepositoryHistory,
 ) -> None:
     context = _context(context_repository_history)
-    model = FakeCandidateModel(_proposal().model_dump_json())
+    model = FakeCandidateModel(_draft().model_dump_json())
     generator = _generator(model=model, context=context)
     feedback = CandidateFeedback(category="VALIDATION", summary="Try again.")
 
@@ -344,25 +427,29 @@ def test_repair_before_initial_and_duplicate_initial_are_rejected_without_model_
 def test_response_budget_rejects_candidate_after_exactly_one_model_call(
     context_repository_history: ContextRepositoryHistory,
 ) -> None:
-    proposal_json = _proposal().model_dump_json()
-    model = FakeCandidateModel(proposal_json)
+    draft_json = _draft().model_dump_json()
+    model = FakeCandidateModel(draft_json)
     generator = _generator(
         model=model,
         context=_context(context_repository_history),
-        max_response_chars=len(proposal_json) - 1,
+        max_response_chars=len(draft_json) - 1,
     )
 
     attempt = asyncio.run(generator.generate_initial())
 
     assert attempt.status is CandidateAttemptStatus.INVALID_MODEL_OUTPUT
     assert attempt.issues[0].code is CandidateIssueCode.RESPONSE_TOO_LARGE
+    assert attempt.malformed_output_diagnostic is not None
+    assert attempt.malformed_output_diagnostic.response_budget_exceeded
+    assert attempt.malformed_output_diagnostic.json_parse_status == "NOT_ATTEMPTED"
+    assert attempt.malformed_output_diagnostic.top_level_kind == "unknown"
     assert len(model.requests) == 1
 
 
 def test_input_budget_fails_without_a_model_call(
     context_repository_history: ContextRepositoryHistory,
 ) -> None:
-    model = FakeCandidateModel(_proposal().model_dump_json())
+    model = FakeCandidateModel(_draft().model_dump_json())
     generator = _generator(
         model=model,
         context=_context(context_repository_history),

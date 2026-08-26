@@ -11,7 +11,10 @@ import pytest
 from patchproof.hard_mode import (
     HardModeCaseKind,
     HardModeConfigurationError,
+    HardModePacingPolicy,
+    HardModeProtocol,
     HardModeRepositoryCache,
+    _pace_between_cases,
     load_hard_mode_manifest,
     run_live,
     summarize_live,
@@ -114,6 +117,41 @@ def test_summary_uses_raw_denominators_and_handles_failed_model_calls() -> None:
     assert summary["incorrect_support_count"] == 0
     assert summary["total_tokens"] == 350
     assert summary["logical_model_result_count"] == 3
+
+
+def test_predeclared_inter_case_pacing_is_uniform_and_journaled(
+    writable_test_directory: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest, _ = load_hard_mode_manifest(_MANIFEST_PATH)
+    protocol = HardModeProtocol.model_validate(
+        {
+            **manifest.protocol.model_dump(mode="json"),
+            "pacing_policy": HardModePacingPolicy.BETWEEN_CASES,
+            "inter_case_delay_seconds": 60.0,
+        }
+    )
+    sleep_calls: list[float] = []
+    clock = iter((10.0, 70.25))
+    monkeypatch.setattr("patchproof.hard_mode.time.sleep", sleep_calls.append)
+    monkeypatch.setattr("patchproof.hard_mode.time.perf_counter", lambda: next(clock))
+    journal = writable_test_directory / "pacing.jsonl"
+
+    _pace_between_cases(
+        protocol=protocol,
+        journal_path=journal,
+        completed_case_id="case-one",
+        next_case_id="case-two",
+    )
+
+    events = [json.loads(line) for line in journal.read_text().splitlines()]
+    assert sleep_calls == [60.0]
+    assert [event["event"] for event in events] == [
+        "INTER_CASE_PACING_STARTED",
+        "INTER_CASE_PACING_COMPLETED",
+    ]
+    assert events[1]["declared_delay_seconds"] == 60.0
+    assert events[1]["actual_delay_seconds"] == 60.25
 
 
 def test_existing_journal_blocks_any_live_rerun(writable_test_directory: Path) -> None:
