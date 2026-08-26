@@ -30,6 +30,7 @@ data/
 
 # Reproducible benchmark checkout/workspace cache
 .patchproof-bench/
+.patchproof-hard-mode/
 
 # Editors and operating systems
 .idea/

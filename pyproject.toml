@@ -39,6 +39,10 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+extend-exclude = [
+    "benchmarks/hard_mode/fixtures/",
+    "benchmarks/hard_mode/oracles/",
+]
 
 [tool.ruff.lint]
 select = ["B", "E", "F", "I", "RUF", "SIM", "UP"]

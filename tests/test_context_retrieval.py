@@ -153,6 +153,50 @@ def test_same_revision_produces_empty_but_valid_context(
     assert context.snippets == ()
 
 
+def test_exact_excluded_path_is_absent_from_every_prompt_bound_context_section(
+    context_repository_history: ContextRepositoryHistory,
+) -> None:
+    history = context_repository_history
+    excluded_path = "tests/test_workspace.py"
+    excluded_marker = "ORACLE_ONLY_EXPECTATION"
+    test_path = history.path / excluded_path
+    test_path.write_text(
+        test_path.read_text(encoding="utf-8")
+        + f"\n\ndef test_{excluded_marker.lower()}() -> None:\n"
+        + f"    assert {excluded_marker!r}\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ("git", "-C", str(history.path), "add", excluded_path),
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ("git", "-C", str(history.path), "commit", "-m", "add hidden oracle marker"),
+        check=True,
+        capture_output=True,
+    )
+    hidden_test_head = subprocess.run(
+        ("git", "-C", str(history.path), "rev-parse", "HEAD"),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    context = DeterministicContextRetriever(
+        source_repository=history.path,
+        excluded_paths=frozenset({excluded_path}),
+    ).retrieve(base_sha=history.base_sha, head_sha=hidden_test_head)
+    serialized = context.model_dump_json()
+
+    assert excluded_path not in serialized
+    assert excluded_marker not in serialized
+    assert context.stats.changed_file_count == 2
+    assert context.stats.excluded_changed_files == 1
+    assert context.stats.excluded_python_paths == 1
+    assert [changed.path for changed in context.changed_files] == ["workspace.py"]
+
+
 def test_partial_or_unknown_revision_is_rejected(
     context_repository_history: ContextRepositoryHistory,
 ) -> None:

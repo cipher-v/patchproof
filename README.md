@@ -36,6 +36,15 @@ The run used four provider attempts and 12,225 total tokens. It is real one-case
 not a blind candidate-generation benchmark: production retrieval included changed test context,
 and the immutable historical commits required the benchmark's synthetic test contract.
 
+The separate blind hard-mode evaluation withholds every changed upstream Python test before
+prompt-context derivation and uses independent hidden oracles. In one declared, non-repeated
+Gemini 3.6 Flash run over four historical PRs plus one difficult local fixture, two cases produced
+claim-scoped support, two exhausted both candidate slots on malformed structured output, and one
+was blocked by the Gemini free-tier request quota. One supported case required the single repair.
+No generated support disagreed with the hidden-oracle differential direction. These are five-case
+diagnostic counts, not an accuracy claim. See
+[`docs/10_HARD_MODE_EVALUATION.md`](docs/10_HARD_MODE_EVALUATION.md).
+
 The cloud composition is now live: transactional Firestore persistence, deterministic
 OIDC-authenticated Cloud Tasks, a public webhook/control service, and an IAM-private executor with
 no project roles or secrets. A pinned Python 3.12 shared container image, Cloud Build file,
@@ -124,6 +133,9 @@ proof are documented in
 [`docs/08_PHASE_CLOUD_DEPLOYMENT.md`](docs/08_PHASE_CLOUD_DEPLOYMENT.md). The evidence-console
 boundary, live release proof, four-minute demo, Devpost copy, screenshot plan, and final limitations
 are documented in [`docs/09_PHASE_DASHBOARD_DEMO.md`](docs/09_PHASE_DASHBOARD_DEMO.md).
+The blind historical/synthetic stress-test protocol, exact generated tests, failure attribution,
+usage, and limitations are documented in
+[`docs/10_HARD_MODE_EVALUATION.md`](docs/10_HARD_MODE_EVALUATION.md).
 
 ## Reproduce PatchProof Bench
 
@@ -136,3 +148,13 @@ uv run python -m patchproof.benchmark summarize
 The networked run clones only the two public repositories declared in the hash-checked manifest.
 See [`benchmarks/results/summary.md`](benchmarks/results/summary.md) for the measured summary and
 [`benchmarks/results/raw.json`](benchmarks/results/raw.json) for every retained scenario.
+
+The hard-mode oracle gate can be reproduced in a new empty runtime directory with:
+
+```shell
+uv run python -m patchproof.hard_mode verify-oracles
+```
+
+The checked-in exactly-once live result and transparent summary are under
+[`benchmarks/hard_mode/results/`](benchmarks/hard_mode/results/). A future live evaluation must use
+a new declared run ID; the local journal deliberately refuses to replace this run.

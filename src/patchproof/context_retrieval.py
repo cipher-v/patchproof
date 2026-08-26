@@ -156,6 +156,8 @@ class RetrievalStats(BaseModel):
     test_files_scanned: int = Field(ge=0)
     reference_files_scanned: int = Field(ge=0)
     omitted_changed_files: int = Field(ge=0)
+    excluded_changed_files: int = Field(default=0, ge=0)
+    excluded_python_paths: int = Field(default=0, ge=0)
     truncated: bool
 
 
@@ -271,9 +273,16 @@ class DeterministicContextRetriever:
         *,
         source_repository: Path,
         budget: ContextBudget | None = None,
+        excluded_paths: frozenset[str] = frozenset(),
     ) -> None:
         self.source_repository = source_repository.resolve()
         self.budget = budget or ContextBudget()
+        try:
+            self.excluded_paths = frozenset(
+                _validate_repository_path(path) for path in excluded_paths
+            )
+        except ValueError as error:
+            raise ContextRetrievalError(f"invalid excluded repository path: {error}") from error
         self._source_cache: dict[tuple[str, str], str | None] = {}
         if not self.source_repository.is_dir():
             raise ContextRetrievalError(
@@ -286,8 +295,14 @@ class DeterministicContextRetriever:
         base = self._resolve_sha(base_sha, RevisionRole.BASE)
         head = self._resolve_sha(head_sha, RevisionRole.HEAD)
         all_changed_files = self._changed_files(base.sha, head.sha)
-        omitted_changed_files = max(0, len(all_changed_files) - self.budget.max_changed_files)
-        changed_files = all_changed_files[: self.budget.max_changed_files]
+        visible_changed_files = [
+            changed_file
+            for changed_file in all_changed_files
+            if not self._is_excluded_change(changed_file)
+        ]
+        excluded_changed_files = len(all_changed_files) - len(visible_changed_files)
+        omitted_changed_files = max(0, len(visible_changed_files) - self.budget.max_changed_files)
+        changed_files = visible_changed_files[: self.budget.max_changed_files]
         truncated = omitted_changed_files > 0
 
         diff, diff_truncated = self._bounded_diff(base.sha, head.sha, changed_files)
@@ -296,7 +311,7 @@ class DeterministicContextRetriever:
             base.sha, head.sha, changed_files
         )
 
-        python_paths, paths_truncated = self._python_paths(head.sha)
+        python_paths, paths_truncated, excluded_python_paths = self._python_paths(head.sha)
         truncated = truncated or paths_truncated
         likely_tests, test_files_scanned = self._likely_test_snippets(
             head.sha, python_paths, changed_files, changed_symbols
@@ -325,6 +340,8 @@ class DeterministicContextRetriever:
                 test_files_scanned=test_files_scanned,
                 reference_files_scanned=reference_files_scanned,
                 omitted_changed_files=omitted_changed_files,
+                excluded_changed_files=excluded_changed_files,
+                excluded_python_paths=excluded_python_paths,
                 truncated=truncated or len(changed_symbols) > self.budget.max_symbols,
             ),
         )
@@ -558,16 +575,27 @@ class DeterministicContextRetriever:
             ranges.append((anchor, anchor if count == 0 else anchor + count - 1))
         return ranges or [(1, 1)]
 
-    def _python_paths(self, head_sha: str) -> tuple[list[str], bool]:
+    def _python_paths(self, head_sha: str) -> tuple[list[str], bool, int]:
         output = self._run_git(("ls-tree", "-r", "-z", "--name-only", head_sha)).stdout
         paths: list[str] = []
+        excluded = 0
         for raw_path in output.rstrip(b"\0").split(b"\0") if output else []:
             path = self._decode_path(raw_path)
             if path.endswith(".py"):
-                paths.append(path)
+                if path in self.excluded_paths:
+                    excluded += 1
+                else:
+                    paths.append(path)
         paths.sort()
         truncated = len(paths) > self.budget.max_python_paths
-        return paths[: self.budget.max_python_paths], truncated
+        return paths[: self.budget.max_python_paths], truncated, excluded
+
+    def _is_excluded_change(self, changed_file: ChangedFile) -> bool:
+        """Exclude one exact-path change before any prompt-bound derivation occurs."""
+        return changed_file.path in self.excluded_paths or (
+            changed_file.previous_path is not None
+            and changed_file.previous_path in self.excluded_paths
+        )
 
     def _likely_test_snippets(
         self,

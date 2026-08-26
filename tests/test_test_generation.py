@@ -280,6 +280,14 @@ def test_candidate_schema_rejects_a_model_generated_command_field() -> None:
         CandidateTestProposal.model_validate(document)
 
 
+def test_candidate_schema_rejects_extra_dot_that_breaks_pytest_module_import() -> None:
+    document = _proposal().model_dump()
+    document["target_path"] = "tests/patchproof_generated/test_workspace_registry.com.py"
+
+    with pytest.raises(ValidationError, match="normalized relative test"):
+        CandidateTestProposal.model_validate(document)
+
+
 def test_one_repair_records_parent_lineage_and_exhausts_two_call_budget(
     context_repository_history: ContextRepositoryHistory,
 ) -> None:

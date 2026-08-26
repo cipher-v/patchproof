@@ -10,7 +10,7 @@ import time
 import uuid
 import xml.etree.ElementTree as element_tree
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from patchproof.execution_contract import ExecutionContract
 from patchproof.execution_runtime import (
@@ -162,6 +162,7 @@ class PytestRunner:
         python_executable: Path,
         parser: PytestJUnitParser | None = None,
         install_dependencies: bool = False,
+        repository_python_paths: tuple[str, ...] = (),
         processes: BoundedSubprocessRunner | None = None,
         environment_policy: ChildProcessEnvironmentPolicy | None = None,
     ) -> None:
@@ -173,6 +174,9 @@ class PytestRunner:
         self.timeout_seconds = contract.timeout_seconds
         self.parser = parser or PytestJUnitParser()
         self.install_dependencies = install_dependencies
+        self.repository_python_paths = tuple(
+            self._validate_python_path(path) for path in repository_python_paths
+        )
         self.processes = processes or BoundedSubprocessRunner()
         self.environment_policy = environment_policy or ChildProcessEnvironmentPolicy()
 
@@ -285,6 +289,11 @@ class PytestRunner:
                 artifact.node_id,
             )
             environment = self.environment_policy.build(runtime_root=result_directory / "runtime")
+            if self.repository_python_paths:
+                environment["PYTHONPATH"] = os.pathsep.join(
+                    str(self._safe_python_path(workspace, path))
+                    for path in self.repository_python_paths
+                )
             completed = self.processes.run(
                 command,
                 cwd=workspace,
@@ -358,6 +367,30 @@ class PytestRunner:
         if not artifact_path.is_relative_to(workspace):
             raise ValueError("artifact path resolves outside the revision workspace")
         return artifact_path
+
+    @staticmethod
+    def _validate_python_path(value: str) -> str:
+        if value == ".":
+            return value
+        if "\\" in value or "\x00" in value or "\n" in value or "\r" in value:
+            raise ValueError("repository Python path contains an unsupported character")
+        path = PurePosixPath(value)
+        if (
+            not value
+            or path.is_absolute()
+            or path.as_posix() != value
+            or any(part in {"", ".", ".."} for part in path.parts)
+        ):
+            raise ValueError("repository Python path must be a normalized relative POSIX path")
+        return value
+
+    @staticmethod
+    def _safe_python_path(workspace: Path, relative_path: str) -> Path:
+        path = workspace if relative_path == "." else workspace / Path(*relative_path.split("/"))
+        resolved = path.resolve()
+        if not resolved.is_relative_to(workspace):
+            raise ValueError("repository Python path resolves outside the revision workspace")
+        return resolved
 
     def _install(self, workspace: Path) -> tuple[str, str, str, int | None] | None:
         """Run only validated contract argument arrays, without a command shell."""

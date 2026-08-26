@@ -1,0 +1,1117 @@
+"""Blind, exactly-once hard-mode evaluation for PatchProof's live Gemini workflow."""
+
+from __future__ import annotations
+
+import argparse
+import ast
+import asyncio
+import hashlib
+import json
+import os
+import platform
+import re
+import shutil
+import subprocess
+import sys
+from datetime import UTC, datetime
+from enum import StrEnum
+from pathlib import Path, PurePosixPath
+from statistics import fmean
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from patchproof.adk_claim_agent import AdkGeminiClaimModel
+from patchproof.adk_evidence_assessor import AdkGeminiEvidenceAssessor
+from patchproof.adk_test_agent import AdkGeminiCandidateModel
+from patchproof.challenge import BaseHeadChallenge
+from patchproof.claim_agent import (
+    BehavioralClaimAgent,
+    InvalidClaimAgentOutput,
+    PullRequestNarrative,
+)
+from patchproof.context_retrieval import DeterministicContextRetriever, PullRequestContext
+from patchproof.evidence_workflow import EvidenceWorkflow
+from patchproof.execution_contract import ExecutionContract, TestCommandContract
+from patchproof.git_workspace import GitWorkspaceManager
+from patchproof.model_reliability import (
+    BoundedRetryingEvidenceAssessor,
+    BoundedRetryingModel,
+    ModelInvocationFailure,
+)
+from patchproof.models import (
+    ClaimOutcome,
+    DifferentialPattern,
+    MechanicalEvidenceStatus,
+    TestArtifact,
+    TestExecutionStatus,
+)
+from patchproof.pytest_runner import PytestRunner
+from patchproof.test_generation import (
+    BoundedCandidateTestGenerator,
+    CandidateAttempt,
+    CandidateTestValidator,
+)
+
+_GIT_SHA = re.compile(r"[0-9a-f]{40}")
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+_CASE_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+_MAX_MANIFEST_BYTES = 256_000
+_ORACLE_TARGET = "patchproof_generated_tests/test_hard_mode_oracle.py"
+
+
+class HardModeConfigurationError(ValueError):
+    """Raised when a frozen case, oracle, or gate fails deterministic validation."""
+
+
+class HardModeInfrastructureError(RuntimeError):
+    """Raised when immutable repository preparation or execution cannot complete."""
+
+
+class HardModeCaseKind(StrEnum):
+    HISTORICAL_PR = "HISTORICAL_PR"
+    LOCAL_SYNTHETIC = "LOCAL_SYNTHETIC"
+
+
+class HardModeProtocol(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    declared_run_id: str = Field(min_length=1, max_length=200)
+    model_name: str = Field(pattern=r"gemini-\d+\.\d+-[a-z0-9.-]+")
+    temperature: float
+    thinking_level: Literal["LOW"]
+    claim_calls_per_case: Literal[1]
+    candidate_calls_per_case: Literal[2]
+    assessment_calls_per_discriminating_case: Literal[1]
+    transient_provider_retries_per_logical_call: Literal[1]
+    narrative_policy: str = Field(min_length=1, max_length=1_000)
+    withholding_policy: str = Field(min_length=1, max_length=1_000)
+
+
+class HardModeCase(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    case_id: str
+    kind: HardModeCaseKind
+    repository: str = Field(pattern=r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+    source_url: str | None
+    pull_request_number: int | None = Field(default=None, ge=1)
+    pull_request_url: str | None
+    merged_at: datetime | None
+    base_sha: str
+    head_sha: str
+    category: str = Field(min_length=1, max_length=300)
+    difficulty_rationale: str = Field(min_length=1, max_length=1_000)
+    production_files_changed: tuple[str, ...] = Field(min_length=1, max_length=20)
+    production_additions: int = Field(ge=0)
+    production_deletions: int = Field(ge=0)
+    interface_exists_on_both_revisions: bool
+    environment_caveat: str = Field(min_length=1, max_length=1_000)
+    expected_base_result: Literal["ASSERTION_FAILED"]
+    expected_head_result: Literal["PASSED"]
+    title: str = Field(min_length=1, max_length=300)
+    body: str = Field(max_length=8_000)
+    excluded_paths: tuple[str, ...]
+    expected_excluded_changed_files: int = Field(ge=0)
+    repository_python_paths: tuple[str, ...] = Field(min_length=1, max_length=4)
+    fixture_directory: str | None = None
+    oracle_file: str
+    oracle_sha256: str
+    oracle_test_function: str = Field(pattern=r"test_[A-Za-z0-9_]+")
+
+    @model_validator(mode="after")
+    def validate_case(self) -> HardModeCase:
+        if _CASE_ID.fullmatch(self.case_id) is None:
+            raise ValueError("case_id must be lowercase kebab-case")
+        if any(_GIT_SHA.fullmatch(value) is None for value in (self.base_sha, self.head_sha)):
+            raise ValueError("case revisions must be full lowercase Git SHA-1 values")
+        if self.base_sha == self.head_sha or _SHA256.fullmatch(self.oracle_sha256) is None:
+            raise ValueError("case revisions must differ and oracle SHA-256 must be valid")
+        paths = (*self.excluded_paths, *self.production_files_changed, self.oracle_file)
+        if self.fixture_directory:
+            paths = (*paths, self.fixture_directory)
+        for value in paths:
+            path = PurePosixPath(value)
+            if (
+                not value
+                or path.is_absolute()
+                or path.as_posix() != value
+                or any(part in {"", ".", ".."} for part in path.parts)
+            ):
+                raise ValueError("case paths must be normalized relative POSIX paths")
+        if len(set(self.excluded_paths)) != len(self.excluded_paths):
+            raise ValueError("excluded paths must be unique")
+        if self.kind is HardModeCaseKind.HISTORICAL_PR:
+            expected_source = f"https://github.com/{self.repository}.git"
+            expected_pr = f"https://github.com/{self.repository}/pull/{self.pull_request_number}"
+            if (
+                self.source_url != expected_source
+                or self.pull_request_url != expected_pr
+                or self.pull_request_number is None
+                or self.merged_at is None
+                or self.fixture_directory is not None
+            ):
+                raise ValueError("historical case provenance is incomplete or inconsistent")
+        elif (
+            self.source_url is not None
+            or self.pull_request_number is not None
+            or self.pull_request_url is not None
+            or self.merged_at is not None
+            or self.fixture_directory is None
+        ):
+            raise ValueError("synthetic case must use only local fixture provenance")
+        return self
+
+
+class HardModeManifest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    version: Literal[1]
+    protocol: HardModeProtocol
+    cases: tuple[HardModeCase, ...] = Field(min_length=5, max_length=20)
+
+    @model_validator(mode="after")
+    def validate_coverage(self) -> HardModeManifest:
+        historical = [case for case in self.cases if case.kind is HardModeCaseKind.HISTORICAL_PR]
+        synthetic = [case for case in self.cases if case.kind is HardModeCaseKind.LOCAL_SYNTHETIC]
+        if len(historical) < 4 or len({case.repository for case in historical}) < 2:
+            raise ValueError("hard mode needs four historical cases across two repositories")
+        if not synthetic:
+            raise ValueError("hard mode needs at least one difficult local synthetic case")
+        if len({case.case_id for case in self.cases}) != len(self.cases):
+            raise ValueError("hard-mode case IDs must be unique")
+        return self
+
+
+def _sha256(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
+
+def _utc_now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _canonical_json(document: Any) -> str:
+    return json.dumps(document, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+
+
+def _write_json(path: Path, document: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_canonical_json(document), encoding="utf-8", newline="\n")
+
+
+def load_hard_mode_manifest(path: Path) -> tuple[HardModeManifest, str]:
+    raw = path.resolve().read_bytes()
+    if not raw or len(raw) > _MAX_MANIFEST_BYTES:
+        raise HardModeConfigurationError("hard-mode manifest is empty or oversized")
+    try:
+        manifest = HardModeManifest.model_validate_json(raw)
+    except ValueError as error:
+        raise HardModeConfigurationError("hard-mode manifest failed validation") from error
+    root = path.resolve().parent
+    for case in manifest.cases:
+        oracle_path = (root / Path(*PurePosixPath(case.oracle_file).parts)).resolve()
+        if not oracle_path.is_relative_to(root) or not oracle_path.is_file():
+            raise HardModeConfigurationError(f"oracle is unavailable for {case.case_id}")
+        content = oracle_path.read_bytes()
+        if _sha256(content) != case.oracle_sha256:
+            raise HardModeConfigurationError(f"oracle hash mismatch for {case.case_id}")
+        try:
+            tree = ast.parse(content, filename=case.oracle_file)
+        except SyntaxError as error:
+            raise HardModeConfigurationError(f"oracle syntax error for {case.case_id}") from error
+        functions = {
+            node.name
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        if functions != {case.oracle_test_function}:
+            raise HardModeConfigurationError(
+                f"oracle must contain exactly its declared top-level test for {case.case_id}"
+            )
+    return manifest, _sha256(raw)
+
+
+class HardModeRepositoryCache:
+    """Prepare exact public PR commits or a reproducible local synthetic repository."""
+
+    def __init__(self, root: Path, manifest_root: Path) -> None:
+        self.root = root.resolve()
+        self.manifest_root = manifest_root.resolve()
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    def prepare(self, case: HardModeCase) -> Path:
+        target = (self.root / case.repository.replace("/", "--")).resolve()
+        if not target.is_relative_to(self.root):
+            raise HardModeConfigurationError("repository cache target escapes cache root")
+        if case.kind is HardModeCaseKind.HISTORICAL_PR:
+            self._prepare_historical(case, target)
+        else:
+            self._prepare_synthetic(case, target)
+        for revision in (case.base_sha, case.head_sha):
+            self._git(target, "cat-file", "-e", f"{revision}^{{commit}}")
+        return target
+
+    def _prepare_historical(self, case: HardModeCase, target: Path) -> None:
+        assert case.source_url is not None and case.pull_request_number is not None
+        if not target.exists():
+            self._run(
+                "git",
+                "clone",
+                "--quiet",
+                "--filter=blob:none",
+                "--no-checkout",
+                case.source_url,
+                str(target),
+                cwd=self.root,
+                timeout=180,
+            )
+        if not (target / ".git").is_dir():
+            raise HardModeInfrastructureError("repository cache entry is not a Git repository")
+        remote = self._git(target, "remote", "get-url", "origin").stdout.strip()
+        if remote != case.source_url:
+            raise HardModeInfrastructureError("repository cache origin differs from manifest")
+        pr_ref = f"refs/patchproof/hard-mode-pr-{case.pull_request_number}"
+        self._git(
+            target,
+            "fetch",
+            "--quiet",
+            "origin",
+            f"+refs/pull/{case.pull_request_number}/head:{pr_ref}",
+            timeout=180,
+        )
+        actual_head = self._git(
+            target, "rev-parse", "--verify", f"{pr_ref}^{{commit}}"
+        ).stdout.strip()
+        if actual_head != case.head_sha:
+            raise HardModeInfrastructureError("fetched PR HEAD differs from frozen manifest")
+
+    def _prepare_synthetic(self, case: HardModeCase, target: Path) -> None:
+        assert case.fixture_directory is not None
+        fixture = (
+            self.manifest_root / Path(*PurePosixPath(case.fixture_directory).parts)
+        ).resolve()
+        base_source = fixture / "base" / "workspace_registry.py"
+        head_source = fixture / "head" / "workspace_registry.py"
+        if not base_source.is_file() or not head_source.is_file():
+            raise HardModeConfigurationError("synthetic fixture snapshots are unavailable")
+        if not target.exists():
+            target.mkdir(parents=True)
+            self._git(target, "init", "--quiet")
+            self._git(target, "config", "core.autocrlf", "false")
+            self._git(target, "config", "user.name", "PatchProof Benchmark")
+            self._git(target, "config", "user.email", "benchmark@patchproof.invalid")
+            shutil.copyfile(base_source, target / "workspace_registry.py")
+            self._git(target, "add", "workspace_registry.py")
+            self._git(
+                target,
+                "commit",
+                "--quiet",
+                "-m",
+                "synthetic base",
+                extra_environment={
+                    "GIT_AUTHOR_DATE": "2026-01-01T00:00:00Z",
+                    "GIT_COMMITTER_DATE": "2026-01-01T00:00:00Z",
+                },
+            )
+            shutil.copyfile(head_source, target / "workspace_registry.py")
+            self._git(target, "add", "workspace_registry.py")
+            self._git(
+                target,
+                "commit",
+                "--quiet",
+                "-m",
+                "prefer deepest matching workspace",
+                extra_environment={
+                    "GIT_AUTHOR_DATE": "2026-01-02T00:00:00Z",
+                    "GIT_COMMITTER_DATE": "2026-01-02T00:00:00Z",
+                },
+            )
+        actual_base = self._git(target, "rev-parse", f"{case.head_sha}^").stdout.strip()
+        actual_head = self._git(target, "rev-parse", "HEAD").stdout.strip()
+        if (actual_base, actual_head) != (case.base_sha, case.head_sha):
+            raise HardModeInfrastructureError("synthetic fixture commits differ from manifest")
+        if (
+            self._git(target, "show", f"{case.base_sha}:workspace_registry.py").stdout.encode()
+            != base_source.read_bytes()
+            or self._git(target, "show", f"{case.head_sha}:workspace_registry.py").stdout.encode()
+            != head_source.read_bytes()
+        ):
+            raise HardModeInfrastructureError("synthetic committed bytes differ from snapshots")
+
+    def changed_python_test_paths(self, case: HardModeCase, repository: Path) -> tuple[str, ...]:
+        output = self._git(
+            repository,
+            "diff",
+            "--name-only",
+            "-z",
+            case.base_sha,
+            case.head_sha,
+            "--",
+            binary=True,
+        ).stdout
+        raw_paths = output.rstrip(b"\0").split(b"\0") if output else []
+        paths: list[str] = []
+        for raw_path in raw_paths:
+            path = raw_path.decode("utf-8")
+            pure = PurePosixPath(path)
+            if path.endswith(".py") and (
+                "tests" in pure.parts
+                or pure.name.startswith("test_")
+                or pure.name.endswith("_test.py")
+            ):
+                paths.append(path)
+        return tuple(sorted(paths))
+
+    def _git(
+        self,
+        repository: Path,
+        *arguments: str,
+        timeout: int = 60,
+        extra_environment: dict[str, str] | None = None,
+        binary: bool = False,
+    ) -> subprocess.CompletedProcess[Any]:
+        return self._run(
+            "git",
+            "-C",
+            str(repository),
+            *arguments,
+            cwd=self.root,
+            timeout=timeout,
+            extra_environment=extra_environment,
+            binary=binary,
+        )
+
+    @staticmethod
+    def _run(
+        *command: str,
+        cwd: Path,
+        timeout: int,
+        extra_environment: dict[str, str] | None = None,
+        binary: bool = False,
+    ) -> subprocess.CompletedProcess[Any]:
+        environment = os.environ.copy()
+        environment.update(extra_environment or {})
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=cwd,
+                capture_output=True,
+                text=not binary,
+                encoding=None if binary else "utf-8",
+                errors=None if binary else "replace",
+                timeout=timeout,
+                check=False,
+                env=environment,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise HardModeInfrastructureError("bounded Git operation did not complete") from error
+        if completed.returncode != 0:
+            detail_value = completed.stderr
+            detail = (
+                detail_value.decode("utf-8", errors="replace")
+                if isinstance(detail_value, bytes)
+                else detail_value
+            )
+            raise HardModeInfrastructureError(
+                f"Git operation failed with code {completed.returncode}: {detail[-500:]}"
+            )
+        return completed
+
+
+def _contract() -> ExecutionContract:
+    return ExecutionContract(
+        version=1,
+        python="3.12",
+        install=(("uv", "sync", "--frozen"),),
+        test=TestCommandContract(command=("python", "-m", "pytest")),
+        allowed_test_paths=("patchproof_generated_tests/",),
+        timeout_seconds=120,
+    )
+
+
+def _challenge(repository: Path, workspace_root: Path, case: HardModeCase) -> BaseHeadChallenge:
+    return BaseHeadChallenge(
+        workspaces=GitWorkspaceManager(
+            source_repository=repository,
+            workspace_root=workspace_root / case.case_id,
+        ),
+        runner=PytestRunner(
+            contract=_contract(),
+            python_executable=Path(sys.executable),
+            install_dependencies=False,
+            repository_python_paths=case.repository_python_paths,
+        ),
+    )
+
+
+def _execution_document(result: Any) -> dict[str, Any]:
+    return {
+        "role": str(result.revision.role),
+        "sha": result.revision.sha,
+        "test_node_id": result.test_node_id,
+        "expected_artifact_sha256": result.expected_artifact_sha256,
+        "artifact_sha256_before": result.artifact_sha256_before,
+        "artifact_sha256_after": result.artifact_sha256_after,
+        "status": str(result.status),
+        "collected_count": result.collected_count,
+        "exit_code": result.exit_code,
+        "duration_seconds": result.duration_seconds,
+        "stdout": result.stdout[:12_000],
+        "stderr": result.stderr[:12_000],
+        "detail": result.detail[:2_000] if result.detail else None,
+    }
+
+
+def _context_leak_audit(
+    *,
+    case: HardModeCase,
+    context: PullRequestContext,
+    oracle_source: str,
+) -> dict[str, Any]:
+    serialized = context.model_dump_json()
+    leaked_paths = [path for path in case.excluded_paths if path in serialized]
+    oracle_lines = {
+        line.strip()
+        for line in oracle_source.splitlines()
+        if len(line.strip()) >= 40
+        and not line.lstrip().startswith(("import ", "from ", "sys.path.insert"))
+    }
+    leaked_oracle_lines = sorted(line for line in oracle_lines if line in serialized)
+    passed = (
+        not leaked_paths
+        and not leaked_oracle_lines
+        and context.stats.excluded_changed_files == case.expected_excluded_changed_files
+    )
+    return {
+        "passed": passed,
+        "excluded_paths_declared": list(case.excluded_paths),
+        "excluded_changed_files_observed": context.stats.excluded_changed_files,
+        "excluded_python_paths_observed": context.stats.excluded_python_paths,
+        "leaked_excluded_paths": leaked_paths,
+        "leaked_oracle_lines": leaked_oracle_lines,
+        "context_sha256": _sha256(serialized.encode("utf-8")),
+    }
+
+
+def verify_oracles(
+    *, manifest_path: Path, cache_root: Path, workspace_root: Path, gate_path: Path
+) -> dict[str, Any]:
+    """Prove every frozen oracle and every anti-leakage precondition before live inference."""
+    if gate_path.exists():
+        raise HardModeConfigurationError("oracle gate already exists; refusing to overwrite it")
+    manifest, manifest_sha256 = load_hard_mode_manifest(manifest_path)
+    root = manifest_path.resolve().parent
+    repositories = HardModeRepositoryCache(cache_root, root)
+    case_results: list[dict[str, Any]] = []
+    for case in manifest.cases:
+        repository = repositories.prepare(case)
+        changed_test_paths = repositories.changed_python_test_paths(case, repository)
+        if changed_test_paths != tuple(sorted(case.excluded_paths)):
+            raise HardModeConfigurationError(
+                f"declared changed-test exclusions are incomplete for {case.case_id}: "
+                f"observed={changed_test_paths!r}"
+            )
+        oracle_path = root / Path(*PurePosixPath(case.oracle_file).parts)
+        oracle_content = oracle_path.read_text(encoding="utf-8")
+        artifact = TestArtifact.from_text(
+            relative_path=_ORACLE_TARGET,
+            node_id=f"{_ORACLE_TARGET}::{case.oracle_test_function}",
+            content=oracle_content,
+        )
+        challenge = _challenge(repository, workspace_root / "oracles", case).run(
+            base_ref=case.base_sha,
+            head_ref=case.head_sha,
+            artifact=artifact,
+        )
+        context = DeterministicContextRetriever(
+            source_repository=repository,
+            excluded_paths=frozenset(case.excluded_paths),
+        ).retrieve(base_sha=case.base_sha, head_sha=case.head_sha)
+        leak_audit = _context_leak_audit(
+            case=case,
+            context=context,
+            oracle_source=oracle_content,
+        )
+        accepted = (
+            challenge.base.status is TestExecutionStatus.ASSERTION_FAILED
+            and challenge.head.status is TestExecutionStatus.PASSED
+            and challenge.base.artifact_was_unchanged
+            and challenge.head.artifact_was_unchanged
+            and challenge.assessment.pattern
+            is DifferentialPattern.BASE_ASSERTION_FAILED_HEAD_PASSED
+            and leak_audit["passed"]
+        )
+        case_results.append(
+            {
+                "case_id": case.case_id,
+                "accepted": accepted,
+                "changed_python_test_paths": list(changed_test_paths),
+                "oracle_file": case.oracle_file,
+                "oracle_sha256": case.oracle_sha256,
+                "base": _execution_document(challenge.base),
+                "head": _execution_document(challenge.head),
+                "mechanical_status": str(challenge.assessment.mechanical_status),
+                "differential_pattern": str(challenge.assessment.pattern),
+                "mechanical_reason": challenge.assessment.reason,
+                "anti_leakage": leak_audit,
+            }
+        )
+    gate = {
+        "schema_version": 1,
+        "created_at": _utc_now(),
+        "manifest_sha256": manifest_sha256,
+        "accepted": all(result["accepted"] for result in case_results),
+        "case_count": len(case_results),
+        "cases": case_results,
+    }
+    if not gate["accepted"]:
+        rejection_path = gate_path.with_name("oracle_rejections.json")
+        _write_json(rejection_path, gate)
+        raise HardModeConfigurationError(
+            "at least one case failed oracle or anti-leakage preflight; gate was not written; "
+            f"diagnostics={rejection_path}"
+        )
+    _write_json(gate_path, gate)
+    return gate
+
+
+def _load_gate(path: Path, manifest_sha256: str, case_count: int) -> dict[str, Any]:
+    try:
+        gate = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise HardModeConfigurationError("oracle gate is unavailable or invalid") from error
+    if (
+        gate.get("accepted") is not True
+        or gate.get("manifest_sha256") != manifest_sha256
+        or gate.get("case_count") != case_count
+        or not all(case.get("accepted") is True for case in gate.get("cases", []))
+    ):
+        raise HardModeConfigurationError("oracle gate does not authorize this manifest")
+    return gate
+
+
+def _attempt_document(attempt: CandidateAttempt) -> dict[str, Any]:
+    return EvidenceWorkflow._attempt_evidence(attempt).model_dump(mode="json")
+
+
+def _append_journal(path: Path, document: dict[str, Any]) -> None:
+    with path.open("a", encoding="utf-8", newline="\n") as journal:
+        journal.write(json.dumps(document, sort_keys=True, ensure_ascii=False) + "\n")
+        journal.flush()
+        os.fsync(journal.fileno())
+
+
+async def _run_live_case(
+    *,
+    case: HardModeCase,
+    repository: Path,
+    workspace_root: Path,
+    model_name: str,
+    expected_context_sha256: str,
+) -> dict[str, Any]:
+    started = datetime.now(UTC)
+    oracle_source = ""  # The live path deliberately never loads developer-oracle bytes.
+    context = DeterministicContextRetriever(
+        source_repository=repository,
+        excluded_paths=frozenset(case.excluded_paths),
+    ).retrieve(base_sha=case.base_sha, head_sha=case.head_sha)
+    context_sha256 = _sha256(context.model_dump_json().encode("utf-8"))
+    if context_sha256 != expected_context_sha256:
+        raise HardModeConfigurationError("live context differs from the preflight-gated context")
+    narrative = PullRequestNarrative.from_untrusted(title=case.title, body=case.body)
+    result: dict[str, Any] = {
+        "case_id": case.case_id,
+        "kind": str(case.kind),
+        "repository": case.repository,
+        "pull_request_number": case.pull_request_number,
+        "base_sha": case.base_sha,
+        "head_sha": case.head_sha,
+        "category": case.category,
+        "difficulty_rationale": case.difficulty_rationale,
+        "started_at": started.isoformat(),
+        "context_sha256": context_sha256,
+        "context": context.model_dump(mode="json"),
+        "narrative": narrative.model_dump(mode="json"),
+        "oracle_loaded_during_live_run": bool(oracle_source),
+        "claim_result": None,
+        "candidate_attempts": [],
+        "candidate_evaluations": [],
+        "semantic_assessment": None,
+        "final_mechanical": None,
+        "final_outcome": None,
+        "terminal_status": None,
+        "error": None,
+    }
+    claim_agent = BehavioralClaimAgent(
+        model=BoundedRetryingModel(AdkGeminiClaimModel(model_name=model_name))
+    )
+    try:
+        claim_result = await claim_agent.select_claim(context=context, narrative=narrative)
+    except InvalidClaimAgentOutput as error:
+        result["terminal_status"] = "CLAIM_INVALID_OUTPUT"
+        result["error"] = {
+            "type": type(error).__name__,
+            "message": str(error),
+            "usage": error.usage.model_dump(mode="json") if error.usage else None,
+            "raw_response_sha256": error.raw_response_sha256,
+        }
+        return _finish_case(result, started)
+    except ModelInvocationFailure as error:
+        result["terminal_status"] = "CLAIM_INVOCATION_ERROR"
+        result["error"] = {
+            "type": type(error).__name__,
+            "message": str(error),
+            "retryable": error.retryable,
+        }
+        return _finish_case(result, started)
+    result["claim_result"] = claim_result.model_dump(mode="json")
+    claim = claim_result.selection.claim
+    if claim is None:
+        result["terminal_status"] = f"CLAIM_{claim_result.selection.disposition}"
+        result["final_outcome"] = str(ClaimOutcome.INSUFFICIENT_EVIDENCE)
+        return _finish_case(result, started)
+
+    generator = BoundedCandidateTestGenerator(
+        model=BoundedRetryingModel(AdkGeminiCandidateModel(model_name=model_name)),
+        validator=CandidateTestValidator(),
+        claim=claim,
+        context=context,
+        contract=_contract(),
+        existing_paths=DeterministicContextRetriever(source_repository=repository).committed_paths(
+            case.head_sha
+        ),
+    )
+    challenge_runner = _challenge(repository, workspace_root / "live", case)
+    challenge = None
+    try:
+        attempt = await generator.generate_initial()
+        result["candidate_attempts"].append(_attempt_document(attempt))
+        for attempt_number in range(2):
+            if attempt.validated is not None:
+                challenge = challenge_runner.run(
+                    base_ref=case.base_sha,
+                    head_ref=case.head_sha,
+                    artifact=attempt.validated.artifact,
+                )
+                evaluation = EvidenceWorkflow._evaluation_evidence(
+                    attempt.sequence, challenge
+                ).model_dump(mode="json")
+                evaluation["hidden_oracle_pattern"] = str(
+                    DifferentialPattern.BASE_ASSERTION_FAILED_HEAD_PASSED
+                )
+                evaluation["matches_hidden_oracle_direction"] = (
+                    challenge.assessment.pattern
+                    is DifferentialPattern.BASE_ASSERTION_FAILED_HEAD_PASSED
+                )
+                result["candidate_evaluations"].append(evaluation)
+                if (
+                    challenge.assessment.mechanical_status
+                    is MechanicalEvidenceStatus.DISCRIMINATING
+                ):
+                    semantic = await BoundedRetryingEvidenceAssessor(
+                        AdkGeminiEvidenceAssessor(model_name=model_name)
+                    ).assess(
+                        claim=claim,
+                        candidate_source=attempt.validated.proposal.source,
+                        challenge=challenge,
+                    )
+                    EvidenceWorkflow._validate_semantic_decision(challenge, semantic.decision)
+                    result["semantic_assessment"] = semantic.model_dump(mode="json")
+                    result["final_mechanical"] = str(challenge.assessment.mechanical_status)
+                    result["final_outcome"] = str(semantic.decision.outcome)
+                    result["terminal_status"] = str(semantic.decision.outcome)
+                    return _finish_case(result, started)
+            if attempt_number == 1:
+                break
+            feedback = EvidenceWorkflow._repair_feedback(
+                attempt=attempt,
+                challenge=challenge,
+            )
+            attempt = await generator.repair(feedback=feedback)
+            result["candidate_attempts"].append(_attempt_document(attempt))
+            challenge = None
+    except ModelInvocationFailure as error:
+        result["terminal_status"] = "MODEL_INVOCATION_ERROR"
+        result["error"] = {
+            "type": type(error).__name__,
+            "message": str(error),
+            "retryable": error.retryable,
+            "stage": (
+                "ASSESSMENT"
+                if challenge is not None
+                and challenge.assessment.mechanical_status
+                is MechanicalEvidenceStatus.DISCRIMINATING
+                else "CANDIDATE"
+            ),
+            "logical_candidate_calls_started": generator.snapshot.model_calls,
+        }
+        return _finish_case(result, started)
+    result["terminal_status"] = (
+        str(challenge.assessment.mechanical_status) if challenge is not None else "INVALID_TEST"
+    )
+    result["final_mechanical"] = result["terminal_status"]
+    result["final_outcome"] = str(ClaimOutcome.INSUFFICIENT_EVIDENCE)
+    return _finish_case(result, started)
+
+
+def _finish_case(result: dict[str, Any], started: datetime) -> dict[str, Any]:
+    result["completed_at"] = _utc_now()
+    result["wall_duration_seconds"] = (datetime.now(UTC) - started).total_seconds()
+    return result
+
+
+def run_live(
+    *,
+    manifest_path: Path,
+    cache_root: Path,
+    workspace_root: Path,
+    gate_path: Path,
+    journal_path: Path,
+    raw_path: Path,
+) -> dict[str, Any]:
+    """Execute one declared run; any existing journal permanently blocks a rerun."""
+    if journal_path.exists() or raw_path.exists():
+        raise HardModeConfigurationError(
+            "declared live run has already started; refusing retry or result replacement"
+        )
+    manifest, manifest_sha256 = load_hard_mode_manifest(manifest_path)
+    gate = _load_gate(gate_path, manifest_sha256, len(manifest.cases))
+    gated_cases = {case["case_id"]: case for case in gate["cases"]}
+    root = manifest_path.resolve().parent
+    repositories = HardModeRepositoryCache(cache_root, root)
+    prepared = {case.case_id: repositories.prepare(case) for case in manifest.cases}
+    journal_path.parent.mkdir(parents=True, exist_ok=True)
+    _append_journal(
+        journal_path,
+        {
+            "event": "RUN_STARTED",
+            "at": _utc_now(),
+            "declared_run_id": manifest.protocol.declared_run_id,
+            "manifest_sha256": manifest_sha256,
+            "model_name": manifest.protocol.model_name,
+            "case_ids": [case.case_id for case in manifest.cases],
+        },
+    )
+    started_at = _utc_now()
+    results: list[dict[str, Any]] = []
+    for case in manifest.cases:
+        _append_journal(
+            journal_path,
+            {"event": "CASE_STARTED", "at": _utc_now(), "case_id": case.case_id},
+        )
+        try:
+            result = asyncio.run(
+                _run_live_case(
+                    case=case,
+                    repository=prepared[case.case_id],
+                    workspace_root=workspace_root,
+                    model_name=manifest.protocol.model_name,
+                    expected_context_sha256=gated_cases[case.case_id]["anti_leakage"][
+                        "context_sha256"
+                    ],
+                )
+            )
+        except Exception as error:  # Preserve the declared run and continue remaining cases.
+            result = {
+                "case_id": case.case_id,
+                "kind": str(case.kind),
+                "repository": case.repository,
+                "pull_request_number": case.pull_request_number,
+                "base_sha": case.base_sha,
+                "head_sha": case.head_sha,
+                "terminal_status": "HARNESS_OR_IMPLEMENTATION_ERROR",
+                "error": {"type": type(error).__name__, "message": str(error)[:2_000]},
+                "completed_at": _utc_now(),
+            }
+        results.append(result)
+        _append_journal(
+            journal_path,
+            {"event": "CASE_COMPLETED", "at": _utc_now(), "result": result},
+        )
+    raw = {
+        "schema_version": 1,
+        "declared_run_id": manifest.protocol.declared_run_id,
+        "manifest_sha256": manifest_sha256,
+        "oracle_gate_sha256": _sha256(gate_path.read_bytes()),
+        "model_name": manifest.protocol.model_name,
+        "python_version": platform.python_version(),
+        "platform": platform.platform(),
+        "started_at": started_at,
+        "completed_at": _utc_now(),
+        "exactly_once_journal": journal_path.name,
+        "cases": results,
+    }
+    _write_json(raw_path, raw)
+    _append_journal(
+        journal_path,
+        {"event": "RUN_COMPLETED", "at": _utc_now(), "raw_sha256": _sha256(raw_path.read_bytes())},
+    )
+    return raw
+
+
+def summarize_live(raw: dict[str, Any]) -> dict[str, Any]:
+    cases = raw["cases"]
+    selected = [
+        case for case in cases if (case.get("claim_result") or {}).get("selection", {}).get("claim")
+    ]
+    candidate_attempts = [
+        attempt for case in cases for attempt in case.get("candidate_attempts", [])
+    ]
+    evaluations = [
+        evaluation for case in cases for evaluation in case.get("candidate_evaluations", [])
+    ]
+    discriminating_cases = [
+        case
+        for case in cases
+        if any(
+            item.get("mechanical_status") == "DISCRIMINATING"
+            for item in case.get("candidate_evaluations", [])
+        )
+    ]
+    supported = [
+        case
+        for case in cases
+        if case.get("terminal_status") == str(ClaimOutcome.CLAIM_SUPPORTED_FOR_SCENARIO)
+    ]
+    initial_attempts = [
+        attempt
+        for case in cases
+        for attempt in case.get("candidate_attempts", [])
+        if attempt.get("sequence") == 1
+    ]
+    initial_evaluations = [
+        evaluation
+        for case in cases
+        for evaluation in case.get("candidate_evaluations", [])
+        if evaluation.get("attempt_sequence") == 1
+    ]
+    repair_evaluations = [
+        evaluation
+        for case in cases
+        for evaluation in case.get("candidate_evaluations", [])
+        if evaluation.get("attempt_sequence") == 2
+    ]
+    environmental_evaluations = [
+        evaluation
+        for evaluation in evaluations
+        if evaluation.get("mechanical_status") == "ENVIRONMENTAL"
+    ]
+    incorrect_supports = [
+        case
+        for case in supported
+        if not case.get("candidate_evaluations", [])[-1].get(
+            "matches_hidden_oracle_direction", False
+        )
+    ]
+    usage_records: list[dict[str, Any]] = []
+    for case in cases:
+        claim_usage = (case.get("claim_result") or {}).get("usage")
+        if claim_usage:
+            usage_records.append(claim_usage)
+        usage_records.extend(
+            attempt["usage"]
+            for attempt in case.get("candidate_attempts", [])
+            if attempt.get("usage")
+        )
+        semantic_usage = (case.get("semantic_assessment") or {}).get("usage")
+        if semantic_usage:
+            usage_records.append(semantic_usage)
+    token_values = [
+        item["total_tokens"] for item in usage_records if item.get("total_tokens") is not None
+    ]
+    prompt_values = [
+        item["prompt_tokens"] for item in usage_records if item.get("prompt_tokens") is not None
+    ]
+    output_values = [
+        item["output_tokens"] for item in usage_records if item.get("output_tokens") is not None
+    ]
+    durations = [item["duration_seconds"] for item in usage_records]
+    return {
+        "schema_version": 1,
+        "declared_run_id": raw["declared_run_id"],
+        "model_name": raw["model_name"],
+        "case_count": len(cases),
+        "historical_case_count": sum(case.get("kind") == "HISTORICAL_PR" for case in cases),
+        "synthetic_case_count": sum(case.get("kind") == "LOCAL_SYNTHETIC" for case in cases),
+        "claim_selected_count": len(selected),
+        "grounded_valid_claim_count": len(selected),
+        "claim_selection_rate": len(selected) / len(cases) if cases else 0.0,
+        "claim_abstention_count": sum(
+            case.get("final_outcome") == "INSUFFICIENT_EVIDENCE"
+            and not (case.get("claim_result") or {}).get("selection", {}).get("claim")
+            for case in cases
+        ),
+        "invalid_claim_output_count": sum(
+            case.get("terminal_status") == "CLAIM_INVALID_OUTPUT" for case in cases
+        ),
+        "claim_invocation_error_count": sum(
+            case.get("terminal_status") == "CLAIM_INVOCATION_ERROR" for case in cases
+        ),
+        "candidate_attempt_count": len(candidate_attempts),
+        "repair_attempt_count": sum(
+            attempt.get("origin") == "REPAIR" for attempt in candidate_attempts
+        ),
+        "validated_candidate_count": sum(
+            attempt.get("status") == "VALIDATED" for attempt in candidate_attempts
+        ),
+        "invalid_candidate_model_output_count": sum(
+            attempt.get("status") == "INVALID_MODEL_OUTPUT" for attempt in candidate_attempts
+        ),
+        "statically_valid_initial_candidate_count": sum(
+            attempt.get("status") == "VALIDATED" for attempt in initial_attempts
+        ),
+        "executable_initial_candidate_count": len(initial_evaluations)
+        - sum(
+            evaluation.get("mechanical_status") in {"INVALID_TEST", "ENVIRONMENTAL"}
+            for evaluation in initial_evaluations
+        ),
+        "discriminating_initial_candidate_count": sum(
+            evaluation.get("mechanical_status") == "DISCRIMINATING"
+            for evaluation in initial_evaluations
+        ),
+        "successful_repair_count": sum(
+            evaluation.get("mechanical_status") == "DISCRIMINATING"
+            for evaluation in repair_evaluations
+        ),
+        "environmental_evaluation_count": len(environmental_evaluations),
+        "candidate_evaluation_count": len(evaluations),
+        "discriminating_case_count": len(discriminating_cases),
+        "discrimination_rate_all_cases": len(discriminating_cases) / len(cases) if cases else 0.0,
+        "claim_supported_case_count": len(supported),
+        "claim_supported_rate_all_cases": len(supported) / len(cases) if cases else 0.0,
+        "insufficient_evidence_case_count": sum(
+            case.get("final_outcome") == "INSUFFICIENT_EVIDENCE" for case in cases
+        ),
+        "potential_regression_case_count": sum(
+            case.get("final_outcome") == "POTENTIAL_REGRESSION" for case in cases
+        ),
+        "incorrect_support_count": len(incorrect_supports),
+        "terminal_status_counts": {
+            status: sum(case.get("terminal_status") == status for case in cases)
+            for status in sorted({case.get("terminal_status") for case in cases})
+        },
+        "logical_model_result_count": len(usage_records),
+        "failed_logical_model_call_count": sum(
+            case.get("terminal_status") in {"CLAIM_INVOCATION_ERROR", "MODEL_INVOCATION_ERROR"}
+            for case in cases
+        ),
+        "provider_attempt_count_completed_results": sum(
+            item.get("provider_attempts", 1) for item in usage_records
+        ),
+        "failed_provider_attempt_count": None,
+        "prompt_tokens": sum(prompt_values) if prompt_values else None,
+        "output_tokens": sum(output_values) if output_values else None,
+        "total_tokens": sum(token_values) if token_values else None,
+        "mean_tokens_per_completed_model_result": fmean(token_values) if token_values else None,
+        "total_model_duration_seconds": sum(durations),
+        "mean_model_duration_seconds": fmean(durations) if durations else None,
+        "scope_note": (
+            "This is a five-case adversarial diagnostic with fixed denominators, not a "
+            "representative production accuracy estimate or proof of pull-request correctness."
+        ),
+    }
+
+
+def render_summary_markdown(summary: dict[str, Any]) -> str:
+    statuses = "\n".join(
+        f"- `{status}`: {count}" for status, count in summary["terminal_status_counts"].items()
+    )
+    outcomes = "\n".join(
+        (
+            f"- Cases: {summary['case_count']} "
+            f"({summary['historical_case_count']} historical, "
+            f"{summary['synthetic_case_count']} synthetic)",
+            f"- Claims selected: {summary['claim_selected_count']}/"
+            f"{summary['case_count']} ({summary['claim_selection_rate']:.1%})",
+            f"- Discriminating generated tests: {summary['discriminating_case_count']}/"
+            f"{summary['case_count']} ({summary['discrimination_rate_all_cases']:.1%})",
+            f"- Claim-supported scenarios: {summary['claim_supported_case_count']}/"
+            f"{summary['case_count']} ({summary['claim_supported_rate_all_cases']:.1%})",
+            f"- Candidate attempts: {summary['candidate_attempt_count']} "
+            f"({summary['repair_attempt_count']} repairs)",
+            f"- Validated candidates: {summary['validated_candidate_count']}",
+            f"- Invalid candidate structured outputs: "
+            f"{summary['invalid_candidate_model_output_count']}",
+            f"- Environmental candidate evaluations: {summary['environmental_evaluation_count']}",
+            f"- Incorrect supports versus oracle direction: {summary['incorrect_support_count']}",
+        )
+    )
+    completed_provider_attempts = summary["provider_attempt_count_completed_results"]
+    return f"""# PatchProof hard-mode result
+
+Declared run: `{summary["declared_run_id"]}`
+Model: `{summary["model_name"]}`
+
+## Outcomes
+
+{outcomes}
+
+## Terminal statuses
+
+{statuses}
+
+## Model accounting
+
+- Completed logical model results: {summary["logical_model_result_count"]}
+- Provider attempts represented by completed results: {completed_provider_attempts}
+- Failed logical model calls: {summary["failed_logical_model_call_count"]}
+- Failed provider attempts: unavailable from the adapter after terminal invocation failure
+- Prompt tokens where reported: {summary["prompt_tokens"]}
+- Output tokens where reported: {summary["output_tokens"]}
+- Total tokens where reported: {summary["total_tokens"]}
+- Total model duration: {summary["total_model_duration_seconds"]:.3f} seconds
+
+## Scope
+
+{summary["scope_note"]}
+"""
+
+
+def write_summary(*, raw_path: Path, summary_path: Path, markdown_path: Path) -> dict[str, Any]:
+    raw = json.loads(raw_path.read_text(encoding="utf-8"))
+    summary = summarize_live(raw)
+    _write_json(summary_path, summary)
+    markdown_path.write_text(render_summary_markdown(summary), encoding="utf-8", newline="\n")
+    return summary
+
+
+def main(arguments: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("command", choices=("verify-oracles", "run-live", "summarize"))
+    parser.add_argument("--manifest", type=Path, default=Path("benchmarks/hard_mode/manifest.json"))
+    parser.add_argument("--runtime-root", type=Path, default=Path(".patchproof-hard-mode"))
+    parser.add_argument("--output-root", type=Path, default=Path("benchmarks/hard_mode/results"))
+    args = parser.parse_args(arguments)
+    cache_root = args.runtime_root / "repositories"
+    workspace_root = args.runtime_root / "workspaces"
+    gate_path = args.runtime_root / "oracle_gate.json"
+    journal_path = args.runtime_root / "live_journal.jsonl"
+    raw_path = args.output_root / "raw.json"
+    if args.command == "verify-oracles":
+        verify_oracles(
+            manifest_path=args.manifest,
+            cache_root=cache_root,
+            workspace_root=workspace_root,
+            gate_path=gate_path,
+        )
+    elif args.command == "run-live":
+        run_live(
+            manifest_path=args.manifest,
+            cache_root=cache_root,
+            workspace_root=workspace_root,
+            gate_path=gate_path,
+            journal_path=journal_path,
+            raw_path=raw_path,
+        )
+    else:
+        write_summary(
+            raw_path=raw_path,
+            summary_path=args.output_root / "summary.json",
+            markdown_path=args.output_root / "summary.md",
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

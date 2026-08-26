@@ -22,6 +22,7 @@ from patchproof.structured_output import StrictGeminiOutputModel
 
 _CANDIDATE_ID_PATTERN = re.compile(r"candidate-[a-z0-9][a-z0-9-]{0,58}")
 _TEST_FUNCTION_PATTERN = re.compile(r"test_[a-zA-Z0-9_]{1,120}")
+_TEST_FILENAME_PATTERN = re.compile(r"test_[a-zA-Z0-9_]+\.py")
 _BLOCKED_IMPORT_ROOTS = {
     "asyncio.subprocess",
     "ctypes",
@@ -55,7 +56,7 @@ def _validate_relative_python_path(value: str) -> str:
         or path.as_posix() != value
         or any(part in {"", ".", ".."} for part in path.parts)
         or path.suffix != ".py"
-        or not path.name.startswith("test_")
+        or _TEST_FILENAME_PATTERN.fullmatch(path.name) is None
     ):
         raise ValueError("candidate path must be a normalized relative test_*.py path")
     return value
