@@ -1,0 +1,274 @@
+{
+  "accepted": true,
+  "case_count": 5,
+  "cases": [
+    {
+      "accepted": true,
+      "anti_leakage": {
+        "context_sha256": "6810523831fa21ebdab222db3fdee5e905baf4dec6ac97d1acf657828c785cee",
+        "excluded_changed_files_observed": 3,
+        "excluded_paths_declared": [
+          "tests/test_basic.py",
+          "tests/test_info_dict.py",
+          "tests/test_options.py"
+        ],
+        "excluded_python_paths_observed": 3,
+        "leaked_excluded_paths": [],
+        "leaked_oracle_lines": [],
+        "passed": true
+      },
+      "base": {
+        "artifact_sha256_after": "9e8f89b99a64a80058a00ce726e289437b4ebde007c411672ac11fa1914e8e90",
+        "artifact_sha256_before": "9e8f89b99a64a80058a00ce726e289437b4ebde007c411672ac11fa1914e8e90",
+        "collected_count": 1,
+        "detail": "AssertionError: assert (2, 'Usage: d...ue, y, yes\\n') == (0, 'kept-value\\n')\n  \n  At index 0 diff: 2 != 0\n  Use -v to get more diff\npatchproof_generated_tests\\test_hard_mode_oracle.py:19: in test_parameter_named_help_does_not_break_value_parsing\n    assert (result.exit_code, result.output) == (0, \"kept-value\\n\")\nE   AssertionError: assert (2, 'Usage: d...ue, y, yes\\n') == (0, 'kept-value\\n')\nE     \nE     At index 0 diff: 2 != 0\nE     Use -v to get more diff",
+        "duration_seconds": 1.125,
+        "exit_code": 1,
+        "expected_artifact_sha256": "9e8f89b99a64a80058a00ce726e289437b4ebde007c411672ac11fa1914e8e90",
+        "role": "BASE",
+        "sha": "8c1a0a7abbc1c36f70d1f65f3604acc46c5ce6ab",
+        "status": "ASSERTION_FAILED",
+        "stderr": "",
+        "stdout": "F\r\n================================== FAILURES ===================================\r\n___________ test_parameter_named_help_does_not_break_value_parsing ____________\r\npatchproof_generated_tests\\test_hard_mode_oracle.py:19: in test_parameter_named_help_does_not_break_value_parsing\r\n    assert (result.exit_code, result.output) == (0, \"kept-value\\n\")\r\nE   AssertionError: assert (2, 'Usage: d...ue, y, yes\\n') == (0, 'kept-value\\n')\r\nE     \r\nE     At index 0 diff: 2 != 0\r\nE     Use -v to get more diff\r\n!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!\r\n1 failed in 0.45s\r\n",
+        "test_node_id": "patchproof_generated_tests/test_hard_mode_oracle.py::test_parameter_named_help_does_not_break_value_parsing"
+      },
+      "case_id": "click-3678-parameter-named-help",
+      "changed_python_test_paths": [
+        "tests/test_basic.py",
+        "tests/test_info_dict.py",
+        "tests/test_options.py"
+      ],
+      "differential_pattern": "BASE_ASSERTION_FAILED_HEAD_PASSED",
+      "head": {
+        "artifact_sha256_after": "9e8f89b99a64a80058a00ce726e289437b4ebde007c411672ac11fa1914e8e90",
+        "artifact_sha256_before": "9e8f89b99a64a80058a00ce726e289437b4ebde007c411672ac11fa1914e8e90",
+        "collected_count": 1,
+        "detail": null,
+        "duration_seconds": 0.8910000000614673,
+        "exit_code": 0,
+        "expected_artifact_sha256": "9e8f89b99a64a80058a00ce726e289437b4ebde007c411672ac11fa1914e8e90",
+        "role": "HEAD",
+        "sha": "a28d839d3e68bb81b77bcd862fb29e35dcf894f9",
+        "status": "PASSED",
+        "stderr": "",
+        "stdout": ".                                                                        [100%]\r\n1 passed in 0.45s\r\n",
+        "test_node_id": "patchproof_generated_tests/test_hard_mode_oracle.py::test_parameter_named_help_does_not_break_value_parsing"
+      },
+      "mechanical_reason": "the identical selected test assertion failed on BASE and passed on HEAD; semantic claim support has not been assessed",
+      "mechanical_status": "DISCRIMINATING",
+      "oracle_file": "oracles/click_parameter_named_help.py",
+      "oracle_sha256": "9e8f89b99a64a80058a00ce726e289437b4ebde007c411672ac11fa1914e8e90"
+    },
+    {
+      "accepted": true,
+      "anti_leakage": {
+        "context_sha256": "18704b8e1be059118d24665fa62285207e4c87f17180a81ebc42fd9476d68484",
+        "excluded_changed_files_observed": 1,
+        "excluded_paths_declared": [
+          "tests/test_validators.py"
+        ],
+        "excluded_python_paths_observed": 1,
+        "leaked_excluded_paths": [],
+        "leaked_oracle_lines": [],
+        "passed": true
+      },
+      "base": {
+        "artifact_sha256_after": "b96e107f0e1d0c0ca33147a2fa6a3a866c83f5106cc437240e8c7e35f6814837",
+        "artifact_sha256_before": "b96e107f0e1d0c0ca33147a2fa6a3a866c83f5106cc437240e8c7e35f6814837",
+        "collected_count": 1,
+        "detail": "assert True is False\npatchproof_generated_tests\\test_hard_mode_oracle.py:20: in test_nested_disabled_context_preserves_outer_disabled_state\n    assert observed is False\nE   assert True is False",
+        "duration_seconds": 1.1099999998696148,
+        "exit_code": 1,
+        "expected_artifact_sha256": "b96e107f0e1d0c0ca33147a2fa6a3a866c83f5106cc437240e8c7e35f6814837",
+        "role": "BASE",
+        "sha": "ab7f8b2f4c0f747d5b1575247ce35e5adaad182e",
+        "status": "ASSERTION_FAILED",
+        "stderr": "",
+        "stdout": "F\r\n================================== FAILURES ===================================\r\n_________ test_nested_disabled_context_preserves_outer_disabled_state _________\r\npatchproof_generated_tests\\test_hard_mode_oracle.py:20: in test_nested_disabled_context_preserves_outer_disabled_state\r\n    assert observed is False\r\nE   assert True is False\r\n!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!\r\n1 failed in 0.59s\r\n",
+        "test_node_id": "patchproof_generated_tests/test_hard_mode_oracle.py::test_nested_disabled_context_preserves_outer_disabled_state"
+      },
+      "case_id": "attrs-1513-nested-disabled-state",
+      "changed_python_test_paths": [
+        "tests/test_validators.py"
+      ],
+      "differential_pattern": "BASE_ASSERTION_FAILED_HEAD_PASSED",
+      "head": {
+        "artifact_sha256_after": "b96e107f0e1d0c0ca33147a2fa6a3a866c83f5106cc437240e8c7e35f6814837",
+        "artifact_sha256_before": "b96e107f0e1d0c0ca33147a2fa6a3a866c83f5106cc437240e8c7e35f6814837",
+        "collected_count": 1,
+        "detail": null,
+        "duration_seconds": 0.7809999999590218,
+        "exit_code": 0,
+        "expected_artifact_sha256": "b96e107f0e1d0c0ca33147a2fa6a3a866c83f5106cc437240e8c7e35f6814837",
+        "role": "HEAD",
+        "sha": "91f3695fe70a6d58c95660addd5ef8d46bfebd61",
+        "status": "PASSED",
+        "stderr": "",
+        "stdout": ".                                                                        [100%]\r\n1 passed in 0.28s\r\n",
+        "test_node_id": "patchproof_generated_tests/test_hard_mode_oracle.py::test_nested_disabled_context_preserves_outer_disabled_state"
+      },
+      "mechanical_reason": "the identical selected test assertion failed on BASE and passed on HEAD; semantic claim support has not been assessed",
+      "mechanical_status": "DISCRIMINATING",
+      "oracle_file": "oracles/attrs_nested_disabled.py",
+      "oracle_sha256": "b96e107f0e1d0c0ca33147a2fa6a3a866c83f5106cc437240e8c7e35f6814837"
+    },
+    {
+      "accepted": true,
+      "anti_leakage": {
+        "context_sha256": "92fdc07b37e80e8f7ad75e73c2457f5e293ec9dbeb51e805e5f690ce6813da54",
+        "excluded_changed_files_observed": 1,
+        "excluded_paths_declared": [
+          "tests/test_deserialization.py"
+        ],
+        "excluded_python_paths_observed": 1,
+        "leaked_excluded_paths": [],
+        "leaked_oracle_lines": [],
+        "passed": true
+      },
+      "base": {
+        "artifact_sha256_after": "eca3c77700740836c15f3c958896ac6757864a6d383d9ff4c194905b2a680ab2",
+        "artifact_sha256_before": "eca3c77700740836c15f3c958896ac6757864a6d383d9ff4c194905b2a680ab2",
+        "collected_count": 1,
+        "detail": "AssertionError: assert None == {'address': {'city': 'Pune'}}\npatchproof_generated_tests\\test_hard_mode_oracle.py:25: in test_nested_partial_uses_attribute_name_when_data_key_differs\n    assert observed == {\"address\": {\"city\": \"Pune\"}}\nE   AssertionError: assert None == {'address': {'city': 'Pune'}}",
+        "duration_seconds": 0.9529999999795109,
+        "exit_code": 1,
+        "expected_artifact_sha256": "eca3c77700740836c15f3c958896ac6757864a6d383d9ff4c194905b2a680ab2",
+        "role": "BASE",
+        "sha": "65374df0c31cdc45acc4435741779298201306a2",
+        "status": "ASSERTION_FAILED",
+        "stderr": "",
+        "stdout": "F\r\n================================== FAILURES ===================================\r\n________ test_nested_partial_uses_attribute_name_when_data_key_differs ________\r\npatchproof_generated_tests\\test_hard_mode_oracle.py:25: in test_nested_partial_uses_attribute_name_when_data_key_differs\r\n    assert observed == {\"address\": {\"city\": \"Pune\"}}\r\nE   AssertionError: assert None == {'address': {'city': 'Pune'}}\r\n!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!\r\n1 failed in 0.52s\r\n",
+        "test_node_id": "patchproof_generated_tests/test_hard_mode_oracle.py::test_nested_partial_uses_attribute_name_when_data_key_differs"
+      },
+      "case_id": "marshmallow-2903-nested-partial-data-key",
+      "changed_python_test_paths": [
+        "tests/test_deserialization.py"
+      ],
+      "differential_pattern": "BASE_ASSERTION_FAILED_HEAD_PASSED",
+      "head": {
+        "artifact_sha256_after": "eca3c77700740836c15f3c958896ac6757864a6d383d9ff4c194905b2a680ab2",
+        "artifact_sha256_before": "eca3c77700740836c15f3c958896ac6757864a6d383d9ff4c194905b2a680ab2",
+        "collected_count": 1,
+        "detail": null,
+        "duration_seconds": 0.5939999998081475,
+        "exit_code": 0,
+        "expected_artifact_sha256": "eca3c77700740836c15f3c958896ac6757864a6d383d9ff4c194905b2a680ab2",
+        "role": "HEAD",
+        "sha": "7f8ac62da6150191f465ed44ae00043a4dcb611c",
+        "status": "PASSED",
+        "stderr": "",
+        "stdout": ".                                                                        [100%]\r\n1 passed in 0.25s\r\n",
+        "test_node_id": "patchproof_generated_tests/test_hard_mode_oracle.py::test_nested_partial_uses_attribute_name_when_data_key_differs"
+      },
+      "mechanical_reason": "the identical selected test assertion failed on BASE and passed on HEAD; semantic claim support has not been assessed",
+      "mechanical_status": "DISCRIMINATING",
+      "oracle_file": "oracles/marshmallow_nested_partial_data_key.py",
+      "oracle_sha256": "eca3c77700740836c15f3c958896ac6757864a6d383d9ff4c194905b2a680ab2"
+    },
+    {
+      "accepted": true,
+      "anti_leakage": {
+        "context_sha256": "88237d14af0fd4d15b9e9f5c8ae8ea57e253915dd2b7a11d6b75c5803fbb1981",
+        "excluded_changed_files_observed": 1,
+        "excluded_paths_declared": [
+          "tests/test_nodes_position.py"
+        ],
+        "excluded_python_paths_observed": 1,
+        "leaked_excluded_paths": [],
+        "leaked_oracle_lines": [],
+        "passed": true
+      },
+      "base": {
+        "artifact_sha256_after": "dfd89c7a181f05f004b7c2e8444e7257d92db9ff2c667b2723615c9c1be7a8bc",
+        "artifact_sha256_before": "dfd89c7a181f05f004b7c2e8444e7257d92db9ff2c667b2723615c9c1be7a8bc",
+        "collected_count": 1,
+        "detail": "AssertionError: assert (False)\n +  where False = isinstance(None, <class 'astroid.nodes.scoped_nodes.scoped_nodes.ClassDef'>)\n +    where <class 'astroid.nodes.scoped_nodes.scoped_nodes.ClassDef'> = nodes.ClassDef\npatchproof_generated_tests\\test_hard_mode_oracle.py:21: in test_position_token_error_degrades_to_missing_position\n    assert isinstance(observed, nodes.ClassDef) and observed.position is None\nE   AssertionError: assert (False)\nE    +  where False = isinstance(None, <class 'astroid.nodes.scoped_nodes.scoped_nodes.ClassDef'>)\nE    +    where <class 'astroid.nodes.scoped_nodes.scoped_nodes.ClassDef'> = nodes.ClassDef",
+        "duration_seconds": 3.6870000001508743,
+        "exit_code": 1,
+        "expected_artifact_sha256": "dfd89c7a181f05f004b7c2e8444e7257d92db9ff2c667b2723615c9c1be7a8bc",
+        "role": "BASE",
+        "sha": "3258d5ff67d39b0a04383066f7a135aaf7edc422",
+        "status": "ASSERTION_FAILED",
+        "stderr": "",
+        "stdout": "F\r\n================================== FAILURES ===================================\r\n___________ test_position_token_error_degrades_to_missing_position ____________\r\npatchproof_generated_tests\\test_hard_mode_oracle.py:21: in test_position_token_error_degrades_to_missing_position\r\n    assert isinstance(observed, nodes.ClassDef) and observed.position is None\r\nE   AssertionError: assert (False)\r\nE    +  where False = isinstance(None, <class 'astroid.nodes.scoped_nodes.scoped_nodes.ClassDef'>)\r\nE    +    where <class 'astroid.nodes.scoped_nodes.scoped_nodes.ClassDef'> = nodes.ClassDef\r\n!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!\r\n1 failed in 3.02s\r\n",
+        "test_node_id": "patchproof_generated_tests/test_hard_mode_oracle.py::test_position_token_error_degrades_to_missing_position"
+      },
+      "case_id": "astroid-3075-token-error-position",
+      "changed_python_test_paths": [
+        "tests/test_nodes_position.py"
+      ],
+      "differential_pattern": "BASE_ASSERTION_FAILED_HEAD_PASSED",
+      "head": {
+        "artifact_sha256_after": "dfd89c7a181f05f004b7c2e8444e7257d92db9ff2c667b2723615c9c1be7a8bc",
+        "artifact_sha256_before": "dfd89c7a181f05f004b7c2e8444e7257d92db9ff2c667b2723615c9c1be7a8bc",
+        "collected_count": 1,
+        "detail": null,
+        "duration_seconds": 2.125,
+        "exit_code": 0,
+        "expected_artifact_sha256": "dfd89c7a181f05f004b7c2e8444e7257d92db9ff2c667b2723615c9c1be7a8bc",
+        "role": "HEAD",
+        "sha": "29a23547ed755dcd53c086097449999608511002",
+        "status": "PASSED",
+        "stderr": "",
+        "stdout": ".                                                                        [100%]\r\n1 passed in 1.60s\r\n",
+        "test_node_id": "patchproof_generated_tests/test_hard_mode_oracle.py::test_position_token_error_degrades_to_missing_position"
+      },
+      "mechanical_reason": "the identical selected test assertion failed on BASE and passed on HEAD; semantic claim support has not been assessed",
+      "mechanical_status": "DISCRIMINATING",
+      "oracle_file": "oracles/astroid_token_error_position.py",
+      "oracle_sha256": "dfd89c7a181f05f004b7c2e8444e7257d92db9ff2c667b2723615c9c1be7a8bc"
+    },
+    {
+      "accepted": true,
+      "anti_leakage": {
+        "context_sha256": "3b79181421d4ebab1a7b7826eac11d4b36f4ccb5e92f7aa02acc427c9c19921d",
+        "excluded_changed_files_observed": 0,
+        "excluded_paths_declared": [],
+        "excluded_python_paths_observed": 0,
+        "leaked_excluded_paths": [],
+        "leaked_oracle_lines": [],
+        "passed": true
+      },
+      "base": {
+        "artifact_sha256_after": "81758ecd2a81f65bba1d81facaf54b9772616a247804253a97cde9823d6eb0dd",
+        "artifact_sha256_before": "81758ecd2a81f65bba1d81facaf54b9772616a247804253a97cde9823d6eb0dd",
+        "collected_count": 1,
+        "detail": "AssertionError: assert (Workspace(name='monorepo', root='.') is not None and 'monorepo' == 'api'\n  \n  - api\n  + monorepo)\npatchproof_generated_tests\\test_hard_mode_oracle.py:15: in test_nested_workspace_resolution_prefers_deepest_owner\n    assert owner is not None and owner.name == \"api\"\nE   AssertionError: assert (Workspace(name='monorepo', root='.') is not None and 'monorepo' == 'api'\nE     \nE     - api\nE     + monorepo)",
+        "duration_seconds": 0.4529999999795109,
+        "exit_code": 1,
+        "expected_artifact_sha256": "81758ecd2a81f65bba1d81facaf54b9772616a247804253a97cde9823d6eb0dd",
+        "role": "BASE",
+        "sha": "da3210f15fdf50fafa7005b988d0baddc237f443",
+        "status": "ASSERTION_FAILED",
+        "stderr": "",
+        "stdout": "F\r\n================================== FAILURES ===================================\r\n___________ test_nested_workspace_resolution_prefers_deepest_owner ____________\r\npatchproof_generated_tests\\test_hard_mode_oracle.py:15: in test_nested_workspace_resolution_prefers_deepest_owner\r\n    assert owner is not None and owner.name == \"api\"\r\nE   AssertionError: assert (Workspace(name='monorepo', root='.') is not None and 'monorepo' == 'api'\r\nE     \r\nE     - api\r\nE     + monorepo)\r\n!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!\r\n1 failed in 0.13s\r\n",
+        "test_node_id": "patchproof_generated_tests/test_hard_mode_oracle.py::test_nested_workspace_resolution_prefers_deepest_owner"
+      },
+      "case_id": "synthetic-nested-workspace-owner",
+      "changed_python_test_paths": [],
+      "differential_pattern": "BASE_ASSERTION_FAILED_HEAD_PASSED",
+      "head": {
+        "artifact_sha256_after": "81758ecd2a81f65bba1d81facaf54b9772616a247804253a97cde9823d6eb0dd",
+        "artifact_sha256_before": "81758ecd2a81f65bba1d81facaf54b9772616a247804253a97cde9823d6eb0dd",
+        "collected_count": 1,
+        "detail": null,
+        "duration_seconds": 0.4380000000819564,
+        "exit_code": 0,
+        "expected_artifact_sha256": "81758ecd2a81f65bba1d81facaf54b9772616a247804253a97cde9823d6eb0dd",
+        "role": "HEAD",
+        "sha": "0ad93cdffbdfb51d53bd99d28c4092138932179d",
+        "status": "PASSED",
+        "stderr": "",
+        "stdout": ".                                                                        [100%]\r\n1 passed in 0.09s\r\n",
+        "test_node_id": "patchproof_generated_tests/test_hard_mode_oracle.py::test_nested_workspace_resolution_prefers_deepest_owner"
+      },
+      "mechanical_reason": "the identical selected test assertion failed on BASE and passed on HEAD; semantic claim support has not been assessed",
+      "mechanical_status": "DISCRIMINATING",
+      "oracle_file": "oracles/synthetic_nested_workspace.py",
+      "oracle_sha256": "81758ecd2a81f65bba1d81facaf54b9772616a247804253a97cde9823d6eb0dd"
+    }
+  ],
+  "created_at": "2026-08-27T07:21:10.941987+00:00",
+  "manifest_sha256": "8c11541035c8a179eb7b66fe7fcaaac78a42aafddae03917b7a08fa315155a78",
+  "schema_version": 1
+}

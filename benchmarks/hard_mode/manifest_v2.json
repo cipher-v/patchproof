@@ -1,0 +1,190 @@
+{
+  "version": 1,
+  "protocol": {
+    "declared_run_id": "hard-mode-v2-gemini-3.6-flash-2026-08-26",
+    "model_name": "gemini-3.6-flash",
+    "temperature": 0.1,
+    "thinking_level": "LOW",
+    "claim_calls_per_case": 1,
+    "candidate_calls_per_case": 2,
+    "assessment_calls_per_discriminating_case": 1,
+    "transient_provider_retries_per_logical_call": 1,
+    "narrative_policy": "Verbatim bounded public PR title and body; synthetic title and body frozen here.",
+    "withholding_policy": "Every changed upstream Python test path is excluded before diff, symbol, snippet, and repository scan derivation. Developer oracles remain outside evaluated repositories.",
+    "pacing_policy": "BETWEEN_CASES",
+    "inter_case_delay_seconds": 60
+  },
+  "cases": [
+    {
+      "case_id": "click-3678-parameter-named-help",
+      "kind": "HISTORICAL_PR",
+      "repository": "pallets/click",
+      "source_url": "https://github.com/pallets/click.git",
+      "pull_request_number": 3678,
+      "pull_request_url": "https://github.com/pallets/click/pull/3678",
+      "merged_at": "2026-07-10T03:24:09Z",
+      "base_sha": "8c1a0a7abbc1c36f70d1f65f3604acc46c5ce6ab",
+      "head_sha": "a28d839d3e68bb81b77bcd862fb29e35dcf894f9",
+      "category": "CLI parser parameter storage collision",
+      "difficulty_rationale": "The failure emerges only when automatic help-option state and a user parameter share a callback storage name; it crosses command construction, parsing, callback binding, and runner output.",
+      "production_files_changed": [
+        "src/click/core.py"
+      ],
+      "production_additions": 44,
+      "production_deletions": 2,
+      "interface_exists_on_both_revisions": true,
+      "environment_caveat": "Execution uses the checkout's src directory on PYTHONPATH and a top-level generated-test directory so unrelated upstream tests/conftest.py is not loaded.",
+      "expected_base_result": "ASSERTION_FAILED",
+      "expected_head_result": "PASSED",
+      "title": "Fix parsing when a parameter is named `help`",
+      "body": "This PR fixes #2819 by having ou pre-configured `--help` parameter automatically change its internal name used to store its value, in the case of a user providing its own argument or option conflicting with ours.\n\nNote that I arbitrarily used a convention of adding underscores `_` to that internal name until no other parameter conflict with it. I'm ready to change that strategy if it is does not look good.",
+      "excluded_paths": [
+        "tests/test_basic.py",
+        "tests/test_info_dict.py",
+        "tests/test_options.py"
+      ],
+      "expected_excluded_changed_files": 3,
+      "repository_python_paths": [
+        "src"
+      ],
+      "oracle_file": "oracles/click_parameter_named_help.py",
+      "oracle_sha256": "9e8f89b99a64a80058a00ce726e289437b4ebde007c411672ac11fa1914e8e90",
+      "oracle_test_function": "test_parameter_named_help_does_not_break_value_parsing"
+    },
+    {
+      "case_id": "attrs-1513-nested-disabled-state",
+      "kind": "HISTORICAL_PR",
+      "repository": "python-attrs/attrs",
+      "source_url": "https://github.com/python-attrs/attrs.git",
+      "pull_request_number": 1513,
+      "pull_request_url": "https://github.com/python-attrs/attrs/pull/1513",
+      "merged_at": "2026-03-14T14:26:05Z",
+      "base_sha": "ab7f8b2f4c0f747d5b1575247ce35e5adaad182e",
+      "head_sha": "91f3695fe70a6d58c95660addd5ef8d46bfebd61",
+      "category": "Nested context-manager state restoration",
+      "difficulty_rationale": "The observable bug requires entering and leaving two nested stateful contexts and checking the intermediate state, not merely the final cleanup state.",
+      "production_files_changed": [
+        "src/attr/validators.py"
+      ],
+      "production_additions": 3,
+      "production_deletions": 1,
+      "interface_exists_on_both_revisions": true,
+      "environment_caveat": "Execution uses the checkout's src directory on PYTHONPATH and a top-level generated-test directory, avoiding the upstream suite conftest dependency on Hypothesis.",
+      "expected_base_result": "ASSERTION_FAILED",
+      "expected_head_result": "PASSED",
+      "title": "Fix validators.disabled() to save/restore state on nesting",
+      "body": "## Summary\n\n`validators.disabled()` unconditionally re-enables validators in its `finally` block instead of restoring the previous state. This breaks nested usage — the inner context manager prematurely re-enables validators when it exits.\n\n```python\nwith disabled():\n    with disabled():\n        pass\n    # BUG: validators are now ENABLED even though we're still in the outer disabled()\n    C(x=\"not_int\")  # raises TypeError unexpectedly\n```\n\nThe fix saves the current state with `get_run_validators()` before disabling, then restores it in `finally`. This is a one-line semantic change.\n\nThe same pattern of nesting breakage also applies when `set_run_validators(False)` was called before entering `disabled()` — the context manager would unexpectedly override that.\n",
+      "excluded_paths": [
+        "tests/test_validators.py"
+      ],
+      "expected_excluded_changed_files": 1,
+      "repository_python_paths": [
+        "src"
+      ],
+      "oracle_file": "oracles/attrs_nested_disabled.py",
+      "oracle_sha256": "b96e107f0e1d0c0ca33147a2fa6a3a866c83f5106cc437240e8c7e35f6814837",
+      "oracle_test_function": "test_nested_disabled_context_preserves_outer_disabled_state"
+    },
+    {
+      "case_id": "marshmallow-2903-nested-partial-data-key",
+      "kind": "HISTORICAL_PR",
+      "repository": "marshmallow-code/marshmallow",
+      "source_url": "https://github.com/marshmallow-code/marshmallow.git",
+      "pull_request_number": 2903,
+      "pull_request_url": "https://github.com/marshmallow-code/marshmallow/pull/2903",
+      "merged_at": "2026-03-25T22:27:12Z",
+      "base_sha": "65374df0c31cdc45acc4435741779298201306a2",
+      "head_sha": "7f8ac62da6150191f465ed44ae00043a4dcb611c",
+      "category": "Nested schema partial deserialization with aliased input keys",
+      "difficulty_rationale": "The regression needs two schema levels, a required nested field, an external data_key distinct from the attribute name, and a dot-delimited partial path to interact correctly.",
+      "production_files_changed": [
+        "src/marshmallow/schema.py"
+      ],
+      "production_additions": 1,
+      "production_deletions": 1,
+      "interface_exists_on_both_revisions": true,
+      "environment_caveat": "Execution uses the checkout's src directory on PYTHONPATH and a top-level generated-test directory, avoiding the upstream suite conftest dependency on simplejson.",
+      "expected_base_result": "ASSERTION_FAILED",
+      "expected_head_result": "PASSED",
+      "title": "Fix nested partial to use attr_name instead of data_key for prefix",
+      "body": "## Summary\n\nWhen using dot-delimited `partial` with nested schemas, the sub-partial prefix is derived from `field_name` (the `data_key`) instead of `attr_name`. This causes the nested partial to silently break when a field has `data_key` set.\n\n## Problem\n\nThe `partial` parameter accepts dot-delimited attribute names:\n```python\nschema.load(data, partial=(\"address.zip_code\",))\n```\n\nIn `_deserialize`, the top-level partial check correctly uses `attr_name`:\n```python\npartial_is_collection and attr_name in partial\n```\n\nBut the nested sub-partial extraction uses `field_name` (which is the `data_key` if set):\n```python\nprefix = field_name + \".\"  # field_name could be \"homeAddress\" (data_key)\n```\n\nIf a field is declared as `address = Nested(AddressSchema, data_key=\"homeAddress\")`, then:\n- `attr_name` = `\"address\"`\n- `field_name` = `\"homeAddress\"` (from data_key)\n- User passes `partial=(\"address.zip_code\",)`\n- `prefix` = `\"homeAddress.\"` — doesn't match `\"address.zip_code\"`\n- Result: `sub_partial` is empty, nested schema doesn't get `partial`\n\n## Fix\n\nUse `attr_name` instead of `field_name` for the prefix, consistent with how the top-level partial check works.\n",
+      "excluded_paths": [
+        "tests/test_deserialization.py"
+      ],
+      "expected_excluded_changed_files": 1,
+      "repository_python_paths": [
+        "src"
+      ],
+      "oracle_file": "oracles/marshmallow_nested_partial_data_key.py",
+      "oracle_sha256": "eca3c77700740836c15f3c958896ac6757864a6d383d9ff4c194905b2a680ab2",
+      "oracle_test_function": "test_nested_partial_uses_attribute_name_when_data_key_differs"
+    },
+    {
+      "case_id": "astroid-3075-token-error-position",
+      "kind": "HISTORICAL_PR",
+      "repository": "pylint-dev/astroid",
+      "source_url": "https://github.com/pylint-dev/astroid.git",
+      "pull_request_number": 3075,
+      "pull_request_url": "https://github.com/pylint-dev/astroid/pull/3075",
+      "merged_at": "2026-05-24T07:23:16Z",
+      "base_sha": "3258d5ff67d39b0a04383066f7a135aaf7edc422",
+      "head_sha": "29a23547ed755dcd53c086097449999608511002",
+      "category": "AST reconstruction under tokenizer failure",
+      "difficulty_rationale": "The behavior sits behind AST rebuilding and position extraction and requires a deterministic injected tokenizer failure to distinguish graceful degradation from an uncaught exception.",
+      "production_files_changed": [
+        "astroid/rebuilder.py"
+      ],
+      "production_additions": 21,
+      "production_deletions": 16,
+      "interface_exists_on_both_revisions": true,
+      "environment_caveat": "The oracle injects tokenize.TokenError deterministically because the natural malformed-input failure is Python-version-dependent; execution imports the checkout root directly.",
+      "expected_base_result": "ASSERTION_FAILED",
+      "expected_head_result": "PASSED",
+      "title": "fix: avoid uncaught TokenError when computing node positions",
+      "body": "## Type of Changes\n\n|     | Type          |\n| --- | ------------- |\n| ✓   | :bug: Bug fix |\n\n## Description\n\n`RebuildVisitor._get_position_info` tokenizes a slice of the source to locate the keyword/name span of a class or function definition. On Python < 3.12, `tokenize.generate_tokens` can raise `TokenError` for malformed input (e.g. an unterminated bracket), which escaped as an uncaught non-`AstroidError` exception during the build.\n\nPosition computation now catches `TokenError` and treats such a node as having no position information, instead of crashing.\n\nCloses #2527",
+      "excluded_paths": [
+        "tests/test_nodes_position.py"
+      ],
+      "expected_excluded_changed_files": 1,
+      "repository_python_paths": [
+        "."
+      ],
+      "oracle_file": "oracles/astroid_token_error_position.py",
+      "oracle_sha256": "dfd89c7a181f05f004b7c2e8444e7257d92db9ff2c667b2723615c9c1be7a8bc",
+      "oracle_test_function": "test_position_token_error_degrades_to_missing_position"
+    },
+    {
+      "case_id": "synthetic-nested-workspace-owner",
+      "kind": "LOCAL_SYNTHETIC",
+      "repository": "local/nested-workspace-fixture",
+      "source_url": null,
+      "pull_request_number": null,
+      "pull_request_url": null,
+      "merged_at": null,
+      "base_sha": "da3210f15fdf50fafa7005b988d0baddc237f443",
+      "head_sha": "0ad93cdffbdfb51d53bd99d28c4092138932179d",
+      "category": "Overlapping monorepo workspace ownership resolution",
+      "difficulty_rationale": "The scenario combines three nested workspace objects, path-containment logic, registry filtering, and a resolver tie-break rule; a shallow or single-object test cannot expose the bug.",
+      "production_files_changed": [
+        "workspace_registry.py"
+      ],
+      "production_additions": 1,
+      "production_deletions": 1,
+      "interface_exists_on_both_revisions": true,
+      "environment_caveat": "The repository is bootstrapped from checked-in BASE/HEAD snapshots with fixed Git author metadata and timestamps; no third-party dependencies are used.",
+      "expected_base_result": "ASSERTION_FAILED",
+      "expected_head_result": "PASSED",
+      "title": "Prefer the deepest workspace that owns a nested project path",
+      "body": "A registry may contain a monorepo root, a backend workspace, and a nested API workspace whose roots all contain the same file. Resolution should return the most specific (deepest) owning workspace, while paths outside every configured workspace should remain unresolved.",
+      "excluded_paths": [],
+      "expected_excluded_changed_files": 0,
+      "repository_python_paths": [
+        "."
+      ],
+      "fixture_directory": "fixtures/nested_workspace",
+      "oracle_file": "oracles/synthetic_nested_workspace.py",
+      "oracle_sha256": "81758ecd2a81f65bba1d81facaf54b9772616a247804253a97cde9823d6eb0dd",
+      "oracle_test_function": "test_nested_workspace_resolution_prefers_deepest_owner"
+    }
+  ]
+}
