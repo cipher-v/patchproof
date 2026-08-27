@@ -91,8 +91,9 @@ class HardModeProtocol(BaseModel):
     claim_calls_per_case: Literal[1]
     candidate_calls_per_case: Literal[2]
     assessment_calls_per_discriminating_case: Literal[1]
-    transient_provider_retries_per_logical_call: Literal[1]
-    maximum_possible_model_calls: int | None = Field(default=None, ge=1, le=1_000_000)
+    transient_provider_retries_per_logical_call: Literal[0, 1]
+    maximum_possible_logical_model_calls: int | None = Field(default=None, ge=1, le=1_000_000)
+    maximum_possible_provider_calls: int | None = Field(default=None, ge=1, le=2_000_000)
     declared_available_provider_calls: int | None = Field(default=None, ge=1, le=1_000_000)
     model_call_budget_preflight_passed: bool | None = None
     narrative_policy: str = Field(min_length=1, max_length=1_000)
@@ -110,7 +111,8 @@ class HardModeProtocol(BaseModel):
         ):
             raise ValueError("hard-mode pacing policy and delay are inconsistent")
         budget_values = (
-            self.maximum_possible_model_calls,
+            self.maximum_possible_logical_model_calls,
+            self.maximum_possible_provider_calls,
             self.declared_available_provider_calls,
             self.model_call_budget_preflight_passed,
         )
@@ -118,9 +120,9 @@ class HardModeProtocol(BaseModel):
             value is None for value in budget_values
         ):
             raise ValueError("hard-mode model-call budget fields must be declared together")
-        if self.maximum_possible_model_calls is not None:
+        if self.maximum_possible_provider_calls is not None:
             expected_pass = (
-                self.declared_available_provider_calls >= self.maximum_possible_model_calls
+                self.declared_available_provider_calls >= self.maximum_possible_provider_calls
             )
             if self.model_call_budget_preflight_passed is not expected_pass:
                 raise ValueError(
@@ -128,8 +130,8 @@ class HardModeProtocol(BaseModel):
                 )
         return self
 
-    def derive_maximum_possible_model_calls(self, *, case_count: int) -> int:
-        """Derive logical call capacity without pretending to query provider quota."""
+    def derive_maximum_possible_logical_model_calls(self, *, case_count: int) -> int:
+        """Derive the maximum semantic PatchProof tasks for a complete run."""
         if case_count <= 0:
             raise ValueError("hard-mode model-call budget requires at least one case")
         calls_per_case = (
@@ -138,6 +140,15 @@ class HardModeProtocol(BaseModel):
             + self.assessment_calls_per_discriminating_case
         )
         return case_count * calls_per_case
+
+    def maximum_provider_attempts_per_logical_call(self) -> int:
+        """Include the initial request and every permitted transient retry."""
+        return 1 + self.transient_provider_retries_per_logical_call
+
+    def derive_maximum_possible_provider_calls(self, *, case_count: int) -> int:
+        """Derive actual provider-request capacity needed in the worst case."""
+        logical_calls = self.derive_maximum_possible_logical_model_calls(case_count=case_count)
+        return logical_calls * self.maximum_provider_attempts_per_logical_call()
 
 
 class HardModeCase(BaseModel):
@@ -232,11 +243,22 @@ class HardModeManifest(BaseModel):
             raise ValueError("hard mode needs at least one difficult local synthetic case")
         if len({case.case_id for case in self.cases}) != len(self.cases):
             raise ValueError("hard-mode case IDs must be unique")
-        if self.protocol.maximum_possible_model_calls is not None:
-            derived = self.protocol.derive_maximum_possible_model_calls(case_count=len(self.cases))
-            if self.protocol.maximum_possible_model_calls != derived:
+        if self.protocol.maximum_possible_logical_model_calls is not None:
+            derived_logical = self.protocol.derive_maximum_possible_logical_model_calls(
+                case_count=len(self.cases)
+            )
+            derived_provider = self.protocol.derive_maximum_possible_provider_calls(
+                case_count=len(self.cases)
+            )
+            if self.protocol.maximum_possible_logical_model_calls != derived_logical:
                 raise ValueError(
-                    "manifest maximum possible model calls does not match the protocol formula"
+                    "manifest maximum possible logical model calls does not match the protocol "
+                    "formula"
+                )
+            if self.protocol.maximum_possible_provider_calls != derived_provider:
+                raise ValueError(
+                    "manifest maximum possible provider calls does not match the retry-aware "
+                    "protocol formula"
                 )
         return self
 
@@ -246,29 +268,46 @@ class HardModeCallBudgetPreflight(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    maximum_possible_model_calls: int = Field(ge=1)
+    maximum_possible_logical_model_calls: int = Field(ge=1)
+    maximum_possible_provider_calls: int = Field(ge=1)
     declared_available_provider_calls: int = Field(ge=1)
     passed: Literal[True] = True
 
 
 def _model_call_budget_preflight(manifest: HardModeManifest) -> HardModeCallBudgetPreflight:
     """Refuse an underfunded run without claiming knowledge of live provider quota."""
-    required = manifest.protocol.derive_maximum_possible_model_calls(case_count=len(manifest.cases))
-    declared_required = manifest.protocol.maximum_possible_model_calls
+    logical_required = manifest.protocol.derive_maximum_possible_logical_model_calls(
+        case_count=len(manifest.cases)
+    )
+    provider_required = manifest.protocol.derive_maximum_possible_provider_calls(
+        case_count=len(manifest.cases)
+    )
+    declared_logical_required = manifest.protocol.maximum_possible_logical_model_calls
+    declared_provider_required = manifest.protocol.maximum_possible_provider_calls
     available = manifest.protocol.declared_available_provider_calls
     declared_passed = manifest.protocol.model_call_budget_preflight_passed
-    if declared_required is None or available is None or declared_passed is None:
+    if (
+        declared_logical_required is None
+        or declared_provider_required is None
+        or available is None
+        or declared_passed is None
+    ):
         raise HardModeConfigurationError(
-            "new hard-mode live runs must record maximum possible model calls, declared available "
-            "provider calls, and preflight pass/fail in the manifest; PatchProof does not query "
-            "the provider's live remaining quota"
+            "new hard-mode live runs must record maximum possible logical model calls, maximum "
+            "possible provider calls, declared available provider calls, and preflight pass/fail "
+            "in the manifest; PatchProof does not query the provider's live remaining quota"
         )
-    if declared_required != required:
+    if declared_logical_required != logical_required:
         raise HardModeConfigurationError(
-            f"manifest records {declared_required} maximum possible model calls but the protocol "
-            f"formula derives {required}"
+            f"manifest records {declared_logical_required} maximum possible logical model calls "
+            f"but the protocol formula derives {logical_required}"
         )
-    passed = available >= required
+    if declared_provider_required != provider_required:
+        raise HardModeConfigurationError(
+            f"manifest records {declared_provider_required} maximum possible provider calls but "
+            f"the retry-aware protocol formula derives {provider_required}"
+        )
+    passed = available >= provider_required
     if declared_passed is not passed:
         raise HardModeConfigurationError(
             "manifest model-call budget pass/fail does not match its declared call capacity"
@@ -276,10 +315,11 @@ def _model_call_budget_preflight(manifest: HardModeManifest) -> HardModeCallBudg
     if not passed:
         raise HardModeConfigurationError(
             f"operator-declared provider-call availability {available} is below the maximum "
-            f"possible logical model calls {required}; refusing to start the live journal"
+            f"possible provider calls {provider_required}; refusing to start the live journal"
         )
     return HardModeCallBudgetPreflight(
-        maximum_possible_model_calls=required,
+        maximum_possible_logical_model_calls=logical_required,
+        maximum_possible_provider_calls=provider_required,
         declared_available_provider_calls=available,
     )
 
@@ -937,7 +977,12 @@ def run_live(
             "manifest_sha256": manifest_sha256,
             "model_name": manifest.protocol.model_name,
             "case_ids": [case.case_id for case in manifest.cases],
-            "maximum_possible_model_calls": (call_budget_preflight.maximum_possible_model_calls),
+            "maximum_possible_logical_model_calls": (
+                call_budget_preflight.maximum_possible_logical_model_calls
+            ),
+            "maximum_possible_provider_calls": (
+                call_budget_preflight.maximum_possible_provider_calls
+            ),
             "declared_available_provider_calls": (
                 call_budget_preflight.declared_available_provider_calls
             ),
@@ -995,7 +1040,10 @@ def run_live(
         "model_name": manifest.protocol.model_name,
         "pacing_policy": str(manifest.protocol.pacing_policy),
         "inter_case_delay_seconds": manifest.protocol.inter_case_delay_seconds,
-        "maximum_possible_model_calls": call_budget_preflight.maximum_possible_model_calls,
+        "maximum_possible_logical_model_calls": (
+            call_budget_preflight.maximum_possible_logical_model_calls
+        ),
+        "maximum_possible_provider_calls": call_budget_preflight.maximum_possible_provider_calls,
         "declared_available_provider_calls": (
             call_budget_preflight.declared_available_provider_calls
         ),
@@ -1176,10 +1224,11 @@ def summarize_live(raw: dict[str, Any]) -> dict[str, Any]:
             "representative production accuracy estimate or proof of pull-request correctness."
         ),
     }
-    if "maximum_possible_model_calls" in raw:
+    if "maximum_possible_logical_model_calls" in raw:
         summary.update(
             {
-                "maximum_possible_model_calls": raw["maximum_possible_model_calls"],
+                "maximum_possible_logical_model_calls": raw["maximum_possible_logical_model_calls"],
+                "maximum_possible_provider_calls": raw["maximum_possible_provider_calls"],
                 "declared_available_provider_calls": raw["declared_available_provider_calls"],
                 "model_call_budget_preflight_passed": raw["model_call_budget_preflight_passed"],
             }
@@ -1213,15 +1262,19 @@ def render_summary_markdown(summary: dict[str, Any]) -> str:
     )
     completed_provider_attempts = summary["provider_attempt_count_completed_results"]
     call_budget = ""
-    if "maximum_possible_model_calls" in summary:
+    if "maximum_possible_logical_model_calls" in summary:
         call_budget = f"""
 ## Model-call budget preflight
 
-- Maximum possible logical model calls: {summary["maximum_possible_model_calls"]}
+- Maximum possible logical model calls: {summary["maximum_possible_logical_model_calls"]}
+- Maximum provider attempts per logical call: derived as 1 plus permitted transient retries
+- Maximum possible provider calls: {summary["maximum_possible_provider_calls"]}
 - Operator-declared available provider calls: {summary["declared_available_provider_calls"]}
 - Preflight passed: {summary["model_call_budget_preflight_passed"]}
 
-This is an operator declaration, not a query of the provider's live remaining quota.
+A logical model call is one semantic PatchProof task. A provider attempt is an actual provider
+request, including any permitted transient retry. The available capacity is an operator declaration,
+not a query of the provider's live remaining quota.
 """
     return f"""# PatchProof hard-mode result
 
