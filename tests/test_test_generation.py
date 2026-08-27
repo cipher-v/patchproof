@@ -374,6 +374,10 @@ def test_one_repair_records_parent_lineage_and_exhausts_two_call_budget(
 ) -> None:
     initial_draft = _draft()
     repaired_draft = _draft(
+        source=initial_draft.source.replace(
+            "['org', 'org/team', 'org/team/project']",
+            "['org/team/project', 'org/team', 'org']",
+        ),
         rationale="Repairs the prior assertion while preserving the same observable behavior.",
     )
     model = FakeCandidateModel(
@@ -403,6 +407,39 @@ def test_one_repair_records_parent_lineage_and_exhausts_two_call_budget(
     assert repaired.proposal.candidate_id == "candidate-repair"
     assert repaired.proposal.target_path.endswith("test_patchproof_generated_repair.py")
     assert model.requests[1].feedback == feedback
+    with pytest.raises(CandidateBudgetExceeded):
+        asyncio.run(generator.repair(feedback=feedback))
+
+
+def test_byte_identical_repair_source_is_rejected_without_an_executable_artifact(
+    context_repository_history: ContextRepositoryHistory,
+) -> None:
+    initial_draft = _draft()
+    duplicate_repair = _draft(
+        source=initial_draft.source,
+        rationale="Renames nothing and repeats the exact same source bytes.",
+    )
+    model = FakeCandidateModel(
+        initial_draft.model_dump_json(),
+        duplicate_repair.model_dump_json(),
+    )
+    generator = _generator(model=model, context=_context(context_repository_history))
+    initial = asyncio.run(generator.generate_initial())
+    feedback = CandidateFeedback(
+        category="EXECUTION",
+        summary="The previous source did not discriminate.",
+    )
+
+    repaired = asyncio.run(generator.repair(feedback=feedback))
+
+    assert initial.status is CandidateAttemptStatus.VALIDATED
+    assert repaired.status is CandidateAttemptStatus.REJECTED
+    assert repaired.proposal is not None
+    assert repaired.proposal.source.encode("utf-8") == initial_draft.source.encode("utf-8")
+    assert repaired.validated is None
+    assert repaired.issues[0].code is CandidateIssueCode.DUPLICATE_CANDIDATE_SOURCE
+    assert generator.snapshot.model_calls == 2
+    assert generator.snapshot.repair_used is True
     with pytest.raises(CandidateBudgetExceeded):
         asyncio.run(generator.repair(feedback=feedback))
 

@@ -8,12 +8,14 @@ from pathlib import Path
 
 import pytest
 
+import patchproof.hard_mode as hard_mode_module
 from patchproof.hard_mode import (
     HardModeCaseKind,
     HardModeConfigurationError,
     HardModePacingPolicy,
     HardModeProtocol,
     HardModeRepositoryCache,
+    _model_call_budget_preflight,
     _pace_between_cases,
     load_hard_mode_manifest,
     run_live,
@@ -23,6 +25,20 @@ from patchproof.hard_mode import (
 _PROJECT_ROOT = Path(__file__).parents[1]
 _MANIFEST_PATH = _PROJECT_ROOT / "benchmarks" / "hard_mode" / "manifest.json"
 _RESULTS_ROOT = _MANIFEST_PATH.parent / "results"
+
+
+def _manifest_with_available_calls(available: int):
+    manifest, _ = load_hard_mode_manifest(_MANIFEST_PATH)
+    payload = manifest.model_dump(mode="json")
+    required = manifest.protocol.derive_maximum_possible_model_calls(case_count=len(manifest.cases))
+    payload["protocol"].update(
+        {
+            "maximum_possible_model_calls": required,
+            "declared_available_provider_calls": available,
+            "model_call_budget_preflight_passed": available >= required,
+        }
+    )
+    return hard_mode_module.HardModeManifest.model_validate(payload)
 
 
 def test_hard_mode_manifest_freezes_four_historical_repositories_and_one_synthetic() -> None:
@@ -152,6 +168,147 @@ def test_predeclared_inter_case_pacing_is_uniform_and_journaled(
     ]
     assert events[1]["declared_delay_seconds"] == 60.0
     assert events[1]["actual_delay_seconds"] == 60.25
+
+
+def test_model_call_budget_is_derived_from_protocol_and_case_count() -> None:
+    manifest = _manifest_with_available_calls(20)
+
+    required = manifest.protocol.derive_maximum_possible_model_calls(case_count=len(manifest.cases))
+    preflight = _model_call_budget_preflight(manifest)
+
+    assert required == 5 * (1 + 2 + 1) == 20
+    assert manifest.protocol.maximum_possible_model_calls == 20
+    assert manifest.protocol.declared_available_provider_calls == 20
+    assert manifest.protocol.model_call_budget_preflight_passed is True
+    assert preflight.maximum_possible_model_calls == required
+    assert preflight.declared_available_provider_calls == 20
+    assert preflight.passed is True
+
+
+def test_live_run_refuses_insufficient_declared_calls_before_creating_journal(
+    writable_test_directory: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _manifest_with_available_calls(19)
+    monkeypatch.setattr(
+        hard_mode_module,
+        "load_hard_mode_manifest",
+        lambda _path: (manifest, "a" * 64),
+    )
+    journal = writable_test_directory / "insufficient.jsonl"
+    raw = writable_test_directory / "insufficient.json"
+
+    with pytest.raises(HardModeConfigurationError, match=r"19.*below.*20"):
+        run_live(
+            manifest_path=writable_test_directory / "manifest.json",
+            cache_root=writable_test_directory / "cache",
+            workspace_root=writable_test_directory / "workspaces",
+            gate_path=writable_test_directory / "missing-gate.json",
+            journal_path=journal,
+            raw_path=raw,
+        )
+
+    assert not journal.exists()
+    assert not raw.exists()
+    assert not (writable_test_directory / "cache").exists()
+
+
+def test_old_manifest_requires_explicit_call_budget_for_a_new_live_run(
+    writable_test_directory: Path,
+) -> None:
+    manifest, _ = load_hard_mode_manifest(_MANIFEST_PATH)
+    assert manifest.protocol.declared_available_provider_calls is None
+    journal = writable_test_directory / "old-manifest.jsonl"
+
+    with pytest.raises(
+        HardModeConfigurationError, match="must record maximum possible model calls"
+    ):
+        run_live(
+            manifest_path=_MANIFEST_PATH,
+            cache_root=writable_test_directory / "cache",
+            workspace_root=writable_test_directory / "workspaces",
+            gate_path=writable_test_directory / "missing-gate.json",
+            journal_path=journal,
+            raw_path=writable_test_directory / "raw.json",
+        )
+
+    assert not journal.exists()
+
+
+def test_live_run_records_passing_call_budget_before_fake_case_execution(
+    writable_test_directory: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _manifest_with_available_calls(20)
+    manifest_sha256 = "a" * 64
+    monkeypatch.setattr(
+        hard_mode_module,
+        "load_hard_mode_manifest",
+        lambda _path: (manifest, manifest_sha256),
+    )
+    monkeypatch.setattr(
+        hard_mode_module.HardModeRepositoryCache,
+        "prepare",
+        lambda _self, _case: writable_test_directory,
+    )
+
+    async def fake_live_case(**kwargs):
+        case = kwargs["case"]
+        return {
+            "case_id": case.case_id,
+            "kind": str(case.kind),
+            "terminal_status": "FAKE_NO_PROVIDER_CALL",
+            "claim_result": None,
+            "candidate_attempts": [],
+            "candidate_evaluations": [],
+            "semantic_assessment": None,
+            "final_outcome": None,
+        }
+
+    monkeypatch.setattr(hard_mode_module, "_run_live_case", fake_live_case)
+    gate = writable_test_directory / "gate.json"
+    gate.write_text(
+        json.dumps(
+            {
+                "accepted": True,
+                "manifest_sha256": manifest_sha256,
+                "case_count": len(manifest.cases),
+                "cases": [
+                    {
+                        "case_id": case.case_id,
+                        "accepted": True,
+                        "anti_leakage": {"context_sha256": "b" * 64},
+                    }
+                    for case in manifest.cases
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    journal = writable_test_directory / "passing.jsonl"
+    raw_path = writable_test_directory / "passing.json"
+
+    raw = run_live(
+        manifest_path=writable_test_directory / "manifest.json",
+        cache_root=writable_test_directory / "cache",
+        workspace_root=writable_test_directory / "workspaces",
+        gate_path=gate,
+        journal_path=journal,
+        raw_path=raw_path,
+    )
+
+    started = json.loads(journal.read_text(encoding="utf-8").splitlines()[0])
+    assert started["event"] == "RUN_STARTED"
+    assert started["maximum_possible_model_calls"] == 20
+    assert started["declared_available_provider_calls"] == 20
+    assert started["model_call_budget_preflight_passed"] is True
+    assert raw["maximum_possible_model_calls"] == 20
+    assert raw["declared_available_provider_calls"] == 20
+    assert raw["model_call_budget_preflight_passed"] is True
+    summary = summarize_live(raw)
+    assert summary["maximum_possible_model_calls"] == 20
+    assert summary["declared_available_provider_calls"] == 20
+    assert summary["model_call_budget_preflight_passed"] is True
 
 
 def test_existing_journal_blocks_any_live_rerun(writable_test_directory: Path) -> None:

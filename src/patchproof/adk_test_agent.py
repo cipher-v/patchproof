@@ -44,9 +44,21 @@ Return exactly one narrow deterministic pytest candidate for the supplied claim.
 - avoid network, subprocess, shell, dynamic-code, destructive-file, skip, xfail, and timing logic;
 - remain small enough to audit and replay as identical UTF-8 bytes on BASE and HEAD.
 
-For a repair task, address only the supplied bounded feedback. Do not modify production code or
-existing tests. PatchProof assigns the candidate ID, target path, and declared test function; do not
-return those fields. The rationale is a concise audit summary, never hidden chain-of-thought.
+For a repair task, diagnose the previous test against the supplied bounded execution evidence before
+returning one replacement candidate:
+1. Compare the previous candidate's intended behavior with the actual BASE and HEAD failures.
+2. Identify which assumption in the generated test caused the observed failure, and change that
+   assumption rather than merely renaming variables or rewriting equivalent code.
+3. Keep the repaired test targeted exactly at the selected behavioral claim.
+4. If an expected domain exception represents the old broken behavior and its exception/import is
+   grounded in repository context, express that behavior as deterministic pytest assertion evidence.
+5. Do not catch broad or unrelated exceptions merely to force BASE to fail.
+6. Do not modify production code or existing tests, and return only one repaired candidate.
+Perform this diagnosis internally; do not return diagnosis steps or a private reasoning field. The
+rationale may briefly state which test assumption was corrected, but must remain audit-friendly.
+
+PatchProof assigns the candidate ID, target path, and declared test function; do not return those
+fields. The rationale is a concise audit summary, never hidden chain-of-thought.
 
 Return only one JSON object with exactly two string fields named `source` and `rationale`. The
 `source` field must contain a meaningful deterministic assertion related to the selected behavioral

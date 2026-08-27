@@ -106,6 +106,7 @@ class CandidateIssueCode(StrEnum):
     UNGROUNDED_IMPORT = "UNGROUNDED_IMPORT"
     FORBIDDEN_CALL = "FORBIDDEN_CALL"
     DUPLICATE_CANDIDATE_ID = "DUPLICATE_CANDIDATE_ID"
+    DUPLICATE_CANDIDATE_SOURCE = "DUPLICATE_CANDIDATE_SOURCE"
 
 
 class CandidateTestProposal(StrictGeminiOutputModel):
@@ -719,7 +720,19 @@ class BoundedCandidateTestGenerator:
                         response_budget_exceeded=False,
                         validation_error=error,
                     )
-                if proposal is not None and any(
+                if (
+                    proposal is not None
+                    and origin is CandidateOrigin.REPAIR
+                    and previous is not None
+                    and previous.proposal is not None
+                    and proposal.source.encode("utf-8") == previous.proposal.source.encode("utf-8")
+                ):
+                    issue = CandidateValidationIssue(
+                        code=CandidateIssueCode.DUPLICATE_CANDIDATE_SOURCE,
+                        message="repair source must differ byte-for-byte from the previous source",
+                    )
+                    status = CandidateAttemptStatus.REJECTED
+                elif proposal is not None and any(
                     attempt.proposal is not None
                     and attempt.proposal.candidate_id == proposal.candidate_id
                     for attempt in self._attempts
