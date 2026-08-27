@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -32,6 +33,8 @@ from patchproof.models import (
     DifferentialPattern,
     ExecutionResult,
     MechanicalEvidenceStatus,
+    RevisionRole,
+    TestExecutionStatus,
 )
 from patchproof.storage import StoredEvidence, VerificationRunStore
 from patchproof.structured_output import StrictGeminiOutputModel
@@ -52,6 +55,22 @@ from patchproof.workflow import (
     TerminalReason,
     VerificationRun,
 )
+
+_EXCEPTION_LINE_PATTERN = re.compile(
+    r"^(?:E\s+)?(?P<type>(?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*"
+    r"(?:Error|Exception|Warning|Exit|Interrupt)):\s*(?P<message>.*)$"
+)
+_CREDENTIAL_PATTERN = re.compile(
+    r"(?i)\b(?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password)"
+    r"\b\s*[:=]\s*(?:Bearer\s+)?[^\s,;]+"
+)
+_BEARER_PATTERN = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
+_KNOWN_TOKEN_PATTERN = re.compile(r"(?:AIza[A-Za-z0-9_-]{20,}|gh[opsu]_[A-Za-z0-9_]{20,})")
+_WINDOWS_PATH_PATTERN = re.compile(r"(?i)(?:[A-Z]:[\\/]|\\\\)[^\s'\"]+")
+_UNIX_PATH_PATTERN = re.compile(r"(?<![\w.])/(?:[^/\s]+/)+[^:\s]+")
+_OPAQUE_VALUE_PATTERN = re.compile(r"(?<![A-Za-z0-9])[A-Za-z0-9_-]{32,}(?![A-Za-z0-9])")
+_CONTROL_PATTERN = re.compile(r"[\x00-\x1f\x7f]+")
+_TRUNCATION_MARKER = "...[truncated]"
 
 
 class AssertionRelation(StrEnum):
@@ -502,15 +521,131 @@ class EvidenceWorkflow:
                 summary="The previous candidate did not produce a valid executable artifact.",
             )
         assert challenge is not None
+        assert attempt.validated is not None
+        base_exception = EvidenceWorkflow._execution_exception(challenge.base)
+        head_exception = EvidenceWorkflow._execution_exception(challenge.head)
+        observations = [
+            EvidenceWorkflow._execution_observation(
+                role=RevisionRole.BASE,
+                result=challenge.base,
+                attempt=attempt,
+                exception=base_exception,
+            ),
+            EvidenceWorkflow._execution_observation(
+                role=RevisionRole.HEAD,
+                result=challenge.head,
+                attempt=attempt,
+                exception=head_exception,
+            ),
+            (
+                f"mechanical_status={challenge.assessment.mechanical_status}; "
+                f"pattern={challenge.assessment.pattern}"
+            ),
+        ]
+        if (
+            challenge.base.status is TestExecutionStatus.TEST_ERROR
+            and challenge.head.status is TestExecutionStatus.TEST_ERROR
+        ):
+            same_exception = (
+                base_exception is not None
+                and head_exception is not None
+                and base_exception == head_exception
+            )
+            observations.append(f"same_exception_on_base_and_head={str(same_exception).lower()}")
+        elif {
+            challenge.base.status,
+            challenge.head.status,
+        } == {TestExecutionStatus.TEST_ERROR, TestExecutionStatus.PASSED}:
+            observations.append(
+                "An exception escaping on one revision is mechanically TEST_ERROR. If it "
+                "represents expected claim behavior and its exception import is grounded in "
+                "the supplied context, convert it into an explicit deterministic pytest "
+                "assertion/failure; do not catch unrelated exceptions."
+            )
         return CandidateFeedback(
             category="EXECUTION_EVIDENCE",
-            summary="The previous candidate did not produce discriminating BASE/HEAD evidence.",
-            observations=(
-                f"mechanical_status={challenge.assessment.mechanical_status}",
-                f"pattern={challenge.assessment.pattern}",
-                f"BASE={challenge.base.status}; HEAD={challenge.head.status}",
+            summary=(
+                "The previous candidate did not produce discriminating BASE/HEAD evidence. "
+                "Use only these bounded execution facts to repair the generated test."
             ),
+            observations=tuple(observations),
         )
+
+    @staticmethod
+    def _execution_exception(result: ExecutionResult) -> tuple[str, str] | None:
+        if result.status is not TestExecutionStatus.TEST_ERROR or not result.detail:
+            return None
+        for line in result.detail.splitlines():
+            match = _EXCEPTION_LINE_PATTERN.match(line.strip())
+            if match is not None:
+                return (
+                    EvidenceWorkflow._sanitize_feedback_text(match.group("type"), limit=120),
+                    EvidenceWorkflow._sanitize_feedback_text(match.group("message"), limit=240),
+                )
+        return None
+
+    @staticmethod
+    def _execution_observation(
+        *,
+        role: RevisionRole,
+        result: ExecutionResult,
+        attempt: CandidateAttempt,
+        exception: tuple[str, str] | None,
+    ) -> str:
+        parts = [f"{role} status={result.status}"]
+        if exception is not None:
+            exception_type, message = exception
+            parts.append(f"exception_type={exception_type}")
+            parts.append(f"message={message or '<empty>'}")
+        generated_line = EvidenceWorkflow._generated_failing_line(result, attempt)
+        if generated_line is not None:
+            line_number, source = generated_line
+            parts.append(f"generated_line={line_number}:{source}")
+        return EvidenceWorkflow._sanitize_feedback_text("; ".join(parts), limit=500)
+
+    @staticmethod
+    def _generated_failing_line(
+        result: ExecutionResult, attempt: CandidateAttempt
+    ) -> tuple[int, str] | None:
+        if not result.detail or attempt.proposal is None or attempt.validated is None:
+            return None
+        relative_path = attempt.validated.artifact.relative_path
+        path_markers = {
+            relative_path,
+            relative_path.replace("/", "\\"),
+            relative_path.rsplit("/", maxsplit=1)[-1],
+        }
+        source_lines = attempt.proposal.source.splitlines()
+        for traceback_line in result.detail.splitlines():
+            if not any(marker in traceback_line for marker in path_markers):
+                continue
+            matches = re.findall(r":(\d+)(?::|\s|$)", traceback_line)
+            if not matches:
+                matches = re.findall(r"\bline\s+(\d+)\b", traceback_line, flags=re.IGNORECASE)
+            if not matches:
+                continue
+            line_number = int(matches[-1])
+            if 1 <= line_number <= len(source_lines):
+                source = EvidenceWorkflow._sanitize_feedback_text(
+                    source_lines[line_number - 1].strip(), limit=160
+                )
+                return line_number, source or "<blank>"
+        return None
+
+    @staticmethod
+    def _sanitize_feedback_text(value: str, *, limit: int) -> str:
+        text = _CREDENTIAL_PATTERN.sub("credential=<redacted>", value)
+        text = _BEARER_PATTERN.sub("Bearer <redacted>", text)
+        text = _KNOWN_TOKEN_PATTERN.sub("<redacted-token>", text)
+        text = _WINDOWS_PATH_PATTERN.sub("<path>", text)
+        text = _UNIX_PATH_PATTERN.sub("<path>", text)
+        text = _OPAQUE_VALUE_PATTERN.sub("<opaque>", text)
+        text = _CONTROL_PATTERN.sub(" ", text)
+        text = " ".join(text.split())
+        if len(text) <= limit:
+            return text
+        keep = max(0, limit - len(_TRUNCATION_MARKER))
+        return f"{text[:keep].rstrip()}{_TRUNCATION_MARKER}"
 
     @staticmethod
     def _validate_semantic_decision(

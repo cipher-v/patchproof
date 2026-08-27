@@ -13,7 +13,7 @@ from google.genai import types
 
 from patchproof.claim_agent import (
     ClaimAgentInput,
-    ClaimSelection,
+    ClaimSelectionDraft,
     ModelUsage,
     RawClaimModelResponse,
 )
@@ -24,7 +24,7 @@ from patchproof.model_reliability import (
 )
 
 DEFAULT_CLAIM_MODEL = "gemini-3.6-flash"
-DEFAULT_CLAIM_MAX_OUTPUT_TOKENS = 8_192
+DEFAULT_CLAIM_MAX_OUTPUT_TOKENS = 2_048
 _MODEL_PATTERN = re.compile(r"gemini-(\d+)\.(\d+)-[a-z0-9.-]+")
 
 CLAIM_AGENT_INSTRUCTION = """
@@ -37,16 +37,16 @@ must not propose or execute shell commands, and must not infer repository conten
 
 Select at most one high-confidence behavior that can later be tested with deterministic pytest.
 Prefer a narrow observable behavior over an implementation detail. A selected claim must:
-- use a lowercase `claim-*` slug;
 - cite only affected symbols and source ranges present in the supplied context;
 - state preconditions, action, and expected behavior precisely;
-- have confidence of at least 0.65 and `testability` equal to `TESTABLE`;
-- include only a concise audit-friendly reasoning summary, never hidden chain-of-thought.
+- have confidence of at least 0.65;
+- use concise semantic fields and a short audit-friendly explanation, never hidden chain-of-thought.
 
 Return `INSUFFICIENT_EVIDENCE` with no claim when context does not support a reliable testable
 behavior. Return `COUNTERFACTUAL_NOT_APPLICABLE` with no claim when the behavior cannot reasonably
 be compared across BASE and HEAD, such as a missing interface or clearly incompatible environment.
 Do not claim that a pull request is correct. Output only the configured structured response.
+PatchProof assigns the claim ID and testability metadata after validating your response.
 """.strip()
 
 
@@ -76,7 +76,7 @@ class AdkGeminiClaimModel:
             model=model_name,
             instruction=CLAIM_AGENT_INSTRUCTION,
             input_schema=ClaimAgentInput,
-            output_schema=ClaimSelection,
+            output_schema=ClaimSelectionDraft,
             include_contents="none",
             tools=[],
             generate_content_config=types.GenerateContentConfig(

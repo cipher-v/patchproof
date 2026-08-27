@@ -7,13 +7,16 @@ import hashlib
 
 import pytest
 from conftest import ContextRepositoryHistory
+from pydantic import ValidationError
 
 from patchproof.claim_agent import (
     AffectedSymbolRef,
     BehavioralClaim,
     BehavioralClaimAgent,
+    BehavioralClaimDraft,
     ClaimSelection,
     ClaimSelectionDisposition,
+    ClaimSelectionDraft,
     ClaimTestability,
     InvalidClaimAgentOutput,
     ModelUsage,
@@ -65,10 +68,11 @@ def _selected(context: PullRequestContext) -> ClaimSelection:
         for item in context.snippets
         if item.path == symbol.path and item.start_line <= symbol.start_line <= item.end_line
     )
+    explanation = "One narrow behavior is directly grounded in the changed function."
     return ClaimSelection(
         disposition=ClaimSelectionDisposition.SELECTED,
         claim=BehavioralClaim(
-            claim_id="claim-most-specific-workspace",
+            claim_id="claim-selected-behavior",
             summary="Workspace resolution prefers the most-specific matching path.",
             preconditions=("At least two matching workspace paths are available.",),
             action="Resolve the project workspace from those candidates.",
@@ -86,13 +90,31 @@ def _selected(context: PullRequestContext) -> ClaimSelection:
             ),
             confidence=0.91,
             testability=ClaimTestability.TESTABLE,
-            reasoning_summary=(
-                "The changed function exposes deterministic input/output behavior, and an "
-                "existing test module imports it."
-            ),
+            reasoning_summary=explanation,
         ),
-        explanation="One narrow behavior is directly grounded in the changed function.",
+        explanation=explanation,
     )
+
+
+def _draft_json(selection: ClaimSelection) -> str:
+    claim = selection.claim
+    return ClaimSelectionDraft(
+        disposition=selection.disposition,
+        claim=(
+            BehavioralClaimDraft(
+                summary=claim.summary,
+                preconditions=claim.preconditions,
+                action=claim.action,
+                expected_behavior=claim.expected_behavior,
+                affected_symbols=claim.affected_symbols,
+                supporting_context=claim.supporting_context,
+                confidence=claim.confidence,
+            )
+            if claim is not None
+            else None
+        ),
+        explanation=selection.explanation,
+    ).model_dump_json()
 
 
 def test_agent_accepts_one_grounded_structured_claim_and_records_usage(
@@ -100,7 +122,7 @@ def test_agent_accepts_one_grounded_structured_claim_and_records_usage(
 ) -> None:
     context = _context(context_repository_history)
     selection = _selected(context)
-    response_text = selection.model_dump_json()
+    response_text = _draft_json(selection)
     model = FakeClaimModel(response_text)
     agent = BehavioralClaimAgent(model=model)
     narrative = PullRequestNarrative.from_untrusted(
@@ -134,7 +156,7 @@ def test_agent_preserves_explicit_abstention_without_fabricating_a_claim(
         disposition=disposition,
         explanation="The bounded context does not justify a comparable behavioral oracle.",
     )
-    agent = BehavioralClaimAgent(model=FakeClaimModel(selection.model_dump_json()))
+    agent = BehavioralClaimAgent(model=FakeClaimModel(_draft_json(selection)))
 
     result = asyncio.run(
         agent.select_claim(
@@ -193,6 +215,39 @@ def test_invalid_model_output_retains_usage_and_hash_without_retaining_text(
     assert captured.value.usage.total_tokens == 165
     assert captured.value.raw_response_sha256 == hashlib.sha256(response_text.encode()).hexdigest()
     assert response_text not in str(captured.value)
+    assert captured.value.diagnostic is not None
+    assert captured.value.diagnostic.raw_body_retained is False
+    assert response_text not in captured.value.diagnostic.model_dump_json()
+
+
+def test_claim_diagnostic_reports_shape_without_secret_like_field_names(
+    context_repository_history: ContextRepositoryHistory,
+) -> None:
+    context = _context(context_repository_history)
+    response_text = (
+        '{"disposition":"INSUFFICIENT_EVIDENCE","claim":null,'
+        '"explanation":"No behavior.","api_key_DO_NOT_RETAIN":true}'
+    )
+
+    with pytest.raises(InvalidClaimAgentOutput) as captured:
+        asyncio.run(
+            BehavioralClaimAgent(model=FakeClaimModel(response_text)).select_claim(
+                context=context,
+                narrative=PullRequestNarrative.from_untrusted(title="Invalid fields"),
+            )
+        )
+
+    diagnostic = captured.value.diagnostic
+    assert diagnostic is not None
+    assert diagnostic.response_chars == len(response_text)
+    assert diagnostic.output_tokens == 45
+    assert diagnostic.json_parse_status == "VALID"
+    assert diagnostic.expected_fields_missing == ()
+    assert diagnostic.unexpected_field_count == 1
+    assert diagnostic.unexpected_fields[0].startswith("sha256:")
+    assert "DO_NOT_RETAIN" not in diagnostic.model_dump_json()
+    assert "api_key" not in diagnostic.model_dump_json()
+    assert "api_key_DO_NOT_RETAIN" not in str(captured.value)
 
 
 def test_hallucinated_affected_symbol_is_rejected(
@@ -215,7 +270,7 @@ def test_hallucinated_affected_symbol_is_rejected(
             )
         }
     )
-    agent = BehavioralClaimAgent(model=FakeClaimModel(hallucinated.model_dump_json()))
+    agent = BehavioralClaimAgent(model=FakeClaimModel(_draft_json(hallucinated)))
 
     with pytest.raises(InvalidClaimAgentOutput, match="affected symbol absent"):
         asyncio.run(
@@ -230,9 +285,7 @@ def test_low_confidence_selected_claim_is_rejected_instead_of_overstated(
     context_repository_history: ContextRepositoryHistory,
 ) -> None:
     context = _context(context_repository_history)
-    response_text = (
-        _selected(context).model_dump_json().replace('"confidence":0.91', '"confidence":0.4')
-    )
+    response_text = _draft_json(_selected(context)).replace('"confidence":0.91', '"confidence":0.4')
     agent = BehavioralClaimAgent(model=FakeClaimModel(response_text))
 
     with pytest.raises(InvalidClaimAgentOutput, match="invalid structured output"):
@@ -266,7 +319,7 @@ def test_citation_outside_retrieved_snippets_is_rejected(
             )
         }
     )
-    agent = BehavioralClaimAgent(model=FakeClaimModel(ungrounded.model_dump_json()))
+    agent = BehavioralClaimAgent(model=FakeClaimModel(_draft_json(ungrounded)))
 
     with pytest.raises(InvalidClaimAgentOutput, match="citation falls outside"):
         asyncio.run(
@@ -282,7 +335,7 @@ def test_input_and_output_character_budgets_fail_without_extra_model_calls(
 ) -> None:
     context = _context(context_repository_history)
     narrative = PullRequestNarrative.from_untrusted(title="A change")
-    valid_response = ClaimSelection(
+    valid_response = ClaimSelectionDraft(
         disposition=ClaimSelectionDisposition.INSUFFICIENT_EVIDENCE,
         explanation="Not enough evidence.",
     ).model_dump_json()
@@ -295,9 +348,43 @@ def test_input_and_output_character_budgets_fail_without_extra_model_calls(
 
     output_model = FakeClaimModel(valid_response)
     output_bounded = BehavioralClaimAgent(model=output_model, max_response_chars=10)
-    with pytest.raises(InvalidClaimAgentOutput, match="response exceeds"):
+    with pytest.raises(InvalidClaimAgentOutput, match="response exceeds") as captured:
         asyncio.run(output_bounded.select_claim(context=context, narrative=narrative))
     assert len(output_model.requests) == 1
+    assert captured.value.diagnostic is not None
+    assert captured.value.diagnostic.response_budget_exceeded is True
+    assert captured.value.diagnostic.json_parse_status == "NOT_ATTEMPTED"
+
+
+def test_claim_draft_rejects_control_plane_and_extra_fields() -> None:
+    payload = {
+        "disposition": "INSUFFICIENT_EVIDENCE",
+        "claim": None,
+        "explanation": "No grounded behavior.",
+        "claim_id": "claim-model-controlled",
+    }
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        ClaimSelectionDraft.model_validate(payload)
+
+
+def test_compact_draft_assigns_control_plane_metadata_locally(
+    context_repository_history: ContextRepositoryHistory,
+) -> None:
+    context = _context(context_repository_history)
+    response_text = _draft_json(_selected(context))
+    result = asyncio.run(
+        BehavioralClaimAgent(model=FakeClaimModel(response_text)).select_claim(
+            context=context,
+            narrative=PullRequestNarrative.from_untrusted(title="A compact claim"),
+        )
+    )
+
+    assert len(response_text) < 2_000
+    assert result.selection.claim is not None
+    assert result.selection.claim.claim_id == "claim-selected-behavior"
+    assert result.selection.claim.testability is ClaimTestability.TESTABLE
+    assert result.selection.claim.reasoning_summary == result.selection.explanation
 
 
 def test_untrusted_narrative_is_bounded_as_data() -> None:

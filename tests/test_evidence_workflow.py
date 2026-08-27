@@ -8,6 +8,7 @@ import sys
 from collections import deque
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -18,8 +19,10 @@ from patchproof.claim_agent import (
     AffectedSymbolRef,
     BehavioralClaim,
     BehavioralClaimAgent,
+    BehavioralClaimDraft,
     ClaimSelection,
     ClaimSelectionDisposition,
+    ClaimSelectionDraft,
     ClaimTestability,
     ModelUsage,
     RawClaimModelResponse,
@@ -42,10 +45,19 @@ from patchproof.github_checks import (
     StaticInstallationTokenProvider,
     format_github_check,
 )
-from patchproof.models import ClaimOutcome, MechanicalEvidenceStatus
+from patchproof.models import (
+    ClaimOutcome,
+    DifferentialPattern,
+    MechanicalEvidenceStatus,
+    TestExecutionStatus,
+)
 from patchproof.pytest_runner import PytestRunner
 from patchproof.storage import SqliteVerificationRunStore, StoredEvidenceConflictError
-from patchproof.test_generation import CandidateTestProposal, RawCandidateModelResponse
+from patchproof.test_generation import (
+    CandidateAttemptStatus,
+    CandidateTestProposal,
+    RawCandidateModelResponse,
+)
 from patchproof.workflow import PublicationState, PullRequestEvent, RunLifecycle
 
 
@@ -69,7 +81,25 @@ class FakeClaimModel:
     async def invoke(self, request) -> RawClaimModelResponse:
         del request
         self.calls += 1
-        return RawClaimModelResponse(text=self.selection.model_dump_json(), usage=_usage())
+        claim = self.selection.claim
+        draft = ClaimSelectionDraft(
+            disposition=self.selection.disposition,
+            claim=(
+                BehavioralClaimDraft(
+                    summary=claim.summary,
+                    preconditions=claim.preconditions,
+                    action=claim.action,
+                    expected_behavior=claim.expected_behavior,
+                    affected_symbols=claim.affected_symbols,
+                    supporting_context=claim.supporting_context,
+                    confidence=claim.confidence,
+                )
+                if claim is not None
+                else None
+            ),
+            explanation=self.selection.explanation,
+        )
+        return RawClaimModelResponse(text=draft.model_dump_json(), usage=_usage())
 
 
 class FakeCandidateModel:
@@ -131,7 +161,7 @@ def _claim_selection(retriever: DeterministicContextRetriever, history) -> Claim
     return ClaimSelection(
         disposition=ClaimSelectionDisposition.SELECTED,
         claim=BehavioralClaim(
-            claim_id="claim-most-specific-workspace",
+            claim_id="claim-selected-behavior",
             summary="Workspace resolution prefers the most-specific candidate path.",
             preconditions=("Two candidate workspace paths are available.",),
             action="Resolve one workspace from the candidates.",
@@ -149,7 +179,7 @@ def _claim_selection(retriever: DeterministicContextRetriever, history) -> Claim
             ),
             confidence=0.91,
             testability=ClaimTestability.TESTABLE,
-            reasoning_summary="The function exposes a deterministic input/output behavior.",
+            reasoning_summary="One grounded and testable behavior is available.",
         ),
         explanation="One grounded and testable behavior is available.",
     )
@@ -169,6 +199,121 @@ def _proposal(candidate_id: str, candidates: list[str]) -> CandidateTestProposal
         ),
         rationale="Exercise observable choice ordering with overlapping paths.",
     )
+
+
+def _execution_feedback(
+    *,
+    base_status: TestExecutionStatus,
+    head_status: TestExecutionStatus,
+    base_detail: str | None,
+    head_detail: str | None,
+    source: str = "def test_patchproof_generated_behavior():\n    call_api()\n",
+):
+    proposal = SimpleNamespace(source=source)
+    attempt = SimpleNamespace(
+        status=CandidateAttemptStatus.VALIDATED,
+        issues=(),
+        proposal=proposal,
+        validated=SimpleNamespace(
+            artifact=SimpleNamespace(
+                relative_path="tests/patchproof_generated/test_patchproof_generated_initial.py"
+            )
+        ),
+    )
+    base = SimpleNamespace(
+        status=base_status,
+        detail=base_detail,
+        stdout="WITHHELD_ORACLE_STDOUT",
+        stderr="WITHHELD_ORACLE_STDERR",
+    )
+    head = SimpleNamespace(
+        status=head_status,
+        detail=head_detail,
+        stdout="WITHHELD_ORACLE_STDOUT",
+        stderr="WITHHELD_ORACLE_STDERR",
+    )
+    challenge = SimpleNamespace(
+        base=base,
+        head=head,
+        assessment=SimpleNamespace(
+            mechanical_status=MechanicalEvidenceStatus.ENVIRONMENTAL,
+            pattern=DifferentialPattern.NOT_COMPARABLE,
+        ),
+    )
+    return EvidenceWorkflow._repair_feedback(attempt=attempt, challenge=challenge)
+
+
+def test_execution_error_feedback_contains_bounded_exception_and_generated_line() -> None:
+    detail = (
+        "TypeError: FunctionDef.__init__() missing required keyword-only arguments: "
+        "'end_lineno' and 'end_col_offset'\n"
+        "tests/patchproof_generated/test_patchproof_generated_initial.py:2: in test\n"
+    )
+
+    feedback = _execution_feedback(
+        base_status=TestExecutionStatus.TEST_ERROR,
+        head_status=TestExecutionStatus.TEST_ERROR,
+        base_detail=detail,
+        head_detail=detail,
+    )
+
+    joined = "\n".join(feedback.observations)
+    assert "exception_type=TypeError" in joined
+    assert "end_lineno" in joined
+    assert "generated_line=2:call_api()" in joined
+    assert "same_exception_on_base_and_head=true" in joined
+    assert len(feedback.observations) == 4
+    assert all(len(item) <= 500 for item in feedback.observations)
+
+
+def test_execution_feedback_truncates_and_redacts_untrusted_values_without_logs() -> None:
+    google_key = "AI" + "za" + "012345678901234567890123456789"
+    detail = (
+        "RuntimeError: token=super-secret-token-value "
+        f"API_KEY={google_key} "
+        "C:\\secure\\private\\file.py "
+        + "repeated detail " * 80
+        + "\n"
+        + "tests/patchproof_generated/test_patchproof_generated_initial.py:2: in test\n"
+    )
+    source = (
+        "def test_patchproof_generated_behavior():\n"
+        "    secret = 'abcdefghijklmnopqrstuvwxyz0123456789'\n"
+    )
+
+    feedback = _execution_feedback(
+        base_status=TestExecutionStatus.TEST_ERROR,
+        head_status=TestExecutionStatus.TEST_ERROR,
+        base_detail=detail,
+        head_detail=detail,
+        source=source,
+    )
+
+    joined = "\n".join(feedback.observations)
+    assert "...[truncated]" in joined
+    assert "super-secret-token-value" not in joined
+    assert google_key not in joined
+    assert "C:\\secure" not in joined
+    assert "abcdefghijklmnopqrstuvwxyz0123456789" not in joined
+    assert "credential=<redacted>" in joined
+    assert "WITHHELD_ORACLE" not in joined
+    assert all(len(item) <= 500 for item in feedback.observations)
+
+
+def test_one_sided_domain_exception_feedback_preserves_conservative_classification() -> None:
+    feedback = _execution_feedback(
+        base_status=TestExecutionStatus.TEST_ERROR,
+        head_status=TestExecutionStatus.PASSED,
+        base_detail="package.errors.DomainValidationError: invalid nested value",
+        head_detail=None,
+    )
+
+    joined = "\n".join(feedback.observations)
+    assert "BASE status=TEST_ERROR" in joined
+    assert "HEAD status=PASSED" in joined
+    assert "DomainValidationError" in joined
+    assert "explicit deterministic pytest assertion/failure" in joined
+    assert "mechanical_status=ENVIRONMENTAL" in joined
 
 
 def test_non_discriminating_candidate_repairs_then_persists_and_publication_retries_only(

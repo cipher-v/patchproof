@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import PurePosixPath
-from typing import Protocol
+from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
@@ -15,6 +16,13 @@ from patchproof.context_retrieval import PullRequestContext
 from patchproof.structured_output import StrictGeminiOutputModel
 
 _CLAIM_ID_PATTERN = re.compile(r"claim-[a-z0-9][a-z0-9-]{0,62}")
+_DIAGNOSTIC_FIELD_PATTERN = re.compile(r"[^A-Za-z0-9_.\-\[\]$]")
+_SENSITIVE_DIAGNOSTIC_FIELD_PATTERN = re.compile(
+    r"(?i)(?:authorization|api[_-]?key|token|secret|password|credential)"
+)
+_OPAQUE_DIAGNOSTIC_FIELD_PATTERN = re.compile(r"[A-Za-z0-9_-]{24,}")
+_CLAIM_DRAFT_FIELDS = frozenset({"disposition", "claim", "explanation"})
+_DETERMINISTIC_CLAIM_ID = "claim-selected-behavior"
 
 
 class ClaimSelectionDisposition(StrEnum):
@@ -159,6 +167,46 @@ class BehavioralClaim(StrictGeminiOutputModel):
         return self
 
 
+class BehavioralClaimDraft(StrictGeminiOutputModel):
+    """Provider-visible semantic claim fields without control-plane metadata."""
+
+    summary: str = Field(min_length=1, max_length=220)
+    preconditions: tuple[str, ...] = Field(default_factory=tuple, max_length=4)
+    action: str = Field(min_length=1, max_length=350)
+    expected_behavior: str = Field(min_length=1, max_length=450)
+    affected_symbols: tuple[AffectedSymbolRef, ...] = Field(min_length=1, max_length=4)
+    supporting_context: tuple[SupportingContextRef, ...] = Field(min_length=1, max_length=4)
+    confidence: float = Field(ge=0.65, le=1.0)
+
+    @field_validator("preconditions")
+    @classmethod
+    def validate_preconditions(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        if any(not value.strip() or len(value) > 220 for value in values):
+            raise ValueError("preconditions must contain bounded non-empty text")
+        return values
+
+    @model_validator(mode="after")
+    def validate_unique_symbols(self) -> BehavioralClaimDraft:
+        if len(set(self.affected_symbols)) != len(self.affected_symbols):
+            raise ValueError("affected symbols must be unique")
+        return self
+
+
+class ClaimSelectionDraft(StrictGeminiOutputModel):
+    """Compact provider-visible selection normalized into a durable claim locally."""
+
+    disposition: ClaimSelectionDisposition
+    claim: BehavioralClaimDraft | None = None
+    explanation: str = Field(min_length=1, max_length=350)
+
+    @model_validator(mode="after")
+    def validate_disposition(self) -> ClaimSelectionDraft:
+        selected = self.disposition is ClaimSelectionDisposition.SELECTED
+        if selected != (self.claim is not None):
+            raise ValueError("SELECTED requires one claim; abstention must not include a claim")
+        return self
+
+
 class ClaimSelection(StrictGeminiOutputModel):
     """Exactly one selected claim or an explicit conservative abstention."""
 
@@ -225,10 +273,143 @@ class InvalidClaimAgentOutput(ValueError):
         *,
         usage: ModelUsage | None = None,
         raw_response_sha256: str | None = None,
+        diagnostic: ClaimOutputDiagnostic | None = None,
     ) -> None:
         self.usage = usage
         self.raw_response_sha256 = raw_response_sha256
+        self.diagnostic = diagnostic
         super().__init__(message)
+
+
+class ClaimJsonParseStatus(StrEnum):
+    """Whether claim-output JSON was parsed without retaining the raw body."""
+
+    NOT_ATTEMPTED = "NOT_ATTEMPTED"
+    INVALID = "INVALID"
+    VALID = "VALID"
+
+
+class ClaimOutputDiagnostic(BaseModel):
+    """Bounded structure-only facts for invalid claim output."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    stage: Literal["RESPONSE_BUDGET", "DRAFT_SCHEMA", "NORMALIZATION", "GROUNDING"]
+    response_sha256: str = Field(pattern=r"[0-9a-f]{64}")
+    response_chars: int = Field(ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    raw_body_retained: Literal[False] = False
+    response_budget_exceeded: bool
+    json_parse_status: ClaimJsonParseStatus
+    json_error_line: int | None = Field(default=None, ge=1)
+    json_error_column: int | None = Field(default=None, ge=1)
+    top_level_kind: Literal["object", "array", "string", "number", "boolean", "null", "unknown"]
+    expected_fields_present: tuple[str, ...] = Field(max_length=3)
+    expected_fields_missing: tuple[str, ...] = Field(max_length=3)
+    unexpected_fields: tuple[str, ...] = Field(max_length=8)
+    unexpected_field_count: int = Field(ge=0)
+    validation_errors: tuple[str, ...] = Field(max_length=8)
+    diagnostic_truncated: bool
+
+
+def _json_kind(value: object) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, (int, float)):
+        return "number"
+    return "unknown"
+
+
+def _safe_diagnostic_field(value: str) -> str:
+    """Retain ordinary schema keys but hash secret-like or excessively long names."""
+    sanitized = _DIAGNOSTIC_FIELD_PATTERN.sub("?", value)
+    if (
+        len(value) > 80
+        or _SENSITIVE_DIAGNOSTIC_FIELD_PATTERN.search(sanitized)
+        or _OPAQUE_DIAGNOSTIC_FIELD_PATTERN.fullmatch(value)
+    ):
+        digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+        return f"sha256:{digest}"
+    return sanitized
+
+
+def _claim_output_diagnostic(
+    *,
+    response_text: str,
+    response_sha256: str,
+    output_tokens: int | None,
+    stage: Literal["RESPONSE_BUDGET", "DRAFT_SCHEMA", "NORMALIZATION", "GROUNDING"],
+    response_budget_exceeded: bool,
+    validation_error: ValidationError | None = None,
+) -> ClaimOutputDiagnostic:
+    """Describe response shape and validation fields without retaining semantic text."""
+    parsed: object = None
+    parse_status = ClaimJsonParseStatus.NOT_ATTEMPTED
+    error_line: int | None = None
+    error_column: int | None = None
+    if not response_budget_exceeded:
+        try:
+            parsed = json.loads(response_text)
+        except json.JSONDecodeError as error:
+            parse_status = ClaimJsonParseStatus.INVALID
+            error_line = error.lineno
+            error_column = error.colno
+        else:
+            parse_status = ClaimJsonParseStatus.VALID
+
+    expected_present: tuple[str, ...] = ()
+    expected_missing: tuple[str, ...] = tuple(sorted(_CLAIM_DRAFT_FIELDS))
+    unexpected_fields: tuple[str, ...] = ()
+    unexpected_count = 0
+    diagnostic_truncated = False
+    if isinstance(parsed, dict):
+        keys = {key for key in parsed if isinstance(key, str)}
+        expected_present = tuple(sorted(keys & _CLAIM_DRAFT_FIELDS))
+        expected_missing = tuple(sorted(_CLAIM_DRAFT_FIELDS - keys))
+        unexpected = sorted(keys - _CLAIM_DRAFT_FIELDS)
+        unexpected_count = len(unexpected)
+        unexpected_fields = tuple(_safe_diagnostic_field(key) for key in unexpected[:8])
+        diagnostic_truncated = len(unexpected) > 8 or any(len(key) > 80 for key in unexpected[:8])
+
+    errors: list[str] = []
+    if validation_error is not None:
+        for item in validation_error.errors(
+            include_url=False, include_context=False, include_input=False
+        ):
+            location = ".".join(_safe_diagnostic_field(str(part)) for part in item["loc"]) or "$"
+            error_type = _DIAGNOSTIC_FIELD_PATTERN.sub("?", item["type"])[:80]
+            errors.append(f"{location}:{error_type}")
+        if len(errors) > 8:
+            diagnostic_truncated = True
+            errors = errors[:8]
+
+    return ClaimOutputDiagnostic(
+        stage=stage,
+        response_sha256=response_sha256,
+        response_chars=len(response_text),
+        output_tokens=output_tokens,
+        response_budget_exceeded=response_budget_exceeded,
+        json_parse_status=parse_status,
+        json_error_line=error_line,
+        json_error_column=error_column,
+        top_level_kind=(
+            _json_kind(parsed) if parse_status is ClaimJsonParseStatus.VALID else "unknown"
+        ),
+        expected_fields_present=expected_present,
+        expected_fields_missing=expected_missing,
+        unexpected_fields=unexpected_fields,
+        unexpected_field_count=unexpected_count,
+        validation_errors=tuple(errors),
+        diagnostic_truncated=diagnostic_truncated,
+    )
 
 
 class ClaimAgentResult(BaseModel):
@@ -249,7 +430,7 @@ class BehavioralClaimAgent:
         *,
         model: StructuredClaimModel,
         max_input_json_chars: int = 64_000,
-        max_response_chars: int = 12_000,
+        max_response_chars: int = 6_000,
     ) -> None:
         if max_input_json_chars <= 0 or max_response_chars <= 0:
             raise ValueError("claim-agent character budgets must be positive")
@@ -274,15 +455,46 @@ class BehavioralClaimAgent:
                 "claim model response exceeds the configured budget",
                 usage=response.usage,
                 raw_response_sha256=response_hash,
+                diagnostic=_claim_output_diagnostic(
+                    response_text=response.text,
+                    response_sha256=response_hash,
+                    output_tokens=response.usage.output_tokens,
+                    stage="RESPONSE_BUDGET",
+                    response_budget_exceeded=True,
+                ),
             )
         try:
-            selection = ClaimSelection.model_validate_json(response.text)
+            draft = ClaimSelectionDraft.model_validate_json(response.text)
         except ValidationError as error:
             raise InvalidClaimAgentOutput(
                 "claim model returned invalid structured output",
                 usage=response.usage,
                 raw_response_sha256=response_hash,
-            ) from error
+                diagnostic=_claim_output_diagnostic(
+                    response_text=response.text,
+                    response_sha256=response_hash,
+                    output_tokens=response.usage.output_tokens,
+                    stage="DRAFT_SCHEMA",
+                    response_budget_exceeded=False,
+                    validation_error=error,
+                ),
+            ) from None
+        try:
+            selection = self._normalize(draft)
+        except ValidationError as error:
+            raise InvalidClaimAgentOutput(
+                "claim model output could not be normalized safely",
+                usage=response.usage,
+                raw_response_sha256=response_hash,
+                diagnostic=_claim_output_diagnostic(
+                    response_text=response.text,
+                    response_sha256=response_hash,
+                    output_tokens=response.usage.output_tokens,
+                    stage="NORMALIZATION",
+                    response_budget_exceeded=False,
+                    validation_error=error,
+                ),
+            ) from None
         try:
             self._validate_grounding(selection, context)
         except InvalidClaimAgentOutput as error:
@@ -290,11 +502,43 @@ class BehavioralClaimAgent:
                 str(error),
                 usage=response.usage,
                 raw_response_sha256=response_hash,
+                diagnostic=_claim_output_diagnostic(
+                    response_text=response.text,
+                    response_sha256=response_hash,
+                    output_tokens=response.usage.output_tokens,
+                    stage="GROUNDING",
+                    response_budget_exceeded=False,
+                ),
             ) from error
         return ClaimAgentResult(
             selection=selection,
             usage=response.usage,
             raw_response_sha256=response_hash,
+        )
+
+    @staticmethod
+    def _normalize(draft: ClaimSelectionDraft) -> ClaimSelection:
+        if draft.claim is None:
+            return ClaimSelection(
+                disposition=draft.disposition,
+                explanation=draft.explanation,
+            )
+        claim = draft.claim
+        return ClaimSelection(
+            disposition=draft.disposition,
+            claim=BehavioralClaim(
+                claim_id=_DETERMINISTIC_CLAIM_ID,
+                summary=claim.summary,
+                preconditions=claim.preconditions,
+                action=claim.action,
+                expected_behavior=claim.expected_behavior,
+                affected_symbols=claim.affected_symbols,
+                supporting_context=claim.supporting_context,
+                confidence=claim.confidence,
+                testability=ClaimTestability.TESTABLE,
+                reasoning_summary=draft.explanation,
+            ),
+            explanation=draft.explanation,
         )
 
     @staticmethod

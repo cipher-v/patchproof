@@ -717,6 +717,9 @@ async def _run_live_case(
             "message": str(error),
             "usage": error.usage.model_dump(mode="json") if error.usage else None,
             "raw_response_sha256": error.raw_response_sha256,
+            "local_malformed_output_diagnostic": (
+                error.diagnostic.model_dump(mode="json") if error.diagnostic else None
+            ),
         }
         return _finish_case(result, started)
     except ModelInvocationFailure as error:

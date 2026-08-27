@@ -19,8 +19,8 @@ from patchproof.adk_claim_agent import (
 )
 from patchproof.claim_agent import (
     ClaimAgentInput,
-    ClaimSelection,
     ClaimSelectionDisposition,
+    ClaimSelectionDraft,
     PullRequestNarrative,
 )
 from patchproof.context_retrieval import PullRequestContext, RetrievalStats
@@ -56,7 +56,7 @@ def test_adk_agent_is_one_stateless_tool_free_structured_agent() -> None:
     assert model.agent.name == "patchproof_agent"
     assert model.agent.model == DEFAULT_CLAIM_MODEL
     assert model.agent.input_schema is ClaimAgentInput
-    assert model.agent.output_schema is ClaimSelection
+    assert model.agent.output_schema is ClaimSelectionDraft
     assert model.agent.include_contents == "none"
     assert model.agent.tools == []
     assert model.agent.timeout == 60.0
@@ -64,7 +64,7 @@ def test_adk_agent_is_one_stateless_tool_free_structured_agent() -> None:
     assert (
         model.agent.generate_content_config.max_output_tokens
         == DEFAULT_CLAIM_MAX_OUTPUT_TOKENS
-        == 8_192
+        == 2_048
     )
     assert (
         model.agent.generate_content_config.thinking_config.thinking_level
@@ -76,7 +76,7 @@ def test_adk_agent_is_one_stateless_tool_free_structured_agent() -> None:
 
 
 def test_claim_output_schema_uses_gemini_compatible_numeric_bounds() -> None:
-    schema_json = json.dumps(ClaimSelection.model_json_schema())
+    schema_json = json.dumps(ClaimSelectionDraft.model_json_schema())
 
     assert '"minimum": 1' in schema_json
     assert "exclusiveMinimum" not in schema_json
@@ -90,7 +90,7 @@ def test_adapter_requires_an_explicit_gemini_3_5_or_newer_model(model_name: str)
 
 
 def test_adapter_collects_final_text_and_usage_without_a_network_call(monkeypatch) -> None:
-    selection = ClaimSelection(
+    selection = ClaimSelectionDraft(
         disposition=ClaimSelectionDisposition.INSUFFICIENT_EVIDENCE,
         explanation="No changed behavior is present.",
     )
