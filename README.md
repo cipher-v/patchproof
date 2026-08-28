@@ -97,6 +97,15 @@ The factory reads `PATCHPROOF_WEBHOOK_SECRET`, `PATCHPROOF_ALLOWED_REPOSITORIES`
 `owner/name` values), and optional `PATCHPROOF_DATABASE_PATH`. Do not commit real webhook secrets or
 the local database.
 
+## Gemini provider
+
+PatchProof now selects an explicit `GEMINI_DEVELOPER_API` or `VERTEX_AI` infrastructure surface
+while retaining the same Gemini 3.6 Flash ADK agents and structured schemas. Vertex uses Application
+Default Credentials with configurable project and location; Cloud Run uses its attached runtime
+service account and does not need a service-account key file. Local setup, safe preflight commands,
+Cloud Run IAM, Developer API compatibility, and evaluation provenance are documented in
+[`docs/VERTEX_AI_PROVIDER.md`](docs/VERTEX_AI_PROVIDER.md).
+
 To preview the evidence console with the checked sanitized live-proof fixture:
 
 ```shell

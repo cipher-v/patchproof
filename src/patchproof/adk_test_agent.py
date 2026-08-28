@@ -13,11 +13,13 @@ from google.genai import types
 
 from patchproof.adk_claim_agent import DEFAULT_CLAIM_MODEL
 from patchproof.claim_agent import ModelUsage
-from patchproof.model_reliability import (
-    ModelInvocationFailure,
-    is_transient_event_code,
-    is_transient_provider_error,
+from patchproof.gemini_provider import (
+    GeminiProviderConfig,
+    NormalizedGeminiUsage,
+    normalize_provider_event_failure,
+    normalize_provider_failure,
 )
+from patchproof.model_reliability import ModelInvocationFailure
 from patchproof.test_generation import (
     CandidateModelRequest,
     CandidateTestDraft,
@@ -77,6 +79,7 @@ class AdkGeminiCandidateModel:
         self,
         *,
         model_name: str = DEFAULT_CLAIM_MODEL,
+        provider_config: GeminiProviderConfig | None = None,
         max_output_tokens: int = DEFAULT_CANDIDATE_MAX_OUTPUT_TOKENS,
         timeout_seconds: float = 60.0,
     ) -> None:
@@ -86,10 +89,12 @@ class AdkGeminiCandidateModel:
         if max_output_tokens <= 0 or timeout_seconds <= 0:
             raise ValueError("ADK output-token and timeout budgets must be positive")
         self.model_name = model_name
+        self.provider_config = provider_config or GeminiProviderConfig.developer_api()
+        self.adk_model = self.provider_config.adk_model(model_name)
         self.agent = LlmAgent(
             name="patchproof_agent",
             description="Performs PatchProof's bounded structured semantic task.",
-            model=model_name,
+            model=self.adk_model,
             instruction=CANDIDATE_AGENT_INSTRUCTION,
             input_schema=CandidateModelRequest,
             output_schema=CandidateTestDraft,
@@ -112,10 +117,7 @@ class AdkGeminiCandidateModel:
         app_name = "patchproof"
         final_text: str | None = None
         model_version: str | None = None
-        prompt_tokens: int | None = None
-        output_tokens: int | None = None
-        total_tokens: int | None = None
-        cached_tokens: int | None = None
+        usage = NormalizedGeminiUsage()
         started = time.perf_counter()
         try:
             session_service = InMemorySessionService()
@@ -139,24 +141,18 @@ class AdkGeminiCandidateModel:
                 new_message=message,
             ):
                 if event.error_code or event.error_message:
+                    failure = normalize_provider_event_failure(
+                        self.provider_config,
+                        event.error_code,
+                        task="candidate generation",
+                    )
                     raise CandidateAgentInvocationError(
-                        "ADK candidate invocation failed",
-                        retryable=is_transient_event_code(event.error_code),
+                        failure.message,
+                        retryable=failure.retryable,
                     )
                 model_version = event.model_version or model_version
                 if event.usage_metadata is not None:
-                    prompt_tokens = self._maximum(
-                        prompt_tokens, event.usage_metadata.prompt_token_count
-                    )
-                    output_tokens = self._maximum(
-                        output_tokens, event.usage_metadata.candidates_token_count
-                    )
-                    total_tokens = self._maximum(
-                        total_tokens, event.usage_metadata.total_token_count
-                    )
-                    cached_tokens = self._maximum(
-                        cached_tokens, event.usage_metadata.cached_content_token_count
-                    )
+                    usage = usage.merge(event.usage_metadata)
                 if event.is_final_response() and event.content and event.content.parts:
                     text_parts = [part.text for part in event.content.parts if part.text]
                     if text_parts:
@@ -164,9 +160,14 @@ class AdkGeminiCandidateModel:
         except CandidateAgentInvocationError:
             raise
         except Exception as error:
+            failure = normalize_provider_failure(
+                self.provider_config,
+                error,
+                task="candidate generation",
+            )
             raise CandidateAgentInvocationError(
-                "ADK candidate invocation did not complete",
-                retryable=is_transient_provider_error(error),
+                failure.message,
+                retryable=failure.retryable,
             ) from error
         duration = time.perf_counter() - started
         if final_text is None:
@@ -176,16 +177,10 @@ class AdkGeminiCandidateModel:
             usage=ModelUsage(
                 model_name=self.model_name,
                 model_version=model_version,
-                prompt_tokens=prompt_tokens,
-                output_tokens=output_tokens,
-                total_tokens=total_tokens,
-                cached_tokens=cached_tokens,
+                prompt_tokens=usage.prompt_tokens,
+                output_tokens=usage.output_tokens,
+                total_tokens=usage.total_tokens,
+                cached_tokens=usage.cached_tokens,
                 duration_seconds=duration,
             ),
         )
-
-    @staticmethod
-    def _maximum(current: int | None, candidate: int | None) -> int | None:
-        if candidate is None:
-            return current
-        return candidate if current is None else max(current, candidate)

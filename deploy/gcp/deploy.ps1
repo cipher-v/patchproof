@@ -1,13 +1,13 @@
 param(
     [Parameter(Mandatory = $true)][string]$ProjectId,
     [string]$Region = "asia-south1",
+    [string]$VertexLocation = "global",
     [string]$AllowedRepositories = "cipher-v/patchproof",
     [string]$ImageTag = "phase9",
     [string]$DashboardRunIds = "",
     [Parameter(Mandatory = $true)][int]$GitHubAppId,
     [Parameter(Mandatory = $true)][string]$WebhookSecretFile,
-    [Parameter(Mandatory = $true)][string]$GitHubPrivateKeyFile,
-    [Parameter(Mandatory = $true)][string]$GeminiApiKeyFile
+    [Parameter(Mandatory = $true)][string]$GitHubPrivateKeyFile
 )
 
 $ErrorActionPreference = "Stop"
@@ -51,14 +51,14 @@ function Test-GcloudResource {
     }
 }
 
-foreach ($RequiredFile in @($WebhookSecretFile, $GitHubPrivateKeyFile, $GeminiApiKeyFile)) {
+foreach ($RequiredFile in @($WebhookSecretFile, $GitHubPrivateKeyFile)) {
     if (-not (Test-Path -LiteralPath $RequiredFile -PathType Leaf)) {
         throw "Required secret file does not exist: $RequiredFile"
     }
 }
 
 Invoke-Gcloud config set project $ProjectId
-Invoke-Gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com firestore.googleapis.com cloudtasks.googleapis.com secretmanager.googleapis.com iamcredentials.googleapis.com
+Invoke-Gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com firestore.googleapis.com cloudtasks.googleapis.com secretmanager.googleapis.com iamcredentials.googleapis.com aiplatform.googleapis.com
 
 $ProjectNumber = Invoke-Gcloud projects describe $ProjectId --format="value(projectNumber)"
 
@@ -78,6 +78,7 @@ foreach ($Account in @(
 foreach ($Role in @("roles/datastore.user", "roles/cloudtasks.enqueuer")) {
     Invoke-Gcloud projects add-iam-policy-binding $ProjectId --member="serviceAccount:$ControlAccount" --role=$Role --condition=None
 }
+Invoke-Gcloud projects add-iam-policy-binding $ProjectId --member="serviceAccount:$ControlAccount" --role="roles/aiplatform.user" --condition=None
 Invoke-Gcloud iam service-accounts add-iam-policy-binding $TaskAccount --member="serviceAccount:$ControlAccount" --role="roles/iam.serviceAccountUser"
 Invoke-Gcloud iam service-accounts add-iam-policy-binding $TaskAccount --member="serviceAccount:service-$ProjectNumber@gcp-sa-cloudtasks.iam.gserviceaccount.com" --role="roles/iam.serviceAccountTokenCreator"
 
@@ -105,7 +106,7 @@ if (-not (Test-GcloudResource -Arguments @(
 }
 Invoke-Gcloud tasks queues update $Queue --location=$Region --max-dispatches-per-second=1 --max-concurrent-dispatches=1 --max-attempts=3 --max-retry-duration=3600s
 
-foreach ($Secret in @("patchproof-webhook-secret", "patchproof-github-private-key", "patchproof-gemini-api-key")) {
+foreach ($Secret in @("patchproof-webhook-secret", "patchproof-github-private-key")) {
     if (-not (Test-GcloudResource -Arguments @("secrets", "describe", $Secret))) {
         Invoke-Gcloud secrets create $Secret --replication-policy=automatic
     }
@@ -113,7 +114,6 @@ foreach ($Secret in @("patchproof-webhook-secret", "patchproof-github-private-ke
 }
 Invoke-Gcloud secrets versions add patchproof-webhook-secret --data-file=$WebhookSecretFile
 Invoke-Gcloud secrets versions add patchproof-github-private-key --data-file=$GitHubPrivateKeyFile
-Invoke-Gcloud secrets versions add patchproof-gemini-api-key --data-file=$GeminiApiKeyFile
 
 Invoke-Gcloud builds submit --config=deploy/cloudbuild.yaml --substitutions="_IMAGE=$Image" .
 
@@ -121,7 +121,7 @@ Invoke-Gcloud run deploy $ExecutorService --image=$Image --region=$Region --plat
 $ExecutorUrl = Invoke-Gcloud run services describe $ExecutorService --region=$Region --format="value(status.url)"
 Invoke-Gcloud run services add-iam-policy-binding $ExecutorService --region=$Region --member="serviceAccount:$ControlAccount" --role="roles/run.invoker"
 
-Invoke-Gcloud run deploy $ControlService --image=$Image --region=$Region --platform=managed --service-account=$ControlAccount --no-invoker-iam-check --set-env-vars="^#^GOOGLE_CLOUD_PROJECT=${ProjectId}#PATCHPROOF_SERVICE_ROLE=control#PATCHPROOF_REGION=${Region}#PATCHPROOF_TASK_QUEUE=${Queue}#PATCHPROOF_CONTROL_URL=https://pending.invalid#PATCHPROOF_EXECUTOR_URL=${ExecutorUrl}#PATCHPROOF_TASK_INVOKER_EMAIL=${TaskAccount}#PATCHPROOF_ALLOWED_REPOSITORIES=${AllowedRepositories}#PATCHPROOF_GITHUB_APP_ID=${GitHubAppId}#PATCHPROOF_GEMINI_MODEL=gemini-3.6-flash#GOOGLE_GENAI_USE_VERTEXAI=false#PATCHPROOF_DASHBOARD_RUN_IDS=${DashboardRunIds}" --set-secrets="PATCHPROOF_WEBHOOK_SECRET=patchproof-webhook-secret:latest,PATCHPROOF_GITHUB_PRIVATE_KEY=patchproof-github-private-key:latest,GOOGLE_API_KEY=patchproof-gemini-api-key:latest" --startup-probe="httpGet.path=/healthz,httpGet.port=8080,timeoutSeconds=5,periodSeconds=5,failureThreshold=12" --min-instances=0 --max-instances=2 --concurrency=4 --cpu=1 --memory=1Gi --timeout=900
+Invoke-Gcloud run deploy $ControlService --image=$Image --region=$Region --platform=managed --service-account=$ControlAccount --no-invoker-iam-check --set-env-vars="^#^GOOGLE_CLOUD_PROJECT=${ProjectId}#GOOGLE_CLOUD_LOCATION=${VertexLocation}#PATCHPROOF_GEMINI_PROVIDER=VERTEX_AI#PATCHPROOF_SERVICE_ROLE=control#PATCHPROOF_REGION=${Region}#PATCHPROOF_TASK_QUEUE=${Queue}#PATCHPROOF_CONTROL_URL=https://pending.invalid#PATCHPROOF_EXECUTOR_URL=${ExecutorUrl}#PATCHPROOF_TASK_INVOKER_EMAIL=${TaskAccount}#PATCHPROOF_ALLOWED_REPOSITORIES=${AllowedRepositories}#PATCHPROOF_GITHUB_APP_ID=${GitHubAppId}#PATCHPROOF_GEMINI_MODEL=gemini-3.6-flash#PATCHPROOF_DASHBOARD_RUN_IDS=${DashboardRunIds}" --set-secrets="PATCHPROOF_WEBHOOK_SECRET=patchproof-webhook-secret:latest,PATCHPROOF_GITHUB_PRIVATE_KEY=patchproof-github-private-key:latest" --startup-probe="httpGet.path=/healthz,httpGet.port=8080,timeoutSeconds=5,periodSeconds=5,failureThreshold=12" --min-instances=0 --max-instances=2 --concurrency=4 --cpu=1 --memory=1Gi --timeout=900
 $ControlUrl = Invoke-Gcloud run services describe $ControlService --region=$Region --format="value(status.url)"
 Invoke-Gcloud run services update $ControlService --region=$Region --update-env-vars="PATCHPROOF_CONTROL_URL=$ControlUrl"
 

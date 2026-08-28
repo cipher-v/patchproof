@@ -55,6 +55,14 @@ def is_transient_event_code(value: str | None) -> bool:
     """Recognize bounded provider status names without inspecting provider prose."""
     normalized = (value or "").strip().upper()
     return normalized in {
+        "408",
+        "409",
+        "425",
+        "429",
+        "500",
+        "502",
+        "503",
+        "504",
         "DEADLINE_EXCEEDED",
         "INTERNAL",
         "RESOURCE_EXHAUSTED",

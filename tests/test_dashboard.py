@@ -119,6 +119,8 @@ def test_missing_featured_run_fails_closed_without_leaking_identity(
 def test_cloud_settings_parse_only_explicit_dashboard_run_ids(monkeypatch) -> None:
     values = {
         "GOOGLE_CLOUD_PROJECT": "patchproof-demo",
+        "GOOGLE_CLOUD_LOCATION": "global",
+        "PATCHPROOF_GEMINI_PROVIDER": "VERTEX_AI",
         "PATCHPROOF_REGION": "asia-south1",
         "PATCHPROOF_TASK_QUEUE": "verification-runs",
         "PATCHPROOF_CONTROL_URL": "https://control.example",
@@ -136,3 +138,6 @@ def test_cloud_settings_parse_only_explicit_dashboard_run_ids(monkeypatch) -> No
     settings = CloudControlSettings.from_environment()
 
     assert settings.dashboard_run_ids == (_SUCCESS_RUN_ID, _ABSTENTION_RUN_ID)
+    assert settings.gemini_provider.provider_surface == "VERTEX_AI"
+    assert settings.gemini_provider.project == "patchproof-demo"
+    assert settings.gemini_provider.location == "global"

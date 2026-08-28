@@ -34,6 +34,11 @@ from patchproof.claim_agent import (
 from patchproof.context_retrieval import DeterministicContextRetriever, PullRequestContext
 from patchproof.evidence_workflow import EvidenceWorkflow
 from patchproof.execution_contract import ExecutionContract, TestCommandContract
+from patchproof.gemini_provider import (
+    GeminiProviderConfig,
+    GeminiProviderSurface,
+    preflight_vertex_authentication,
+)
 from patchproof.git_workspace import GitWorkspaceManager
 from patchproof.model_reliability import (
     BoundedRetryingEvidenceAssessor,
@@ -86,6 +91,7 @@ class HardModeProtocol(BaseModel):
 
     declared_run_id: str = Field(min_length=1, max_length=200)
     model_name: str = Field(pattern=r"gemini-\d+\.\d+-[a-z0-9.-]+")
+    provider_surface: GeminiProviderSurface | None = None
     temperature: float
     thinking_level: Literal["LOW"]
     claim_calls_per_case: Literal[1]
@@ -790,6 +796,7 @@ async def _run_live_case(
     repository: Path,
     workspace_root: Path,
     model_name: str,
+    provider_config: GeminiProviderConfig,
     expected_context_sha256: str,
 ) -> dict[str, Any]:
     started = datetime.now(UTC)
@@ -826,7 +833,9 @@ async def _run_live_case(
         "error": None,
     }
     claim_agent = BehavioralClaimAgent(
-        model=BoundedRetryingModel(AdkGeminiClaimModel(model_name=model_name))
+        model=BoundedRetryingModel(
+            AdkGeminiClaimModel(model_name=model_name, provider_config=provider_config)
+        )
     )
     try:
         claim_result = await claim_agent.select_claim(context=context, narrative=narrative)
@@ -858,7 +867,9 @@ async def _run_live_case(
         return _finish_case(result, started)
 
     generator = BoundedCandidateTestGenerator(
-        model=BoundedRetryingModel(AdkGeminiCandidateModel(model_name=model_name)),
+        model=BoundedRetryingModel(
+            AdkGeminiCandidateModel(model_name=model_name, provider_config=provider_config)
+        ),
         validator=CandidateTestValidator(),
         claim=claim,
         context=context,
@@ -895,7 +906,10 @@ async def _run_live_case(
                     is MechanicalEvidenceStatus.DISCRIMINATING
                 ):
                     semantic = await BoundedRetryingEvidenceAssessor(
-                        AdkGeminiEvidenceAssessor(model_name=model_name)
+                        AdkGeminiEvidenceAssessor(
+                            model_name=model_name,
+                            provider_config=provider_config,
+                        )
                     ).assess(
                         claim=claim,
                         candidate_source=attempt.validated.proposal.source,
@@ -954,6 +968,7 @@ def run_live(
     gate_path: Path,
     journal_path: Path,
     raw_path: Path,
+    provider_config: GeminiProviderConfig | None = None,
 ) -> dict[str, Any]:
     """Execute one declared run; any existing journal permanently blocks a rerun."""
     if journal_path.exists() or raw_path.exists():
@@ -962,6 +977,17 @@ def run_live(
         )
     manifest, manifest_sha256 = load_hard_mode_manifest(manifest_path)
     call_budget_preflight = _model_call_budget_preflight(manifest)
+    if manifest.protocol.provider_surface is None:
+        raise HardModeConfigurationError(
+            "new hard-mode live runs must declare an explicit Gemini provider surface"
+        )
+    resolved_provider = provider_config or GeminiProviderConfig.from_environment()
+    if resolved_provider.provider_surface is not manifest.protocol.provider_surface:
+        raise HardModeConfigurationError(
+            "configured Gemini provider surface does not match the hard-mode manifest"
+        )
+    if resolved_provider.provider_surface is GeminiProviderSurface.VERTEX_AI:
+        preflight_vertex_authentication(resolved_provider)
     gate = _load_gate(gate_path, manifest_sha256, len(manifest.cases))
     gated_cases = {case["case_id"]: case for case in gate["cases"]}
     root = manifest_path.resolve().parent
@@ -976,6 +1002,7 @@ def run_live(
             "declared_run_id": manifest.protocol.declared_run_id,
             "manifest_sha256": manifest_sha256,
             "model_name": manifest.protocol.model_name,
+            "provider_surface": str(resolved_provider.provider_surface),
             "case_ids": [case.case_id for case in manifest.cases],
             "maximum_possible_logical_model_calls": (
                 call_budget_preflight.maximum_possible_logical_model_calls
@@ -1010,6 +1037,7 @@ def run_live(
                     repository=prepared[case.case_id],
                     workspace_root=workspace_root,
                     model_name=manifest.protocol.model_name,
+                    provider_config=resolved_provider,
                     expected_context_sha256=gated_cases[case.case_id]["anti_leakage"][
                         "context_sha256"
                     ],
@@ -1038,6 +1066,7 @@ def run_live(
         "manifest_sha256": manifest_sha256,
         "oracle_gate_sha256": _sha256(gate_path.read_bytes()),
         "model_name": manifest.protocol.model_name,
+        "provider_surface": str(resolved_provider.provider_surface),
         "pacing_policy": str(manifest.protocol.pacing_policy),
         "inter_case_delay_seconds": manifest.protocol.inter_case_delay_seconds,
         "maximum_possible_logical_model_calls": (
@@ -1224,6 +1253,8 @@ def summarize_live(raw: dict[str, Any]) -> dict[str, Any]:
             "representative production accuracy estimate or proof of pull-request correctness."
         ),
     }
+    if "provider_surface" in raw:
+        summary["provider_surface"] = raw["provider_surface"]
     if "maximum_possible_logical_model_calls" in raw:
         summary.update(
             {
@@ -1276,10 +1307,14 @@ A logical model call is one semantic PatchProof task. A provider attempt is an a
 request, including any permitted transient retry. The available capacity is an operator declaration,
 not a query of the provider's live remaining quota.
 """
+    provider = ""
+    if "provider_surface" in summary:
+        provider = f"\nProvider surface: `{summary['provider_surface']}`\n"
     return f"""# PatchProof hard-mode result
 
 Declared run: `{summary["declared_run_id"]}`
 Model: `{summary["model_name"]}`
+{provider}
 
 ## Outcomes
 

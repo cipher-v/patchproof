@@ -6,7 +6,7 @@ import os
 import subprocess
 import tempfile
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 from uuid import UUID
@@ -33,6 +33,11 @@ from patchproof.dashboard import StoreDashboardSnapshotProvider, install_dashboa
 from patchproof.evidence_workflow import EvidenceWorkflow
 from patchproof.execution_contract import ExecutionContract, ExecutionContractLoader
 from patchproof.firestore_store import FirestoreVerificationRunStore
+from patchproof.gemini_provider import (
+    GeminiProviderConfig,
+    GeminiProviderSurface,
+    preflight_vertex_authentication,
+)
 from patchproof.github_checks import (
     GitHubAppInstallationTokenProvider,
     GitHubCheckPublisher,
@@ -193,6 +198,7 @@ class CloudRunTaskProcessor:
         github_app_id: int,
         github_private_key: str,
         model_name: str = DEFAULT_CLAIM_MODEL,
+        provider_config: GeminiProviderConfig | None = None,
         executor_tokens: ExecutorIdentityTokenProvider | None = None,
     ) -> None:
         self.store = store
@@ -201,6 +207,9 @@ class CloudRunTaskProcessor:
             normalize_repository_name(value) for value in allowed_repositories
         )
         self.model_name = model_name
+        self.provider_config = provider_config or GeminiProviderConfig.developer_api()
+        if self.provider_config.provider_surface is GeminiProviderSurface.VERTEX_AI:
+            preflight_vertex_authentication(self.provider_config)
         self.executor_tokens = executor_tokens or GoogleExecutorIdentityTokenProvider()
         tokens = GitHubAppInstallationTokenProvider(
             app_id=github_app_id,
@@ -246,11 +255,20 @@ class CloudRunTaskProcessor:
                 store=self.store,
                 context_retriever=context,
                 claim_agent=BehavioralClaimAgent(
-                    model=AdkGeminiClaimModel(model_name=self.model_name)
+                    model=AdkGeminiClaimModel(
+                        model_name=self.model_name,
+                        provider_config=self.provider_config,
+                    )
                 ),
-                candidate_model=AdkGeminiCandidateModel(model_name=self.model_name),
+                candidate_model=AdkGeminiCandidateModel(
+                    model_name=self.model_name,
+                    provider_config=self.provider_config,
+                ),
                 challenge=challenge,
-                assessor=AdkGeminiEvidenceAssessor(model_name=self.model_name),
+                assessor=AdkGeminiEvidenceAssessor(
+                    model_name=self.model_name,
+                    provider_config=self.provider_config,
+                ),
             )
             await ReliableEvidenceWorker(workflow=workflow, store=self.store).run(run_id)
         self.publisher.publish(run_id)
@@ -330,6 +348,9 @@ class CloudControlSettings:
     dashboard_run_ids: tuple[UUID, ...] = ()
     firestore_namespace: str = "patchproof"
     model_name: str = DEFAULT_CLAIM_MODEL
+    gemini_provider: GeminiProviderConfig = field(
+        default_factory=GeminiProviderConfig.developer_api
+    )
 
     @classmethod
     def from_environment(cls) -> CloudControlSettings:
@@ -361,6 +382,7 @@ class CloudControlSettings:
             ),
             firestore_namespace=os.environ.get("PATCHPROOF_FIRESTORE_NAMESPACE", "patchproof"),
             model_name=os.environ.get("PATCHPROOF_GEMINI_MODEL", DEFAULT_CLAIM_MODEL),
+            gemini_provider=GeminiProviderConfig.from_environment(),
         )
 
 
@@ -394,6 +416,7 @@ def create_cloud_control_app(
         github_app_id=settings.github_app_id,
         github_private_key=settings.github_private_key,
         model_name=settings.model_name,
+        provider_config=settings.gemini_provider,
     )
     resolved_verifier = verifier or GoogleTaskIdentityVerifier(
         audience=settings.control_url,

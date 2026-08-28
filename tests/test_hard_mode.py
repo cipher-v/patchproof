@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 import patchproof.hard_mode as hard_mode_module
+from patchproof.gemini_provider import GeminiProviderSurface
 from patchproof.hard_mode import (
     HardModeCaseKind,
     HardModeConfigurationError,
@@ -39,6 +40,7 @@ def _manifest_with_available_calls(available: int):
     )
     payload["protocol"].update(
         {
+            "provider_surface": GeminiProviderSurface.GEMINI_DEVELOPER_API,
             "maximum_possible_logical_model_calls": logical_required,
             "maximum_possible_provider_calls": provider_required,
             "declared_available_provider_calls": available,
@@ -250,6 +252,7 @@ def test_old_manifest_requires_explicit_call_budget_for_a_new_live_run(
 ) -> None:
     manifest, _ = load_hard_mode_manifest(_MANIFEST_PATH)
     assert manifest.protocol.declared_available_provider_calls is None
+    assert manifest.protocol.provider_surface is None
     journal = writable_test_directory / "old-manifest.jsonl"
 
     with pytest.raises(
@@ -331,6 +334,7 @@ def test_live_run_records_passing_call_budget_before_fake_case_execution(
 
     started = json.loads(journal.read_text(encoding="utf-8").splitlines()[0])
     assert started["event"] == "RUN_STARTED"
+    assert started["provider_surface"] == "GEMINI_DEVELOPER_API"
     assert started["maximum_possible_logical_model_calls"] == 20
     assert started["maximum_possible_provider_calls"] == 40
     assert started["declared_available_provider_calls"] == 40
@@ -339,11 +343,13 @@ def test_live_run_records_passing_call_budget_before_fake_case_execution(
     assert raw["maximum_possible_provider_calls"] == 40
     assert raw["declared_available_provider_calls"] == 40
     assert raw["model_call_budget_preflight_passed"] is True
+    assert raw["provider_surface"] == "GEMINI_DEVELOPER_API"
     summary = summarize_live(raw)
     assert summary["maximum_possible_logical_model_calls"] == 20
     assert summary["maximum_possible_provider_calls"] == 40
     assert summary["declared_available_provider_calls"] == 40
     assert summary["model_call_budget_preflight_passed"] is True
+    assert summary["provider_surface"] == "GEMINI_DEVELOPER_API"
     rendered = render_summary_markdown(summary)
     assert "logical model call is one semantic PatchProof task" in rendered
     assert "provider attempt is an actual provider" in rendered

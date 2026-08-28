@@ -2,8 +2,8 @@
 
 ## Status
 
-**COMPLETE.** Project `patchproof-506606` has the
-documented Firestore database, rate-limited Cloud Tasks queue, three secrets, four service
+**COMPLETE.** The original Phase 8 proof in project `patchproof-506606` has the
+documented Firestore database, rate-limited Cloud Tasks queue, three historical secrets, four service
 identities, Artifact Registry image, private executor, and public control service in
 `asia-south1`. Both revisions are Ready. Public control `/livez` and authenticated private executor
 `/livez` return HTTP 200; unauthenticated executor access returns HTTP 403.
@@ -12,6 +12,11 @@ GitHub App 4711074 is active with `pull_request`, `Checks: write`, `Pull request
 delivery, and SSL verification. PR #1 produced a genuine signed event, completed the task/private
 executor/evidence path, and published a successful GitHub Check. The exact sanitized record is
 `deploy/results/phase8-deployment.json`.
+
+The current deployment script migrates Gemini inference to Vertex AI. It no longer creates or
+mounts the historical Gemini API-key secret; it uses the control service's runtime identity instead.
+This documentation preserves the original proof as history and describes the current deployment
+procedure below.
 
 ## Problem and architecture
 
@@ -98,8 +103,10 @@ Manager binding and receives no GitHub or Gemini secret.
 adapters, evidence workflow, remote challenge, reliable worker, and GitHub App publisher. If
 evidence exists already, replay goes directly to publication without Gemini or pytest.
 
-The deployed model setting remains `gemini-3.6-flash`, the same version exercised by the successful
-credential-gated live test and accepted by the 3.5-or-newer guard.
+The model setting remains `gemini-3.6-flash`, accepted by the same 3.5-or-newer guard. The current
+composition selects `VERTEX_AI` explicitly and passes one non-secret project/location configuration
+to all three ADK task adapters. Their instructions, schemas, temperature, thinking configuration,
+tool-free behavior, and retry boundaries remain shared with the Developer API path.
 
 ### Container and build
 
@@ -111,7 +118,7 @@ environment, and secret mounts remain separate. The process listens on `0.0.0.0:
 
 | Identity | Granted by deployment | Deliberately absent |
 | --- | --- | --- |
-| `patchproof-control` | Firestore user, Tasks enqueuer, only three named secrets, invoke only executor, act as only task identity | owner/editor, executor identity, arbitrary secrets |
+| `patchproof-control` | Firestore user, Tasks enqueuer, Vertex AI user, only webhook/PEM secrets, invoke only executor, act as only task identity | owner/editor, executor identity, arbitrary secrets, static Gemini credential |
 | `patchproof-executor` | no project role | Firestore, Tasks, Secret Manager, Gemini, GitHub |
 | `patchproof-task-invoker` | no project role; OIDC subject only | data, execution, secrets, GitHub |
 | `patchproof-builder` | log writer, source-object viewer, Artifact Registry writer on only `patchproof` | runtime data, secrets, Run invocation |
@@ -122,8 +129,10 @@ not runtime permissions.
 
 ## Secrets and cost
 
-Secret Manager holds the webhook HMAC secret, GitHub App PEM, and Gemini API key. Only control can
-read those named secrets. Input comes from local files outside the repository, not CLI literals.
+Secret Manager holds the webhook HMAC secret and GitHub App PEM. Only control can read those named
+secrets. Vertex authentication comes from the attached runtime service account through Application
+Default Credentials; no service-account JSON, static access token, or Gemini API key is mounted.
+Input for the two retained secrets comes from local files outside the repository, not CLI literals.
 
 The script adds no Pub/Sub, GKE, SQL, Redis, load balancer, domain, or paid observability. Both Run
 services use `--min=0`. Executor concurrency/max instances are 1; control max instances are 2. The
@@ -140,12 +149,11 @@ gcloud auth application-default login
 gcloud projects describe "YOUR_PROJECT_ID"
 ```
 
-Create three files outside the repository, containing only their respective values:
+Create two files outside the repository, containing only their respective values:
 
 ```text
 C:\secure\patchproof-webhook-secret.txt
 C:\secure\patchproof-github-app.pem
-C:\secure\patchproof-gemini-key.txt
 ```
 
 Then run the checked-in script. PowerShell environment values do use double quotes:
@@ -156,16 +164,19 @@ $env:PATCHPROOF_GCP_PROJECT = "YOUR_PROJECT_ID"
 .\deploy\gcp\deploy.ps1 `
   -ProjectId $env:PATCHPROOF_GCP_PROJECT `
   -Region "asia-south1" `
+  -VertexLocation "global" `
   -AllowedRepositories "cipher-v/patchproof" `
   -GitHubAppId 123456 `
   -WebhookSecretFile "C:\secure\patchproof-webhook-secret.txt" `
-  -GitHubPrivateKeyFile "C:\secure\patchproof-github-app.pem" `
-  -GeminiApiKeyFile "C:\secure\patchproof-gemini-key.txt"
+  -GitHubPrivateKeyFile "C:\secure\patchproof-github-app.pem"
 ```
 
-The script enables only required APIs, creates identities and bindings, creates native Firestore,
-rate-limits the queue, versions secrets, builds one image, deploys private executor and public
-control, authorizes control-to-executor invocation, and sets the final task audience.
+The script enables only required APIs, including Vertex AI, creates identities and bindings, grants
+`roles/aiplatform.user` only to the control runtime service account, creates native Firestore,
+rate-limits the queue, versions the two non-Gemini secrets, builds one image, deploys private
+executor and public control, authorizes control-to-executor invocation, and sets the final task
+audience. The control revision receives `PATCHPROOF_GEMINI_PROVIDER=VERTEX_AI`,
+`GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION=global`, and the unchanged model name.
 
 Set the GitHub App webhook URL to the printed `CONTROL_URL/webhooks/github`, use the same webhook
 secret, subscribe to pull-request events, grant `Checks: write`, and install only on the allowlisted

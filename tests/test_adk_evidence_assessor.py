@@ -21,7 +21,8 @@ def test_evidence_assessor_is_same_logical_stateless_tool_free_agent() -> None:
 
     assert assessor.model_name == "gemini-3.6-flash"
     assert assessor.agent.name == "patchproof_agent"
-    assert assessor.agent.model == "gemini-3.6-flash"
+    assert assessor.agent.model.model == "gemini-3.6-flash"
+    assert assessor.agent.model.client_kwargs == {"enterprise": False}
     assert assessor.agent.input_schema is EvidenceAssessorInput
     assert assessor.agent.output_schema is SemanticEvidenceDecision
     assert assessor.agent.include_contents == "none"

@@ -80,7 +80,8 @@ def test_candidate_adapter_is_the_same_logical_stateless_tool_free_agent() -> No
 
     assert model.model_name == "gemini-3.6-flash"
     assert model.agent.name == "patchproof_agent"
-    assert model.agent.model == "gemini-3.6-flash"
+    assert model.agent.model.model == "gemini-3.6-flash"
+    assert model.agent.model.client_kwargs == {"enterprise": False}
     assert model.agent.input_schema is CandidateModelRequest
     assert model.agent.output_schema is CandidateTestDraft
     assert model.agent.include_contents == "none"

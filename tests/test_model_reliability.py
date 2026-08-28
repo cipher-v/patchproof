@@ -11,6 +11,7 @@ from patchproof.claim_agent import ModelUsage, RawClaimModelResponse
 from patchproof.model_reliability import (
     BoundedRetryingModel,
     ModelInvocationFailure,
+    is_transient_event_code,
     is_transient_provider_error,
 )
 
@@ -72,3 +73,11 @@ def test_only_known_provider_statuses_are_transient() -> None:
     assert is_transient_provider_error(ClientError(429, {"message": "throttled"}))
     assert not is_transient_provider_error(ClientError(400, {"message": "bad request"}))
     assert not is_transient_provider_error(RuntimeError("unknown"))
+
+
+def test_named_and_numeric_transient_event_codes_share_the_bounded_policy() -> None:
+    assert is_transient_event_code("RESOURCE_EXHAUSTED")
+    assert is_transient_event_code("429")
+    assert is_transient_event_code("503")
+    assert not is_transient_event_code("PERMISSION_DENIED")
+    assert not is_transient_event_code("403")

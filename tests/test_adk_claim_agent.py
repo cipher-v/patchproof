@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 from google.genai import types
+from google.genai.errors import ClientError
 
 import patchproof.adk_claim_agent as adk_module
 from patchproof.adk_claim_agent import (
@@ -24,6 +25,8 @@ from patchproof.claim_agent import (
     PullRequestNarrative,
 )
 from patchproof.context_retrieval import PullRequestContext, RetrievalStats
+from patchproof.gemini_provider import GeminiProviderConfig, GeminiProviderSurface
+from patchproof.model_reliability import BoundedRetryingModel
 
 
 def _request() -> ClaimAgentInput:
@@ -54,7 +57,8 @@ def test_adk_agent_is_one_stateless_tool_free_structured_agent() -> None:
 
     assert model.model_name == DEFAULT_CLAIM_MODEL == "gemini-3.6-flash"
     assert model.agent.name == "patchproof_agent"
-    assert model.agent.model == DEFAULT_CLAIM_MODEL
+    assert model.agent.model.model == DEFAULT_CLAIM_MODEL
+    assert model.agent.model.client_kwargs == {"enterprise": False}
     assert model.agent.input_schema is ClaimAgentInput
     assert model.agent.output_schema is ClaimSelectionDraft
     assert model.agent.include_contents == "none"
@@ -165,3 +169,91 @@ def test_adapter_normalizes_session_failure_without_leaking_provider_detail(monk
     with pytest.raises(ClaimAgentInvocationError, match="did not complete") as captured:
         asyncio.run(AdkGeminiClaimModel().invoke(_request()))
     assert "sensitive session detail" not in str(captured.value)
+
+
+def test_retryable_vertex_failure_uses_exactly_one_bounded_retry(monkeypatch) -> None:
+    selection = ClaimSelectionDraft(
+        disposition=ClaimSelectionDisposition.INSUFFICIENT_EVIDENCE,
+        explanation="No changed behavior is present.",
+    )
+    calls = 0
+
+    class FakeSessionService:
+        async def create_session(self, **_kwargs):
+            return object()
+
+    class FakeEvent:
+        error_code = None
+        error_message = None
+        model_version = "gemini-3.6-flash-vertex"
+        usage_metadata = SimpleNamespace(
+            prompt_token_count=10,
+            candidates_token_count=5,
+            total_token_count=15,
+            cached_content_token_count=None,
+        )
+        content = types.Content(parts=[types.Part(text=selection.model_dump_json())])
+
+        @staticmethod
+        def is_final_response() -> bool:
+            return True
+
+    class SequencedRunner:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        async def run_async(self, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise ClientError(429, {"message": "sensitive throttling detail"})
+            yield FakeEvent()
+
+    monkeypatch.setattr(adk_module, "InMemorySessionService", FakeSessionService)
+    monkeypatch.setattr(adk_module, "Runner", SequencedRunner)
+    config = GeminiProviderConfig(
+        provider_surface=GeminiProviderSurface.VERTEX_AI,
+        project="example-project",
+        location="global",
+    )
+
+    response = asyncio.run(
+        BoundedRetryingModel(AdkGeminiClaimModel(provider_config=config)).invoke(_request())
+    )
+
+    assert calls == 2
+    assert response.usage.provider_attempts == 2
+
+
+def test_nonretryable_vertex_failure_is_not_repeated_or_leaked(monkeypatch) -> None:
+    calls = 0
+
+    class FakeSessionService:
+        async def create_session(self, **_kwargs):
+            return object()
+
+    class PermissionDeniedRunner:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        async def run_async(self, **_kwargs):
+            nonlocal calls
+            calls += 1
+            raise ClientError(403, {"message": "sensitive IAM detail"})
+            yield
+
+    monkeypatch.setattr(adk_module, "InMemorySessionService", FakeSessionService)
+    monkeypatch.setattr(adk_module, "Runner", PermissionDeniedRunner)
+    config = GeminiProviderConfig(
+        provider_surface=GeminiProviderSurface.VERTEX_AI,
+        project="example-project",
+        location="global",
+    )
+
+    with pytest.raises(ClaimAgentInvocationError, match="runtime identity lacks") as captured:
+        asyncio.run(
+            BoundedRetryingModel(AdkGeminiClaimModel(provider_config=config)).invoke(_request())
+        )
+
+    assert calls == 1
+    assert "sensitive IAM detail" not in str(captured.value)
