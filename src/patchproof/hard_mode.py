@@ -801,10 +801,11 @@ async def _run_live_case(
 ) -> dict[str, Any]:
     started = datetime.now(UTC)
     oracle_source = ""  # The live path deliberately never loads developer-oracle bytes.
-    context = DeterministicContextRetriever(
+    context_retriever = DeterministicContextRetriever(
         source_repository=repository,
         excluded_paths=frozenset(case.excluded_paths),
-    ).retrieve(base_sha=case.base_sha, head_sha=case.head_sha)
+    )
+    context = context_retriever.retrieve(base_sha=case.base_sha, head_sha=case.head_sha)
     context_sha256 = _sha256(context.model_dump_json().encode("utf-8"))
     if context_sha256 != expected_context_sha256:
         raise HardModeConfigurationError("live context differs from the preflight-gated context")
@@ -866,6 +867,14 @@ async def _run_live_case(
         result["final_outcome"] = str(ClaimOutcome.INSUFFICIENT_EVIDENCE)
         return _finish_case(result, started)
 
+    signature_context = context_retriever.retrieve_callable_signatures(
+        head_sha=case.head_sha,
+        context=context,
+        affected_symbols=tuple(
+            (symbol.path, symbol.qualified_name) for symbol in claim.affected_symbols
+        ),
+    )
+
     generator = BoundedCandidateTestGenerator(
         model=BoundedRetryingModel(
             AdkGeminiCandidateModel(model_name=model_name, provider_config=provider_config)
@@ -874,9 +883,8 @@ async def _run_live_case(
         claim=claim,
         context=context,
         contract=_contract(),
-        existing_paths=DeterministicContextRetriever(source_repository=repository).committed_paths(
-            case.head_sha
-        ),
+        existing_paths=context_retriever.committed_paths(case.head_sha),
+        repository_signatures=signature_context,
     )
     challenge_runner = _challenge(repository, workspace_root / "live", case)
     challenge = None

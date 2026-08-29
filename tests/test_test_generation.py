@@ -17,7 +17,12 @@ from patchproof.claim_agent import (
     ModelUsage,
     SupportingContextRef,
 )
-from patchproof.context_retrieval import DeterministicContextRetriever, PullRequestContext
+from patchproof.context_retrieval import (
+    DeterministicContextRetriever,
+    PullRequestContext,
+    RepositoryCallableSignature,
+    RepositorySignatureContext,
+)
 from patchproof.evidence_workflow import EvidenceWorkflow
 from patchproof.execution_contract import ExecutionContract
 from patchproof.test_generation import (
@@ -33,6 +38,7 @@ from patchproof.test_generation import (
     CandidateTestValidator,
     CandidateValidationError,
     RawCandidateModelResponse,
+    candidate_behavior_fingerprint,
 )
 
 
@@ -157,6 +163,7 @@ def _generator(
     existing_paths: frozenset[str] = frozenset(),
     max_input_json_chars: int = 64_000,
     max_response_chars: int = 20_000,
+    repository_signatures: RepositorySignatureContext | None = None,
 ) -> BoundedCandidateTestGenerator:
     return BoundedCandidateTestGenerator(
         model=model,
@@ -165,6 +172,7 @@ def _generator(
         context=context,
         contract=_contract(),
         existing_paths=existing_paths,
+        repository_signatures=repository_signatures,
         max_input_json_chars=max_input_json_chars,
         max_response_chars=max_response_chars,
     )
@@ -197,6 +205,35 @@ def test_valid_candidate_becomes_one_immutable_hashed_replay_artifact(
     assert generator.snapshot.model_calls == 1
     assert len(model.requests) == 1
     assert "uv sync" not in model.requests[0].model_dump_json()
+
+
+def test_candidate_request_and_attempt_record_signature_grounding_metadata(
+    context_repository_history: ContextRepositoryHistory,
+) -> None:
+    signature_context = RepositorySignatureContext.build(
+        (
+            RepositoryCallableSignature(
+                path="workspace.py",
+                qualified_name="WorkspaceResolver.choose_workspace",
+                signature="WorkspaceResolver.choose_workspace(candidates)",
+            ),
+        ),
+        truncated=False,
+    )
+    model = FakeCandidateModel(_draft().model_dump_json())
+    attempt = asyncio.run(
+        _generator(
+            model=model,
+            context=_context(context_repository_history),
+            repository_signatures=signature_context,
+        ).generate_initial()
+    )
+
+    assert model.requests[0].repository_signatures == signature_context
+    assert attempt.signature_context_count == 1
+    assert attempt.signature_context_truncated is False
+    assert attempt.signature_context_sha256 == signature_context.sha256
+    assert attempt.behavior_fingerprint == attempt.validated.behavior_fingerprint
 
 
 @pytest.mark.parametrize(
@@ -442,6 +479,127 @@ def test_byte_identical_repair_source_is_rejected_without_an_executable_artifact
     assert generator.snapshot.repair_used is True
     with pytest.raises(CandidateBudgetExceeded):
         asyncio.run(generator.repair(feedback=feedback))
+
+
+def test_behavior_fingerprint_ignores_non_executable_source_changes() -> None:
+    base = (
+        "from workspace import WorkspaceResolver\n\n\n"
+        "def test_patchproof_generated_behavior() -> None:\n"
+        "    candidates = ['org', 'org/team/project']\n"
+        "    assert WorkspaceResolver.choose_workspace(candidates) == 'org/team/project'\n"
+    )
+    variants = (
+        base.replace("candidates =", "candidates    ="),
+        base.replace("    candidates =", "    # candidate ordering\n    candidates ="),
+        "import pytest\n" + base,
+        "import json\nimport pytest\n" + base,
+        "import pytest\nimport json\n" + base,
+        "from builtins import ValueError\n" + base,
+        base.replace("candidates", "workspace_candidates"),
+    )
+    expected = candidate_behavior_fingerprint(
+        base,
+        test_function="test_patchproof_generated_behavior",
+    )
+
+    assert all(
+        candidate_behavior_fingerprint(
+            variant,
+            test_function="test_patchproof_generated_behavior",
+        )
+        == expected
+        for variant in variants
+    )
+
+
+@pytest.mark.parametrize(
+    ("original", "changed"),
+    [
+        (
+            "def test_patchproof_generated_behavior():\n    assert 1 == 2\n",
+            "def test_patchproof_generated_behavior():\n    assert 1 == 3\n",
+        ),
+        (
+            "def test_patchproof_generated_behavior():\n    assert sorted([3, 1]) == [1, 3]\n",
+            "def test_patchproof_generated_behavior():\n    assert sorted([2, 1]) == [1, 3]\n",
+        ),
+        (
+            "import pytest\n\n"
+            "def test_patchproof_generated_behavior():\n"
+            "    with pytest.raises(ValueError):\n"
+            "        int('x')\n",
+            "import pytest\n\n"
+            "def test_patchproof_generated_behavior():\n"
+            "    with pytest.raises(TypeError):\n"
+            "        int('x')\n",
+        ),
+        (
+            "import pytest\n\n"
+            "def test_patchproof_generated_behavior():\n"
+            "    with pytest.raises(UserWarning):\n"
+            "        int('x')\n",
+            "import pytest\n\n"
+            "def test_patchproof_generated_behavior():\n"
+            "    with pytest.warns(UserWarning):\n"
+            "        int('x')\n",
+        ),
+        (
+            "from checks import check\n\n"
+            "def test_patchproof_generated_behavior():\n"
+            "    assert check(1)\n",
+            "from other_checks import check\n\n"
+            "def test_patchproof_generated_behavior():\n"
+            "    assert check(1)\n",
+        ),
+        (
+            "EXPECTED = 2\n\ndef test_patchproof_generated_behavior():\n    assert 1 == EXPECTED\n",
+            "EXPECTED = 3\n\ndef test_patchproof_generated_behavior():\n    assert 1 == EXPECTED\n",
+        ),
+    ],
+)
+def test_behavior_fingerprint_retains_meaningful_executable_changes(
+    original: str, changed: str
+) -> None:
+    assert candidate_behavior_fingerprint(
+        changed,
+        test_function="test_patchproof_generated_behavior",
+    ) != candidate_behavior_fingerprint(
+        original,
+        test_function="test_patchproof_generated_behavior",
+    )
+
+
+def test_behaviorally_unchanged_repair_is_rejected_before_execution(
+    context_repository_history: ContextRepositoryHistory,
+) -> None:
+    initial_draft = _draft()
+    cosmetic_repair = _draft(
+        source="import pytest\n" + initial_draft.source,
+        rationale="Adds an exception helper without changing the failing test assumption.",
+    )
+    generator = _generator(
+        model=FakeCandidateModel(
+            initial_draft.model_dump_json(),
+            cosmetic_repair.model_dump_json(),
+        ),
+        context=_context(context_repository_history),
+    )
+    initial = asyncio.run(generator.generate_initial())
+
+    repaired = asyncio.run(
+        generator.repair(
+            feedback=CandidateFeedback(
+                category="EXECUTION",
+                summary="The previous candidate did not discriminate.",
+            )
+        )
+    )
+
+    assert initial.status is CandidateAttemptStatus.VALIDATED
+    assert repaired.status is CandidateAttemptStatus.REJECTED
+    assert repaired.validated is None
+    assert repaired.behavior_fingerprint == initial.behavior_fingerprint
+    assert repaired.issues[0].code is CandidateIssueCode.NO_BEHAVIORAL_REPAIR_CHANGE
 
 
 def test_repair_before_initial_and_duplicate_initial_are_rejected_without_model_calls(

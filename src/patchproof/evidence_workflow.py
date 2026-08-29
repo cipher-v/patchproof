@@ -127,6 +127,10 @@ class CandidateAttemptEvidence(BaseModel):
     source: str | None = Field(default=None, max_length=16_000)
     rationale: str | None
     artifact_sha256: str | None
+    behavior_fingerprint: str | None = Field(default=None, pattern=r"[0-9a-f]{64}")
+    signature_context_count: int = Field(ge=0, le=8)
+    signature_context_truncated: bool
+    signature_context_sha256: str = Field(pattern=r"[0-9a-f]{64}")
     issues: tuple[str, ...] = Field(default_factory=tuple, max_length=8)
     feedback: CandidateFeedback | None
     usage: ModelUsage
@@ -311,6 +315,13 @@ class EvidenceWorkflow:
             return report
 
         run = self._transition(run, RunTransition(phase=RunPhase.TEST_GENERATION))
+        signature_context = self.context_retriever.retrieve_callable_signatures(
+            head_sha=run.head_sha,
+            context=context,
+            affected_symbols=tuple(
+                (symbol.path, symbol.qualified_name) for symbol in selection.claim.affected_symbols
+            ),
+        )
         generator = BoundedCandidateTestGenerator(
             model=self.candidate_model,
             validator=CandidateTestValidator(),
@@ -318,6 +329,7 @@ class EvidenceWorkflow:
             context=context,
             contract=contract,
             existing_paths=existing_paths,
+            repository_signatures=signature_context,
         )
         attempts: list[CandidateAttempt] = []
         challenge: ChallengeResult | None = None
@@ -694,6 +706,10 @@ class EvidenceWorkflow:
             source=proposal.source if proposal else None,
             rationale=proposal.rationale if proposal else None,
             artifact_sha256=attempt.validated.artifact.sha256 if attempt.validated else None,
+            behavior_fingerprint=attempt.behavior_fingerprint,
+            signature_context_count=attempt.signature_context_count,
+            signature_context_truncated=attempt.signature_context_truncated,
+            signature_context_sha256=attempt.signature_context_sha256,
             issues=tuple(f"{issue.code}: {issue.message}" for issue in attempt.issues),
             feedback=attempt.feedback,
             usage=attempt.usage,

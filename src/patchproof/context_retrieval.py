@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import ast
+import builtins
+import hashlib
+import json
+import keyword
 import re
 import subprocess
 import tokenize
@@ -21,6 +25,8 @@ _HUNK_PATTERN = re.compile(
 )
 _WORD_BOUNDARY_TEMPLATE = r"(?<![A-Za-z0-9_]){}(?![A-Za-z0-9_])"
 _TRUNCATION_MARKER = "\n... [deterministically truncated by PatchProof]"
+_CALLABLE_REFERENCE_PATTERN = re.compile(r"(?<![A-Za-z0-9_])(?:[A-Za-z_]\w*\.)*([A-Za-z_]\w*)\s*\(")
+_QUALIFIED_CLASS_PATTERN = re.compile(r"(?<![A-Za-z0-9_])(?:[A-Za-z_]\w*\.)+([A-Z][A-Za-z0-9_]*)")
 
 
 class ContextRetrievalError(RuntimeError):
@@ -180,6 +186,61 @@ class PullRequestContext(BaseModel):
         return Revision(role=RevisionRole.BASE, sha=value).sha
 
 
+class RepositoryCallableSignature(BaseModel):
+    """One statically extracted callable signature from an immutable production file."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    path: str
+    qualified_name: str = Field(min_length=1, max_length=256)
+    signature: str = Field(min_length=1, max_length=300)
+
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, value: str) -> str:
+        return _validate_repository_path(value)
+
+
+class RepositorySignatureContext(BaseModel):
+    """Bounded candidate-only API grounding plus non-secret audit metadata."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    signatures: tuple[RepositoryCallableSignature, ...] = Field(max_length=8)
+    truncated: bool
+    sha256: str = Field(pattern=r"[0-9a-f]{64}")
+
+    @classmethod
+    def build(
+        cls,
+        signatures: tuple[RepositoryCallableSignature, ...],
+        *,
+        truncated: bool,
+    ) -> RepositorySignatureContext:
+        payload = json.dumps(
+            {
+                "signatures": [item.model_dump(mode="json") for item in signatures],
+                "truncated": truncated,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+        return cls(
+            signatures=signatures,
+            truncated=truncated,
+            sha256=hashlib.sha256(payload).hexdigest(),
+        )
+
+    @classmethod
+    def empty(cls) -> RepositorySignatureContext:
+        return cls.build((), truncated=False)
+
+    @property
+    def count(self) -> int:
+        return len(self.signatures)
+
+
 @dataclass(frozen=True, slots=True)
 class ContextBudget:
     """Hard deterministic limits for local scanning and prompt-bound context."""
@@ -195,6 +256,10 @@ class ContextBudget:
     max_test_files_scanned: int = 200
     max_reference_files_scanned: int = 200
     max_context_json_chars: int = 48_000
+    max_signature_count: int = 8
+    max_signature_chars: int = 300
+    max_signature_context_chars: int = 2_000
+    max_signature_files_scanned: int = 200
     git_timeout_seconds: float = 30.0
 
     def __post_init__(self) -> None:
@@ -203,6 +268,8 @@ class ContextBudget:
                 raise ValueError(f"context budget {budget_field.name} must be positive")
         if self.max_diff_chars_per_file > self.max_diff_chars:
             raise ValueError("per-file diff budget cannot exceed total diff budget")
+        if self.max_signature_count > 8 or self.max_signature_chars > 300:
+            raise ValueError("signature budgets exceed the prompt-safe schema limits")
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,6 +284,157 @@ class _SymbolSpan:
 class _RankedSnippet:
     score: int
     snippet: ContextSnippet
+
+
+@dataclass(frozen=True, slots=True)
+class _CallableDefinition:
+    path: str
+    qualified_name: str
+    node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef
+    is_method: bool
+
+
+class _CallableVisitor(ast.NodeVisitor):
+    def __init__(self, path: str) -> None:
+        self.path = path
+        self.scope: list[tuple[str, bool]] = []
+        self.definitions: list[_CallableDefinition] = []
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self._record(node, is_method=False)
+        self.scope.append((node.name, True))
+        for child in node.body:
+            self.visit(child)
+        self.scope.pop()
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._visit_function(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._visit_function(node)
+
+    def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        is_method = bool(self.scope and self.scope[-1][1])
+        self._record(node, is_method=is_method)
+        self.scope.append((node.name, False))
+        for child in node.body:
+            self.visit(child)
+        self.scope.pop()
+
+    def _record(
+        self,
+        node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef,
+        *,
+        is_method: bool,
+    ) -> None:
+        self.definitions.append(
+            _CallableDefinition(
+                path=self.path,
+                qualified_name=".".join((*[name for name, _ in self.scope], node.name)),
+                node=node,
+                is_method=is_method,
+            )
+        )
+
+
+_STATIC_DEFAULT_NODES = (
+    ast.Constant,
+    ast.Name,
+    ast.Attribute,
+    ast.Tuple,
+    ast.List,
+    ast.Set,
+    ast.Dict,
+    ast.UnaryOp,
+    ast.BinOp,
+)
+
+
+def _static_default_text(node: ast.expr) -> str | None:
+    if not isinstance(node, _STATIC_DEFAULT_NODES):
+        return None
+    if any(
+        isinstance(child, (ast.Call, ast.Lambda, ast.comprehension, ast.Starred))
+        for child in ast.walk(node)
+    ):
+        return None
+    try:
+        rendered = ast.unparse(node).strip()
+    except (ValueError, TypeError):
+        return None
+    return rendered if rendered and len(rendered) <= 100 else None
+
+
+def _function_signature_text(
+    *,
+    qualified_name: str,
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    drop_implicit_receiver: bool,
+) -> str | None:
+    positional = [*node.args.posonlyargs, *node.args.args]
+    positional_kinds = ["posonly"] * len(node.args.posonlyargs) + ["normal"] * len(node.args.args)
+    defaults: list[ast.expr | None] = [None] * (len(positional) - len(node.args.defaults)) + [
+        *node.args.defaults
+    ]
+    if drop_implicit_receiver and positional and positional[0].arg in {"self", "cls"}:
+        positional = positional[1:]
+        positional_kinds = positional_kinds[1:]
+        defaults = defaults[1:]
+
+    parts: list[str] = []
+    for argument, kind, default in zip(positional, positional_kinds, defaults, strict=True):
+        rendered = argument.arg
+        if default is not None:
+            default_text = _static_default_text(default)
+            if default_text is None:
+                return None
+            rendered += f"={default_text}"
+        parts.append(rendered)
+        if kind == "posonly" and (
+            len(parts) == len([item for item in positional_kinds if item == "posonly"])
+        ):
+            parts.append("/")
+
+    if node.args.vararg is not None:
+        parts.append(f"*{node.args.vararg.arg}")
+    elif node.args.kwonlyargs:
+        parts.append("*")
+    for argument, default in zip(node.args.kwonlyargs, node.args.kw_defaults, strict=True):
+        rendered = argument.arg
+        if default is not None:
+            default_text = _static_default_text(default)
+            if default_text is None:
+                return None
+            rendered += f"={default_text}"
+        parts.append(rendered)
+    if node.args.kwarg is not None:
+        parts.append(f"**{node.args.kwarg.arg}")
+    return f"{qualified_name}({', '.join(parts)})"
+
+
+def _definition_signature_text(definition: _CallableDefinition) -> str | None:
+    if isinstance(definition.node, ast.ClassDef):
+        constructor = next(
+            (
+                child
+                for child in definition.node.body
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and child.name == "__init__"
+            ),
+            None,
+        )
+        if constructor is None:
+            return None
+        return _function_signature_text(
+            qualified_name=f"{definition.qualified_name}.__init__",
+            node=constructor,
+            drop_implicit_receiver=True,
+        )
+    return _function_signature_text(
+        qualified_name=definition.qualified_name,
+        node=definition.node,
+        drop_implicit_receiver=definition.is_method,
+    )
 
 
 class _SymbolVisitor(ast.NodeVisitor):
@@ -346,6 +564,138 @@ class DeterministicContextRetriever:
             ),
         )
         return self._fit_json_budget(context)
+
+    def retrieve_callable_signatures(
+        self,
+        *,
+        head_sha: str,
+        context: PullRequestContext,
+        affected_symbols: tuple[tuple[str, str], ...],
+    ) -> RepositorySignatureContext:
+        """Extract only relevant callable signatures from immutable production source."""
+        head = self._resolve_sha(head_sha, RevisionRole.HEAD)
+        if head.sha != context.head_sha:
+            raise ContextRetrievalError("signature revision differs from retrieved context")
+
+        normalized_affected: list[tuple[str, str]] = []
+        for path, qualified_name in affected_symbols:
+            normalized_path = _validate_repository_path(path)
+            if not qualified_name or len(qualified_name) > 256:
+                raise ContextRetrievalError("affected callable symbol is invalid")
+            normalized_affected.append((normalized_path, qualified_name))
+
+        relevant_text = "\n".join(
+            (
+                context.diff,
+                *(snippet.content for snippet in context.snippets),
+                *(qualified for _, qualified in normalized_affected),
+            )
+        )
+        terms = {qualified.rsplit(".", maxsplit=1)[-1] for _, qualified in normalized_affected}
+        terms.update(
+            symbol.qualified_name.rsplit(".", maxsplit=1)[-1]
+            for symbol in context.changed_symbols
+            if symbol.kind is not SymbolKind.MODULE
+        )
+        terms.update(_CALLABLE_REFERENCE_PATTERN.findall(relevant_text))
+        terms.update(_QUALIFIED_CLASS_PATTERN.findall(relevant_text))
+        terms = {
+            term
+            for term in terms
+            if len(term) >= 2 and not keyword.iskeyword(term) and term not in dir(builtins)
+        }
+        if not terms:
+            return RepositorySignatureContext.empty()
+
+        affected_paths = {path for path, _ in normalized_affected}
+        changed_paths = {file.path for file in context.changed_files if file.is_python}
+        module_hints = set(
+            re.findall(r"(?<![A-Za-z0-9_])([A-Za-z_]\w*)\.[A-Z][A-Za-z0-9_]*", relevant_text)
+        )
+        python_paths, paths_truncated, _ = self._python_paths(head.sha)
+        production_paths = [path for path in python_paths if not self._is_test_path(path)]
+
+        def path_priority(path: str) -> tuple[int, str]:
+            parts = {part.lower() for part in PurePosixPath(path).parts}
+            hint_match = any(
+                hint.lower() in parts or hint.lower() in path.lower() for hint in module_hints
+            )
+            return (
+                0
+                if path in affected_paths
+                else 1
+                if path in changed_paths
+                else 2
+                if hint_match
+                else 3,
+                path,
+            )
+
+        production_paths.sort(key=path_priority)
+        scan_paths = production_paths[: self.budget.max_signature_files_scanned]
+        limit_truncated = paths_truncated or len(production_paths) > len(scan_paths)
+        exact_symbols = set(normalized_affected)
+        changed_symbols = {
+            (symbol.path, symbol.qualified_name) for symbol in context.changed_symbols
+        }
+        ranked: list[tuple[int, RepositoryCallableSignature]] = []
+        for path in scan_paths:
+            source = self._read_source(head.sha, path)
+            if source is None:
+                continue
+            tree = self._parse_python(source, path)
+            if tree is None:
+                continue
+            visitor = _CallableVisitor(path)
+            visitor.visit(tree)
+            for definition in visitor.definitions:
+                leaf = definition.qualified_name.rsplit(".", maxsplit=1)[-1]
+                exact = (path, definition.qualified_name) in exact_symbols
+                changed = (path, definition.qualified_name) in changed_symbols
+                if not exact and not changed and leaf not in terms:
+                    continue
+                if definition.is_method and leaf == "__init__":
+                    continue
+                signature = _definition_signature_text(definition)
+                if signature is None or len(signature) > self.budget.max_signature_chars:
+                    limit_truncated = True
+                    continue
+                score = (400 if exact else 300 if changed else 100) + (
+                    40 if path in affected_paths else 20 if path in changed_paths else 0
+                )
+                ranked.append(
+                    (
+                        score,
+                        RepositoryCallableSignature(
+                            path=path,
+                            qualified_name=definition.qualified_name,
+                            signature=signature,
+                        ),
+                    )
+                )
+
+        ranked.sort(key=lambda item: (-item[0], item[1].path, item[1].qualified_name))
+        selected: list[RepositoryCallableSignature] = []
+        seen: set[tuple[str, str]] = set()
+        total_chars = 0
+        for _, signature in ranked:
+            key = (signature.path, signature.signature)
+            if key in seen:
+                continue
+            serialized_chars = len(signature.model_dump_json())
+            if (
+                len(selected) >= self.budget.max_signature_count
+                or total_chars + serialized_chars > self.budget.max_signature_context_chars
+            ):
+                limit_truncated = True
+                continue
+            seen.add(key)
+            selected.append(signature)
+            total_chars += serialized_chars
+        return RepositorySignatureContext.build(
+            tuple(selected),
+            truncated=limit_truncated,
+        )
 
     def committed_paths(self, revision_sha: str, *, max_paths: int = 20_000) -> frozenset[str]:
         """Return the complete bounded path set from one immutable tree for overwrite checks."""

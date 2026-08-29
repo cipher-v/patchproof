@@ -51,11 +51,15 @@ returning one replacement candidate:
 1. Compare the previous candidate's intended behavior with the actual BASE and HEAD failures.
 2. Identify which assumption in the generated test caused the observed failure, and change that
    assumption rather than merely renaming variables or rewriting equivalent code.
-3. Keep the repaired test targeted exactly at the selected behavioral claim.
-4. If an expected domain exception represents the old broken behavior and its exception/import is
+3. The repaired executable logic must materially change in response to the failure. Imports,
+   comments, identifier renames, or formatting alone are not a repair.
+4. If repository-grounded callable signatures are supplied, conform to them instead of guessing
+   constructor, method, or function arguments.
+5. Keep the repaired test targeted exactly at the selected behavioral claim.
+6. If an expected domain exception represents the old broken behavior and its exception/import is
    grounded in repository context, express that behavior as deterministic pytest assertion evidence.
-5. Do not catch broad or unrelated exceptions merely to force BASE to fail.
-6. Do not modify production code or existing tests, and return only one repaired candidate.
+7. Do not catch broad or unrelated exceptions merely to force BASE to fail.
+8. Do not modify production code or existing tests, and return only one repaired candidate.
 Perform this diagnosis internally; do not return diagnosis steps or a private reasoning field. The
 rationale may briefly state which test assumption was corrected, but must remain audit-friendly.
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import os
+import re
 import shutil
 import time
 import uuid
@@ -19,6 +20,11 @@ from patchproof.execution_runtime import (
     remove_runtime_directory,
 )
 from patchproof.models import ExecutionResult, Revision, TestArtifact, TestExecutionStatus
+
+_UNEXPECTED_EXCEPTION_PATTERN = re.compile(
+    r"(?m)^\s*(?:E\s+)?(?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*"
+    r"(?:Error|Exception|Exit|Interrupt):\s*"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,8 +101,12 @@ class PytestJUnitParser:
         failure = children.get("failure")
         if failure is not None:
             detail = self._element_detail(failure)
+            expectation_detail = self._pytest_expectation_failure(detail)
             if "xpass" in detail.lower():
                 status = TestExecutionStatus.XPASSED
+            elif expectation_detail is not None:
+                status = TestExecutionStatus.ASSERTION_FAILED
+                detail = expectation_detail
             elif "assertionerror" in detail.lower() or detail.lstrip().startswith("assert "):
                 status = TestExecutionStatus.ASSERTION_FAILED
             else:
@@ -150,6 +160,18 @@ class PytestJUnitParser:
         message = element.attrib.get("message", "").strip()
         body = (element.text or "").strip()
         return "\n".join(part for part in (message, body) if part)
+
+    @staticmethod
+    def _pytest_expectation_failure(detail: str) -> str | None:
+        """Recognize only stable pytest failures where an expected behavior did not occur."""
+        first_line = detail.lstrip().splitlines()[0] if detail.strip() else ""
+        if _UNEXPECTED_EXCEPTION_PATTERN.search(detail) is not None:
+            return None
+        if first_line == "Failed: DID NOT WARN" or first_line.startswith("Failed: DID NOT WARN."):
+            return "PYTEST_EXPECTATION_NOT_MET: expected warning was not emitted"
+        if first_line.startswith("Failed: DID NOT RAISE "):
+            return "PYTEST_EXPECTATION_NOT_MET: expected exception was not raised"
+        return None
 
 
 class PytestRunner:

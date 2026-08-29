@@ -106,6 +106,10 @@ def test_candidate_adapter_is_the_same_logical_stateless_tool_free_agent() -> No
     assert "Compare the previous candidate's intended behavior" in CANDIDATE_AGENT_INSTRUCTION
     assert "which assumption in the generated test caused" in CANDIDATE_AGENT_INSTRUCTION
     assert "merely renaming variables or rewriting equivalent code" in (CANDIDATE_AGENT_INSTRUCTION)
+    assert "The repaired executable logic must materially change" in CANDIDATE_AGENT_INSTRUCTION
+    assert "comments, identifier renames, or formatting alone" in CANDIDATE_AGENT_INSTRUCTION
+    assert "repository-grounded callable signatures" in CANDIDATE_AGENT_INSTRUCTION
+    assert "instead of guessing" in CANDIDATE_AGENT_INSTRUCTION
     assert "expected domain exception" in CANDIDATE_AGENT_INSTRUCTION
     assert "Do not catch broad or unrelated exceptions" in CANDIDATE_AGENT_INSTRUCTION
     assert "return only one repaired candidate" in CANDIDATE_AGENT_INSTRUCTION

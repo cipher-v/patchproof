@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import copy
 import hashlib
 import json
 import re
@@ -16,7 +17,7 @@ from typing import Literal, Protocol
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from patchproof.claim_agent import BehavioralClaim, ModelUsage
-from patchproof.context_retrieval import PullRequestContext
+from patchproof.context_retrieval import PullRequestContext, RepositorySignatureContext
 from patchproof.execution_contract import ExecutionContract
 from patchproof.models import TestArtifact
 from patchproof.structured_output import StrictGeminiOutputModel
@@ -107,6 +108,7 @@ class CandidateIssueCode(StrEnum):
     FORBIDDEN_CALL = "FORBIDDEN_CALL"
     DUPLICATE_CANDIDATE_ID = "DUPLICATE_CANDIDATE_ID"
     DUPLICATE_CANDIDATE_SOURCE = "DUPLICATE_CANDIDATE_SOURCE"
+    NO_BEHAVIORAL_REPAIR_CHANGE = "NO_BEHAVIORAL_REPAIR_CHANGE"
 
 
 class CandidateTestProposal(StrictGeminiOutputModel):
@@ -192,6 +194,9 @@ class CandidateModelRequest(BaseModel):
 
     claim: BehavioralClaim
     context: PullRequestContext
+    repository_signatures: RepositorySignatureContext = Field(
+        default_factory=RepositorySignatureContext.empty
+    )
     allowed_test_paths: tuple[str, ...] = Field(min_length=1, max_length=4)
     previous_candidate: CandidateTestProposal | None = None
     feedback: CandidateFeedback | None = None
@@ -370,6 +375,184 @@ def _candidate_output_diagnostic(
     )
 
 
+def _import_bindings(tree: ast.Module) -> dict[str, str]:
+    bindings: dict[str, str] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                bound = alias.asname or alias.name.split(".", maxsplit=1)[0]
+                bindings[bound] = f"import:{alias.name}"
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                bound = alias.asname or alias.name
+                bindings[bound] = f"from:{node.level}:{module}:{alias.name}"
+    return bindings
+
+
+def _bound_names(node: ast.AST) -> tuple[str, ...]:
+    ordered: list[str] = []
+
+    def add(name: str) -> None:
+        if name not in ordered:
+            ordered.append(name)
+
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+        arguments = node.args
+        for argument in (*arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs):
+            add(argument.arg)
+        if arguments.vararg is not None:
+            add(arguments.vararg.arg)
+        if arguments.kwarg is not None:
+            add(arguments.kwarg.arg)
+    for child in ast.walk(node):
+        if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store):
+            add(child.id)
+        elif isinstance(child, ast.ExceptHandler) and child.name:
+            add(child.name)
+    return tuple(ordered)
+
+
+def _loaded_external_names(node: ast.AST) -> tuple[str, ...]:
+    bound = set(_bound_names(node))
+    names: list[str] = []
+    for child in ast.walk(node):
+        if (
+            isinstance(child, ast.Name)
+            and isinstance(child.ctx, ast.Load)
+            and child.id not in bound
+            and child.id not in names
+        ):
+            names.append(child.id)
+    return tuple(names)
+
+
+class _BehaviorNormalizer(ast.NodeTransformer):
+    """Normalize local names while retaining callable, argument, and control-flow structure."""
+
+    def __init__(self, external_bindings: dict[str, str]) -> None:
+        self.external_bindings = external_bindings
+        self.local_scopes: list[dict[str, str]] = []
+
+    def _visit_function(
+        self, node: ast.FunctionDef | ast.AsyncFunctionDef
+    ) -> ast.FunctionDef | ast.AsyncFunctionDef:
+        mapping = {name: f"local_{index}" for index, name in enumerate(_bound_names(node))}
+        self.local_scopes.append(mapping)
+        node = self.generic_visit(node)
+        self.local_scopes.pop()
+        if node.name in self.external_bindings:
+            node.name = self.external_bindings[node.name]
+        return node
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.FunctionDef:
+        return self._visit_function(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> ast.AsyncFunctionDef:
+        return self._visit_function(node)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> ast.ClassDef:
+        node = self.generic_visit(node)
+        if node.name in self.external_bindings:
+            node.name = self.external_bindings[node.name]
+        return node
+
+    def visit_arg(self, node: ast.arg) -> ast.arg:
+        if self.local_scopes and node.arg in self.local_scopes[-1]:
+            node.arg = self.local_scopes[-1][node.arg]
+        return self.generic_visit(node)
+
+    def visit_Name(self, node: ast.Name) -> ast.Name:
+        for scope in reversed(self.local_scopes):
+            if node.id in scope:
+                node.id = scope[node.id]
+                return node
+        if node.id in self.external_bindings:
+            node.id = self.external_bindings[node.id]
+        return node
+
+    def visit_ExceptHandler(self, node: ast.ExceptHandler) -> ast.ExceptHandler:
+        if node.name and self.local_scopes and node.name in self.local_scopes[-1]:
+            node.name = self.local_scopes[-1][node.name]
+        return self.generic_visit(node)
+
+
+def candidate_behavior_fingerprint(source: str, *, test_function: str) -> str:
+    """Hash syntax-level executable behavior without comments, formatting, or unused imports.
+
+    This is deliberately narrower than semantic equivalence. It canonicalizes local identifier
+    names and import aliases, includes referenced top-level helper definitions transitively, and
+    retains assertions, calls, arguments, literals, context managers, and control flow.
+    """
+    tree = ast.parse(source)
+    tests = [
+        node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == test_function
+    ]
+    if len(tests) != 1:
+        raise ValueError("behavior fingerprint requires exactly one declared test function")
+
+    imports = _import_bindings(tree)
+    definitions: dict[str, ast.stmt] = {}
+    for node in tree.body:
+        if (
+            isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+            and node is not tests[0]
+        ):
+            definitions[node.name] = node
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    definitions[target.id] = node
+    dependency_names: list[str] = []
+    pending = list(_loaded_external_names(tests[0]))
+    while pending:
+        name = pending.pop(0)
+        if name in dependency_names:
+            continue
+        if name in imports or name in definitions:
+            dependency_names.append(name)
+        definition = definitions.get(name)
+        if definition is not None:
+            pending.extend(_loaded_external_names(definition))
+
+    helper_names: list[str] = []
+    helper_indexes: dict[str, int] = {}
+    definition_indexes: dict[int, int] = {}
+    for name in dependency_names:
+        definition = definitions.get(name)
+        if definition is None:
+            continue
+        definition_id = id(definition)
+        if definition_id not in definition_indexes:
+            definition_indexes[definition_id] = len(helper_names)
+            helper_names.append(name)
+        helper_indexes[name] = definition_indexes[definition_id]
+    external_bindings = {
+        name: f"import_binding:{imports[name]}" for name in dependency_names if name in imports
+    }
+    external_bindings.update({name: f"helper_{index}" for name, index in helper_indexes.items()})
+    normalizer = _BehaviorNormalizer(external_bindings)
+    normalized_test = normalizer.visit(copy.deepcopy(tests[0]))
+    normalized_test.name = "generated_test"
+    normalized_helpers = [
+        normalizer.visit(copy.deepcopy(definitions[name])) for name in helper_names
+    ]
+    ast.fix_missing_locations(normalized_test)
+    for helper in normalized_helpers:
+        ast.fix_missing_locations(helper)
+    canonical = ast.dump(
+        ast.Module(body=[*normalized_helpers, normalized_test], type_ignores=[]),
+        annotate_fields=True,
+        include_attributes=False,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 @dataclass(frozen=True, slots=True)
 class ValidatedCandidate:
     """A validated proposal tied to one immutable replay artifact and its imports."""
@@ -377,6 +560,7 @@ class ValidatedCandidate:
     proposal: CandidateTestProposal
     artifact: TestArtifact
     imported_roots: tuple[str, ...]
+    behavior_fingerprint: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -394,6 +578,10 @@ class CandidateAttempt:
     feedback: CandidateFeedback | None
     usage: ModelUsage
     raw_response_sha256: str
+    behavior_fingerprint: str | None
+    signature_context_count: int
+    signature_context_truncated: bool
+    signature_context_sha256: str
     malformed_output_diagnostic: CandidateOutputDiagnostic | None = None
 
 
@@ -490,6 +678,10 @@ class CandidateTestValidator:
             proposal=proposal,
             artifact=artifact,
             imported_roots=tuple(sorted(imported_roots)),
+            behavior_fingerprint=candidate_behavior_fingerprint(
+                proposal.source,
+                test_function=proposal.test_function,
+            ),
         )
 
     def _validate_imports(self, *, tree: ast.Module, context: PullRequestContext) -> set[str]:
@@ -594,6 +786,7 @@ class BoundedCandidateTestGenerator:
         context: PullRequestContext,
         contract: ExecutionContract,
         existing_paths: frozenset[str],
+        repository_signatures: RepositorySignatureContext | None = None,
         max_input_json_chars: int = 64_000,
         max_response_chars: int = 20_000,
     ) -> None:
@@ -605,6 +798,7 @@ class BoundedCandidateTestGenerator:
         self.context = context
         self.contract = contract
         self.existing_paths = existing_paths
+        self.repository_signatures = repository_signatures or RepositorySignatureContext.empty()
         self.max_input_json_chars = max_input_json_chars
         self.max_response_chars = max_response_chars
         self._attempts: list[CandidateAttempt] = []
@@ -648,6 +842,7 @@ class BoundedCandidateTestGenerator:
         request = CandidateModelRequest(
             claim=self.claim,
             context=self.context,
+            repository_signatures=self.repository_signatures,
             allowed_test_paths=self.contract.allowed_test_paths,
             previous_candidate=previous.proposal if origin is CandidateOrigin.REPAIR else None,
             feedback=feedback,
@@ -666,6 +861,7 @@ class BoundedCandidateTestGenerator:
         issue: CandidateValidationIssue | None = None
         proposal: CandidateTestProposal | None = None
         validated: ValidatedCandidate | None = None
+        behavior_fingerprint: str | None = None
         diagnostic: CandidateOutputDiagnostic | None = None
         issues: tuple[CandidateValidationIssue, ...] = ()
         status = CandidateAttemptStatus.INVALID_MODEL_OUTPUT
@@ -754,8 +950,26 @@ class BoundedCandidateTestGenerator:
                         issues = error.issues
                         status = CandidateAttemptStatus.REJECTED
                     else:
-                        issues = ()
-                        status = CandidateAttemptStatus.VALIDATED
+                        behavior_fingerprint = validated.behavior_fingerprint
+                        if (
+                            origin is CandidateOrigin.REPAIR
+                            and previous is not None
+                            and previous.validated is not None
+                            and validated.behavior_fingerprint
+                            == previous.validated.behavior_fingerprint
+                        ):
+                            issue = CandidateValidationIssue(
+                                code=CandidateIssueCode.NO_BEHAVIORAL_REPAIR_CHANGE,
+                                message=(
+                                    "repair must materially change executable test behavior, "
+                                    "not only formatting, comments, or unused imports"
+                                ),
+                            )
+                            validated = None
+                            status = CandidateAttemptStatus.REJECTED
+                        else:
+                            issues = ()
+                            status = CandidateAttemptStatus.VALIDATED
 
         if issue is not None:
             issues = (issue,)
@@ -778,6 +992,10 @@ class BoundedCandidateTestGenerator:
             feedback=feedback,
             usage=response.usage,
             raw_response_sha256=response_hash,
+            behavior_fingerprint=behavior_fingerprint,
+            signature_context_count=self.repository_signatures.count,
+            signature_context_truncated=self.repository_signatures.truncated,
+            signature_context_sha256=self.repository_signatures.sha256,
             malformed_output_diagnostic=diagnostic,
         )
         self._attempts.append(attempt)
