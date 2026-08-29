@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "protocol_date": "2026-08-29",
+  "status": "PREDECLARED_BEFORE_CANDIDATE_DISCOVERY",
+  "construction": {
+    "phase": "DATASET_CONSTRUCTION_ONLY",
+    "final_case_count": 10,
+    "minimum_serious_candidate_count": 15,
+    "preferred_candidate_count_minimum": 15,
+    "preferred_candidate_count_maximum": 20,
+    "real_public_merged_historical_python_prs_only": true,
+    "synthetic_cases_allowed": false,
+    "minimum_distinct_repositories": 7,
+    "maximum_cases_per_repository": 2,
+    "prefer_ten_distinct_repositories": true,
+    "retired_development_repositories_to_avoid_when_reasonable": [
+      "pallets/click",
+      "python-attrs/attrs",
+      "marshmallow-code/marshmallow",
+      "pylint-dev/astroid"
+    ],
+    "semantic_agents_allowed": false,
+    "gemini_or_vertex_inference_allowed": false,
+    "selection_by_expected_model_success_allowed": false
+  },
+  "eligibility": {
+    "merged_required": true,
+    "exact_base_sha_required": true,
+    "exact_premerge_head_sha_required": true,
+    "interface_required_on_both_revisions": true,
+    "same_oracle_bytes_on_both_revisions": true,
+    "expected_base_status": "ASSERTION_FAILED",
+    "expected_head_status": "PASSED",
+    "changed_python_test_exclusion_required": true,
+    "python_312_or_bounded_compatible_environment_required": true,
+    "network_during_oracle_forbidden": true,
+    "external_credentials_or_services_forbidden": true,
+    "excluded_primary_change_types": [
+      "DOCUMENTATION",
+      "FORMATTING",
+      "TYPING_ONLY",
+      "DEPENDENCY_BUMP",
+      "TEST_ONLY",
+      "BENCHMARK_ONLY",
+      "NON_BEHAVIORAL_PACKAGING"
+    ]
+  },
+  "selection_priority": [
+    "ALL_ELIGIBILITY_RULES_PASS",
+    "REPOSITORY_DIVERSITY",
+    "BEHAVIORAL_CATEGORY_DIVERSITY",
+    "LOWER_ENVIRONMENTAL_COMPLEXITY",
+    "DETERMINISTIC_REPRODUCIBILITY",
+    "REPOSITORY_PR_NUMBER_MERGED_TIMESTAMP_ORDER"
+  ],
+  "target_categories": [
+    "PARSING_SERIALIZATION",
+    "STATE_MANAGEMENT",
+    "PATH_FILESYSTEM",
+    "API_ARGUMENT_VALIDATION",
+    "DATA_TRANSFORMATION",
+    "CONFIGURATION",
+    "CACHE_INVALIDATION",
+    "ASYNC_CONTROL_FLOW",
+    "ERROR_HANDLING",
+    "OBJECT_MODEL_CONSTRUCTION",
+    "TEXT_STRING_PROCESSING",
+    "CLI_BEHAVIOR"
+  ],
+  "permitted_rejection_reasons": [
+    "ORACLE_NOT_DETERMINISTIC_OR_NOT_REPRODUCIBLE",
+    "DEPENDENCIES_OR_ENVIRONMENT_INCOMPATIBLE",
+    "INTERFACE_ABSENT_FROM_BASE",
+    "REQUIRES_NETWORK_OR_EXTERNAL_SERVICE",
+    "CHANGED_TEST_LEAKAGE_NOT_SAFELY_EXCLUDABLE",
+    "NOT_A_BEHAVIORAL_BUG_FIX",
+    "TOO_EXPENSIVE_FOR_BOUNDED_EVALUATION",
+    "DUPLICATE_CATEGORY_BEYOND_DIVERSITY_LIMIT",
+    "PR_REVISION_PROVENANCE_NOT_VERIFIABLE"
+  ],
+  "oracle_policy": {
+    "directory": "oracles",
+    "pytest_compatible": true,
+    "independently_constructed": true,
+    "copy_upstream_test_forbidden": true,
+    "same_exact_bytes_on_base_and_head": true,
+    "network_forbidden": true,
+    "sha256_required": true,
+    "single_top_level_test_function_required": true,
+    "mutable_until_manifest_sealed": true,
+    "immutable_after_manifest_sealed": true
+  },
+  "anti_leakage": {
+    "exclude_all_changed_python_test_paths": true,
+    "exclude_before_diff_context": true,
+    "exclude_before_snippet_retrieval": true,
+    "exclude_before_repository_scan": true,
+    "exclude_before_signature_retrieval": true,
+    "hidden_oracle_outside_evaluated_repository": true
+  },
+  "frozen_evaluation": {
+    "production_commit": "baf333afc160cd75a90cea1e0568120a9889fb7e",
+    "development_evaluation_commit": "3b724d33b42a533002e13cc670a43632b4dcd35d",
+    "model_name": "gemini-3.6-flash",
+    "provider_surface": "VERTEX_AI",
+    "location": "global",
+    "temperature": 0.1,
+    "thinking_level": "LOW",
+    "claim_calls_per_case": 1,
+    "candidate_calls_per_case": 2,
+    "candidate_policy": "ONE_INITIAL_PLUS_AT_MOST_ONE_REPAIR",
+    "assessment_calls_per_discriminating_case": 1,
+    "semantic_assessment_only_after_discrimination": true,
+    "transient_provider_retries_per_logical_call": 1,
+    "pacing_policy": "BETWEEN_CASES",
+    "inter_case_delay_seconds": 60,
+    "mechanical_base_requirement": "ASSERTION_FAILED",
+    "mechanical_head_requirement": "PASSED",
+    "semantic_requirement": "RELATED",
+    "maximum_possible_logical_model_calls": 40,
+    "maximum_possible_provider_calls": 80,
+    "prompts_frozen": true,
+    "classifier_frozen": true
+  },
+  "sealing": {
+    "production_source_changes_allowed": false,
+    "holdout_agent_results_allowed": false,
+    "generated_candidate_tests_allowed": false,
+    "semantic_assessment_artifacts_allowed": false,
+    "v6_allowed": false,
+    "future_tuning_on_holdout_outcomes_allowed": false
+  }
+}
