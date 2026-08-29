@@ -7,6 +7,7 @@ import hashlib
 import json
 import sys
 from collections import deque
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -139,12 +140,38 @@ class FakeAssessor:
         )
 
 
+class CountingSession:
+    """Count readiness and candidate executions inside one real worktree session."""
+
+    def __init__(self, owner: CountingChallenge, inner) -> None:
+        self.owner = owner
+        self.inner = inner
+
+    def prepare_environment(self, **kwargs):
+        self.owner.readiness_calls += 1
+        return self.inner.prepare_environment(**kwargs)
+
+    def run(self, **kwargs):
+        self.owner.calls += 1
+        return self.inner.run(**kwargs)
+
+    def installed_import_roots(self):
+        return self.inner.installed_import_roots()
+
+
 class CountingChallenge:
     def __init__(self, challenge: BaseHeadChallenge) -> None:
         self.inner = challenge
         self.runner = challenge.runner
         self.calls = 0
         self.readiness_calls = 0
+        self.sessions_opened = 0
+
+    @contextmanager
+    def session(self, **kwargs):
+        self.sessions_opened += 1
+        with self.inner.session(**kwargs) as inner_session:
+            yield CountingSession(self, inner_session)
 
     def prepare_environment(self, **kwargs):
         self.readiness_calls += 1
@@ -161,6 +188,11 @@ class FixedReadinessChallenge:
         self.readiness = readiness
         self.readiness_calls = 0
         self.calls = 0
+
+    @contextmanager
+    def session(self, **kwargs):
+        del kwargs
+        yield self
 
     def prepare_environment(self, **kwargs):
         del kwargs

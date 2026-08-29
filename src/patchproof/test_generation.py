@@ -619,10 +619,19 @@ class CandidateGenerationStateError(RuntimeError):
 class CandidateTestValidator:
     """Turn model source into an artifact only after deterministic safety checks."""
 
-    def __init__(self, *, max_source_bytes: int = 16_000) -> None:
+    def __init__(
+        self,
+        *,
+        max_source_bytes: int = 16_000,
+        installed_import_roots: frozenset[str] = frozenset(),
+    ) -> None:
         if max_source_bytes <= 0:
             raise ValueError("candidate source byte budget must be positive")
         self.max_source_bytes = max_source_bytes
+        #: Top-level names importable in the prepared revision workspace. Empty when the
+        #: environment has not been introspected, which leaves context-derived grounding
+        #: in force. See `patchproof.environment_introspection`.
+        self.installed_import_roots = installed_import_roots
 
     def validate(
         self,
@@ -692,7 +701,7 @@ class CandidateTestValidator:
         )
 
     def _validate_imports(self, *, tree: ast.Module, context: PullRequestContext) -> set[str]:
-        allowed_roots = self._allowed_import_roots(context)
+        allowed_roots = self._allowed_import_roots(context) | self.installed_import_roots
         imported_roots: set[str] = set()
         for node in ast.walk(tree):
             modules: list[str] = []
@@ -749,6 +758,14 @@ class CandidateTestValidator:
 
     @staticmethod
     def _allowed_import_roots(context: PullRequestContext) -> set[str]:
+        """Roots inferable from the context bundle alone.
+
+        This is a floor, not the whole grounding set. It cannot see the repository's
+        third-party runtime dependencies, so on its own it rejects candidates that
+        import a package the project genuinely requires -- the cattrs `attrs`
+        rejection in the sealed unseen holdout. `CandidateTestValidator` unions this
+        with the roots actually installed in the prepared workspace.
+        """
         roots = set(sys.stdlib_module_names)
         roots.add("pytest")
         paths = {file.path for file in context.changed_files}

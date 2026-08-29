@@ -83,6 +83,11 @@ class ExecutionContract(BaseModel):
     test: TestCommandContract
     allowed_test_paths: tuple[str, ...] = Field(min_length=1, max_length=4)
     timeout_seconds: float = Field(ge=0.05, le=300)
+    #: Separate budget for the repository-declared install commands. Installing a real
+    #: project from a cold cache routinely takes longer than running one test, and
+    #: sharing a single budget meant that on any substantial repository the install --
+    #: not the test -- was what timed out.
+    install_timeout_seconds: float = Field(default=900.0, ge=1.0, le=1_800.0)
 
     #: Whether this contract's install commands came from a deterministic probe of
     #: committed repository files rather than from a literal `.patchproof.yaml`. A

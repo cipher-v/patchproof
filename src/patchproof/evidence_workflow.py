@@ -345,133 +345,137 @@ class EvidenceWorkflow:
             self._persist_terminal(run, report)
             return report
 
-        environment_readiness = self.challenge.prepare_environment(
-            base_ref=run.base_sha,
-            head_ref=run.head_sha,
-        )
-        readiness_evidence = EnvironmentReadinessEvidence.from_domain(environment_readiness)
-        if not environment_readiness.ready:
+        # One worktree pair serves readiness and every candidate attempt, so the
+        # repository-declared install commands run once per revision rather than once
+        # per operation.
+        with self.challenge.session(base_ref=run.base_sha, head_ref=run.head_sha) as session:
+            environment_readiness = session.prepare_environment()
+            readiness_evidence = EnvironmentReadinessEvidence.from_domain(environment_readiness)
+            if not environment_readiness.ready:
+                report = self._abstention_report(
+                    run=run,
+                    claim_result=claim_result,
+                    attempts=(),
+                    evaluations=(),
+                    mechanical_status=MechanicalEvidenceStatus.ENVIRONMENTAL,
+                    reason=environment_readiness.reason,
+                    environment_readiness=readiness_evidence,
+                )
+                self._persist_terminal(run, report)
+                return report
+
+            run = self._transition(run, RunTransition(phase=RunPhase.TEST_GENERATION))
+            signature_context = self.context_retriever.retrieve_callable_signatures(
+                head_sha=run.head_sha,
+                context=context,
+                affected_symbols=tuple(
+                    (symbol.path, symbol.qualified_name)
+                    for symbol in selection.claim.affected_symbols
+                ),
+            )
+            generator = BoundedCandidateTestGenerator(
+                model=self.candidate_model,
+                validator=CandidateTestValidator(
+                    installed_import_roots=session.installed_import_roots()
+                ),
+                claim=selection.claim,
+                context=context,
+                contract=contract,
+                existing_paths=existing_paths,
+                repository_signatures=signature_context,
+            )
+            attempts: list[CandidateAttempt] = []
+            challenge: ChallengeResult | None = None
+            evaluations: list[CandidateEvaluationEvidence] = []
+            attempt = await generator.generate_initial()
+            attempts.append(attempt)
+
+            for attempt_number in range(3):
+                if attempt.validated is not None:
+                    self._require_current(self.store.get_run(run_id))
+                    run = self._advance_for_execution(run)
+
+                    def mark_head_execution(_base_result: ExecutionResult) -> None:
+                        nonlocal run
+                        self._require_current(self.store.get_run(run_id))
+                        if run.phase is RunPhase.BASE_EXECUTION:
+                            run = self._transition(
+                                run, RunTransition(phase=RunPhase.HEAD_EXECUTION)
+                            )
+
+                    challenge = session.run(
+                        artifact=attempt.validated.artifact,
+                        on_base_complete=mark_head_execution,
+                    )
+                    evaluations.append(self._evaluation_evidence(attempt.sequence, challenge))
+                    if run.phase is not RunPhase.ASSESSMENT:
+                        run = self._transition(run, RunTransition(phase=RunPhase.ASSESSMENT))
+                    setup_failure = self._candidate_environment_failure(challenge)
+                    if setup_failure is not None:
+                        readiness_evidence = EnvironmentReadinessEvidence.from_domain(setup_failure)
+                        report = self._abstention_report(
+                            run=run,
+                            claim_result=claim_result,
+                            attempts=tuple(attempts),
+                            evaluations=tuple(evaluations),
+                            mechanical_status=MechanicalEvidenceStatus.ENVIRONMENTAL,
+                            reason=setup_failure.reason,
+                            challenge=challenge,
+                            environment_readiness=readiness_evidence,
+                        )
+                        self._persist_terminal(run, report)
+                        return report
+                    if (
+                        challenge.assessment.mechanical_status
+                        is MechanicalEvidenceStatus.DISCRIMINATING
+                    ):
+                        semantic_result = await self.assessor.assess(
+                            claim=selection.claim,
+                            candidate_source=attempt.validated.proposal.source,
+                            challenge=challenge,
+                        )
+                        self._validate_semantic_decision(challenge, semantic_result.decision)
+                        report = self._completed_report(
+                            run=run,
+                            claim_result=claim_result,
+                            attempts=tuple(attempts),
+                            evaluations=tuple(evaluations),
+                            challenge=challenge,
+                            semantic_result=semantic_result,
+                            environment_readiness=readiness_evidence,
+                        )
+                        self._persist_terminal(run, report)
+                        return report
+
+                if attempt_number == 2:
+                    break
+                feedback = self._repair_feedback(attempt=attempt, challenge=challenge)
+                attempt = await generator.repair(feedback=feedback)
+                attempts.append(attempt)
+                challenge = None
+
+            status = (
+                challenge.assessment.mechanical_status
+                if challenge is not None
+                else MechanicalEvidenceStatus.INVALID_TEST
+            )
+            reason = (
+                challenge.assessment.reason
+                if challenge is not None
+                else "All three bounded candidate attempts failed deterministic validation."
+            )
             report = self._abstention_report(
                 run=run,
                 claim_result=claim_result,
-                attempts=(),
-                evaluations=(),
-                mechanical_status=MechanicalEvidenceStatus.ENVIRONMENTAL,
-                reason=environment_readiness.reason,
+                attempts=tuple(attempts),
+                evaluations=tuple(evaluations),
+                mechanical_status=status,
+                reason=reason,
+                challenge=challenge,
                 environment_readiness=readiness_evidence,
             )
             self._persist_terminal(run, report)
             return report
-
-        run = self._transition(run, RunTransition(phase=RunPhase.TEST_GENERATION))
-        signature_context = self.context_retriever.retrieve_callable_signatures(
-            head_sha=run.head_sha,
-            context=context,
-            affected_symbols=tuple(
-                (symbol.path, symbol.qualified_name) for symbol in selection.claim.affected_symbols
-            ),
-        )
-        generator = BoundedCandidateTestGenerator(
-            model=self.candidate_model,
-            validator=CandidateTestValidator(),
-            claim=selection.claim,
-            context=context,
-            contract=contract,
-            existing_paths=existing_paths,
-            repository_signatures=signature_context,
-        )
-        attempts: list[CandidateAttempt] = []
-        challenge: ChallengeResult | None = None
-        evaluations: list[CandidateEvaluationEvidence] = []
-        attempt = await generator.generate_initial()
-        attempts.append(attempt)
-
-        for attempt_number in range(3):
-            if attempt.validated is not None:
-                self._require_current(self.store.get_run(run_id))
-                run = self._advance_for_execution(run)
-
-                def mark_head_execution(_base_result: ExecutionResult) -> None:
-                    nonlocal run
-                    self._require_current(self.store.get_run(run_id))
-                    if run.phase is RunPhase.BASE_EXECUTION:
-                        run = self._transition(run, RunTransition(phase=RunPhase.HEAD_EXECUTION))
-
-                challenge = self.challenge.run(
-                    base_ref=run.base_sha,
-                    head_ref=run.head_sha,
-                    artifact=attempt.validated.artifact,
-                    on_base_complete=mark_head_execution,
-                )
-                evaluations.append(self._evaluation_evidence(attempt.sequence, challenge))
-                if run.phase is not RunPhase.ASSESSMENT:
-                    run = self._transition(run, RunTransition(phase=RunPhase.ASSESSMENT))
-                setup_failure = self._candidate_environment_failure(challenge)
-                if setup_failure is not None:
-                    readiness_evidence = EnvironmentReadinessEvidence.from_domain(setup_failure)
-                    report = self._abstention_report(
-                        run=run,
-                        claim_result=claim_result,
-                        attempts=tuple(attempts),
-                        evaluations=tuple(evaluations),
-                        mechanical_status=MechanicalEvidenceStatus.ENVIRONMENTAL,
-                        reason=setup_failure.reason,
-                        challenge=challenge,
-                        environment_readiness=readiness_evidence,
-                    )
-                    self._persist_terminal(run, report)
-                    return report
-                if (
-                    challenge.assessment.mechanical_status
-                    is MechanicalEvidenceStatus.DISCRIMINATING
-                ):
-                    semantic_result = await self.assessor.assess(
-                        claim=selection.claim,
-                        candidate_source=attempt.validated.proposal.source,
-                        challenge=challenge,
-                    )
-                    self._validate_semantic_decision(challenge, semantic_result.decision)
-                    report = self._completed_report(
-                        run=run,
-                        claim_result=claim_result,
-                        attempts=tuple(attempts),
-                        evaluations=tuple(evaluations),
-                        challenge=challenge,
-                        semantic_result=semantic_result,
-                        environment_readiness=readiness_evidence,
-                    )
-                    self._persist_terminal(run, report)
-                    return report
-
-            if attempt_number == 2:
-                break
-            feedback = self._repair_feedback(attempt=attempt, challenge=challenge)
-            attempt = await generator.repair(feedback=feedback)
-            attempts.append(attempt)
-            challenge = None
-
-        status = (
-            challenge.assessment.mechanical_status
-            if challenge is not None
-            else MechanicalEvidenceStatus.INVALID_TEST
-        )
-        reason = (
-            challenge.assessment.reason
-            if challenge is not None
-            else "All three bounded candidate attempts failed deterministic validation."
-        )
-        report = self._abstention_report(
-            run=run,
-            claim_result=claim_result,
-            attempts=tuple(attempts),
-            evaluations=tuple(evaluations),
-            mechanical_status=status,
-            reason=reason,
-            challenge=challenge,
-            environment_readiness=readiness_evidence,
-        )
-        self._persist_terminal(run, report)
-        return report
 
     def _persist_terminal(self, run: VerificationRun, report: EvidenceReport) -> StoredEvidence:
         stored = self.store.save_evidence(

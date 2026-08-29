@@ -10,6 +10,7 @@ import shutil
 import time
 import uuid
 import xml.etree.ElementTree as element_tree
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -231,6 +232,7 @@ class PytestRunner:
             python_executable=self.python_executable
         )
         self.timeout_seconds = contract.timeout_seconds
+        self.install_timeout_seconds = contract.install_timeout_seconds
         self.parser = parser or PytestJUnitParser()
         self.install_dependencies = install_dependencies
         self.repository_python_paths = tuple(
@@ -238,6 +240,12 @@ class PytestRunner:
         )
         self.processes = processes or BoundedSubprocessRunner()
         self.environment_policy = environment_policy or ChildProcessEnvironmentPolicy()
+        # Workspaces whose repository-declared setup has already completed in this
+        # process. Installation is idempotent but expensive: before this memo a single
+        # pull request could run the install commands eight times (readiness on two
+        # revisions, then two revisions per candidate attempt), each from a cold cache
+        # and each bounded by the same timeout as the test itself.
+        self._installed_workspaces: set[Path] = set()
 
     def run(
         self, *, workspace: Path, revision: Revision, artifact: TestArtifact
@@ -283,8 +291,10 @@ class PytestRunner:
                 detail=f"refusing to overwrite repository path: {artifact.relative_path}",
             )
 
-        if self.install_dependencies:
+        if self.install_dependencies and workspace not in self._installed_workspaces:
             installation_error = self._install(workspace)
+            if installation_error is None:
+                self._installed_workspaces.add(workspace)
             if installation_error is not None:
                 detail, stdout, stderr, exit_code = installation_error
                 return self._early_result(
@@ -404,6 +414,11 @@ class PytestRunner:
             )
         finally:
             shutil.rmtree(result_directory, ignore_errors=True)
+            # Leave the worktree exactly as committed. A ChallengeSession reuses one
+            # pair of checkouts across the readiness probe and every candidate attempt,
+            # so a retained artifact would be visible to a later attempt.
+            with suppress(OSError):
+                artifact_path.unlink()
 
     def prepare_environment(self, *, workspace: Path) -> str | None:
         """Run only the repository-declared setup and return a bounded failure reason."""
@@ -412,8 +427,11 @@ class PytestRunner:
             return "revision workspace does not exist"
         if not self.install_dependencies:
             return "validated dependency installation is disabled"
+        if workspace in self._installed_workspaces:
+            return None
         installation_error = self._install(workspace)
         if installation_error is None:
+            self._installed_workspaces.add(workspace)
             return None
         detail, _stdout, _stderr, _exit_code = installation_error
         return detail[:2_000]
@@ -470,14 +488,14 @@ class PytestRunner:
                     command,
                     cwd=workspace,
                     environment=environment,
-                    timeout_seconds=self.timeout_seconds,
+                    timeout_seconds=self.install_timeout_seconds,
                 )
                 captured_stdout.append(completed.stdout)
                 captured_stderr.append(completed.stderr)
                 if completed.timed_out:
                     return (
                         "dependency installation exceeded the "
-                        f"{self.timeout_seconds:g}-second timeout",
+                        f"{self.install_timeout_seconds:g}-second timeout",
                         "".join(captured_stdout)[:12_000],
                         "".join(captured_stderr)[:12_000],
                         None,

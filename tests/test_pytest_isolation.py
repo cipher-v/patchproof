@@ -172,3 +172,83 @@ def test_repository_addopts_cannot_abort_a_base_head_challenge(
     assert result.head.status is TestExecutionStatus.PASSED
     assert result.assessment.mechanical_status is MechanicalEvidenceStatus.DISCRIMINATING
     assert result.assessment.pattern is DifferentialPattern.BASE_ASSERTION_FAILED_HEAD_PASSED
+
+
+def test_environment_readiness_requires_an_injected_node_to_actually_run(
+    hostile_config_repository: tuple[Path, Path, str, str],
+) -> None:
+    """Installing is not proof a candidate can run; the gate must execute a probe."""
+    repository, workspaces, base_sha, head_sha = hostile_config_repository
+    runner = PytestRunner(
+        contract=ExecutionContract.model_validate(_CONTRACT),
+        python_executable=Path(sys.executable),
+        install_dependencies=False,
+        repository_python_paths=(".",),
+    )
+    # With installation disabled the runner reports setup as unavailable rather than
+    # silently declaring the environment ready.
+    challenge = BaseHeadChallenge(
+        workspaces=GitWorkspaceManager(source_repository=repository, workspace_root=workspaces),
+        runner=runner,
+    )
+    readiness = challenge.prepare_environment(base_ref=base_sha, head_ref=head_sha)
+    assert not readiness.ready
+
+
+def test_session_installs_once_per_revision(
+    hostile_config_repository: tuple[Path, Path, str, str],
+) -> None:
+    """Readiness plus three candidate attempts must not reinstall eight times."""
+    repository, workspaces, base_sha, head_sha = hostile_config_repository
+    installs: list[Path] = []
+
+    class RecordingRunner(PytestRunner):
+        """Count installs without paying for them, but keep the real execution path."""
+
+        def _install(self, workspace: Path):  # type: ignore[override]
+            installs.append(workspace)
+            return None
+
+        def _test_command(self, workspace: Path) -> tuple[str, ...]:  # type: ignore[override]
+            # The stubbed install creates no .venv, so keep using this interpreter.
+            return self.command_prefix
+
+    runner = RecordingRunner(
+        contract=ExecutionContract.model_validate(_CONTRACT),
+        python_executable=Path(sys.executable),
+        install_dependencies=True,
+        repository_python_paths=(".",),
+    )
+    challenge = BaseHeadChallenge(
+        workspaces=GitWorkspaceManager(source_repository=repository, workspace_root=workspaces),
+        runner=runner,
+    )
+    with challenge.session(base_ref=base_sha, head_ref=head_sha) as session:
+        assert session.prepare_environment().ready
+        for index in range(3):
+            artifact = TestArtifact.from_text(
+                relative_path=f"tests/patchproof_generated/test_attempt_{index}.py",
+                node_id=(
+                    f"tests/patchproof_generated/test_attempt_{index}.py"
+                    "::test_patchproof_generated_behavior"
+                ),
+                content=(
+                    "from calculator import add\n\n\n"
+                    "def test_patchproof_generated_behavior():\n    assert add(2, 3) == 5\n"
+                ),
+            )
+            session.run(artifact=artifact)
+
+    assert len(installs) == 2, f"expected one install per revision, got {len(installs)}"
+    assert len(set(installs)) == 2
+
+
+def test_install_budget_is_separate_from_the_test_budget() -> None:
+    contract = ExecutionContract.model_validate(_CONTRACT)
+    runner = PytestRunner(
+        contract=contract,
+        python_executable=Path(sys.executable),
+        install_dependencies=True,
+    )
+    assert runner.install_timeout_seconds == contract.install_timeout_seconds
+    assert runner.install_timeout_seconds > runner.timeout_seconds
