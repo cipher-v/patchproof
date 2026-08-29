@@ -130,9 +130,21 @@ class CandidateAttemptEvidence(BaseModel):
     rationale: str | None
     artifact_sha256: str | None
     behavior_fingerprint: str | None = Field(default=None, pattern=r"[0-9a-f]{64}")
-    signature_context_count: int = Field(ge=0, le=8)
-    signature_context_truncated: bool
-    signature_context_sha256: str = Field(pattern=r"[0-9a-f]{64}")
+    signature_context_count: int | None = Field(
+        default=None,
+        ge=0,
+        le=8,
+        exclude_if=lambda value: value is None,
+    )
+    signature_context_truncated: bool | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    signature_context_sha256: str | None = Field(
+        default=None,
+        pattern=r"[0-9a-f]{64}",
+        exclude_if=lambda value: value is None,
+    )
     issues: tuple[str, ...] = Field(default_factory=tuple, max_length=8)
     feedback: CandidateFeedback | None
     usage: ModelUsage

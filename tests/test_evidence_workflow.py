@@ -420,6 +420,12 @@ def test_non_discriminating_candidate_repairs_then_persists_and_publication_retr
     assert store.get_evidence(run.run_id).sha256 == report.sha256
     legacy_document = report.model_dump(mode="json")
     legacy_document.pop("environment_readiness")
+    for field in (
+        "signature_context_count",
+        "signature_context_truncated",
+        "signature_context_sha256",
+    ):
+        legacy_document["candidate_attempts"][0].pop(field)
     legacy_json = json.dumps(legacy_document, separators=(",", ":"))
     assert EvidenceReport.model_validate_json(legacy_json).canonical_json == legacy_json
     with pytest.raises(StoredEvidenceConflictError):
