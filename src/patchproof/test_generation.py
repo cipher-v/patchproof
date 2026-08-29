@@ -122,6 +122,7 @@ class CandidateIssueCode(StrEnum):
     BROAD_EXCEPTION_HANDLER = "BROAD_EXCEPTION_HANDLER"
     UNGROUNDED_EXCEPTION_TYPE = "UNGROUNDED_EXCEPTION_TYPE"
     SWALLOWED_OUTCOME = "SWALLOWED_OUTCOME"
+    HEAD_ONLY_INTERFACE = "HEAD_ONLY_INTERFACE"
 
 
 class CandidateTestProposal(StrictGeminiOutputModel):
@@ -700,6 +701,7 @@ class CandidateTestValidator:
         imported_roots = self._validate_imports(tree=tree, context=context)
         self._validate_calls(tree)
         self._validate_exception_handling(tree)
+        self._validate_shared_interface(tree, context)
         artifact = TestArtifact.from_text(
             relative_path=proposal.target_path,
             node_id=f"{proposal.target_path}::{proposal.test_function}",
@@ -769,6 +771,41 @@ class CandidateTestValidator:
                     CandidateIssueCode.FORBIDDEN_CALL,
                     "generated candidate calls forbidden API "
                     f"{node.func.value.id}.{node.func.attr}",
+                )
+
+    @staticmethod
+    def _validate_shared_interface(tree: ast.Module, context: PullRequestContext) -> None:
+        """Reject a candidate that depends on a symbol only HEAD has.
+
+        A test can only produce assertion evidence if it runs on both revisions. If it
+        imports or calls something introduced by the pull request, BASE cannot do
+        anything except fail to import or fail to resolve an attribute -- which is an
+        error, not an assertion, and demonstrates only that a new symbol exists.
+
+        This is the Rich #3938 failure shape from the sealed unseen holdout, expressed
+        as a mechanical rule rather than a repository-specific one: the check reads the
+        deterministic BASE/HEAD symbol partition and knows nothing about any project.
+
+        Rejecting here can only ever reduce support, never manufacture it, and the
+        rejection reaches the repair as actionable feedback naming the offending symbol.
+        """
+        head_only = context.interfaces.head_only_leaf_names
+        if not head_only:
+            return
+        for node in ast.walk(tree):
+            name: str | None = None
+            if isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    if alias.name in head_only:
+                        name = alias.name
+                        break
+            elif isinstance(node, ast.Attribute) and node.attr in head_only:
+                name = node.attr
+            if name is not None:
+                CandidateTestValidator._reject(
+                    CandidateIssueCode.HEAD_ONLY_INTERFACE,
+                    f"{name!r} exists only on HEAD; test observable behavior through an "
+                    "interface present on both revisions instead",
                 )
 
     @staticmethod

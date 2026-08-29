@@ -44,7 +44,9 @@ Return exactly one narrow deterministic pytest candidate for the supplied claim.
 - define exactly one top-level test function named test_patchproof_generated_behavior and no other
   test function;
 - use only imports supported by the supplied context, Python's standard library, or pytest;
-- test observable behavior through interfaces present in the supplied context;
+- test observable behavior through interfaces listed in the context's
+  `interfaces.present_on_both`, never one listed in `interfaces.new_on_head`, because a
+  symbol that exists only on HEAD cannot produce assertion evidence on BASE;
 - avoid network, subprocess, shell, dynamic-code, destructive-file, skip, xfail, and timing logic;
 - remain small enough to audit and replay as identical UTF-8 bytes on BASE and HEAD.
 

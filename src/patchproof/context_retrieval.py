@@ -64,6 +64,8 @@ class SnippetKind(StrEnum):
     LIKELY_TEST = "LIKELY_TEST"
     SYMBOL_REFERENCE = "SYMBOL_REFERENCE"
     IMPORT = "IMPORT"
+    #: The full body of an unchanged helper that a changed symbol calls directly.
+    CALLED_HELPER = "CALLED_HELPER"
 
 
 def _validate_repository_path(value: str) -> str:
@@ -179,6 +181,7 @@ class PullRequestContext(BaseModel):
     changed_symbols: tuple[ChangedSymbol, ...]
     snippets: tuple[ContextSnippet, ...]
     stats: RetrievalStats
+    interfaces: CrossRevisionInterfaces = Field(default_factory=lambda: CrossRevisionInterfaces())
 
     @field_validator("base_sha", "head_sha")
     @classmethod
@@ -260,6 +263,13 @@ class ContextBudget:
     max_signature_chars: int = 300
     max_signature_context_chars: int = 2_000
     max_signature_files_scanned: int = 200
+    max_interface_symbols: int = 40
+    #: One-hop callee bodies. A changed function's meaning frequently lives in the
+    #: unchanged helper it delegates to, and a name-matched five-line window cannot
+    #: convey it. jsonschema #1208 in the sealed unseen holdout turned on nested
+    #: container equality implemented in an unchanged helper the agent never saw.
+    max_called_helpers: int = 3
+    max_called_helper_chars: int = 700
     git_timeout_seconds: float = 30.0
 
     def __post_init__(self) -> None:
@@ -268,6 +278,8 @@ class ContextBudget:
                 raise ValueError(f"context budget {budget_field.name} must be positive")
         if self.max_diff_chars_per_file > self.max_diff_chars:
             raise ValueError("per-file diff budget cannot exceed total diff budget")
+        if self.max_interface_symbols > 40:
+            raise ValueError("interface budget exceeds the prompt-safe schema limits")
         if self.max_signature_count > 8 or self.max_signature_chars > 300:
             raise ValueError("signature budgets exceed the prompt-safe schema limits")
 
@@ -538,11 +550,14 @@ class DeterministicContextRetriever:
             head.sha, python_paths, changed_files, changed_symbols
         )
 
-        ranked = [*changed_snippets, *imports, *likely_tests, *references]
+        called_helpers = self._called_helper_snippets(head.sha, changed_symbols, python_paths)
+        ranked = [*changed_snippets, *imports, *called_helpers, *likely_tests, *references]
         ranked.sort(key=lambda item: (-item.score, item.snippet.path, item.snippet.start_line))
         snippets = tuple(item.snippet for item in ranked[: self.budget.max_snippets])
         if len(ranked) > len(snippets):
             truncated = True
+
+        interfaces = self._cross_revision_interfaces(base.sha, head.sha, changed_files)
 
         context = PullRequestContext(
             base_sha=base.sha,
@@ -562,8 +577,148 @@ class DeterministicContextRetriever:
                 excluded_python_paths=excluded_python_paths,
                 truncated=truncated or len(changed_symbols) > self.budget.max_symbols,
             ),
+            interfaces=interfaces,
         )
         return self._fit_json_budget(context)
+
+    def _called_helper_snippets(
+        self,
+        head_sha: str,
+        changed_symbols: list[ChangedSymbol],
+        python_paths: list[str],
+    ) -> list[_RankedSnippet]:
+        """Include the bodies of unchanged repository helpers a changed symbol calls.
+
+        Reference snippets alone emit a single matched line plus two lines of padding per
+        file, which is enough to prove a name exists and far too little to convey what it
+        does. When the behavior a pull request changes is expressed by delegating to an
+        unchanged helper, that helper's body is the context that decides whether the
+        agent can construct a discriminating trigger at all.
+
+        Deliberately bounded to one hop and a few short bodies: this is a call-graph
+        lookup, not repository-wide retrieval.
+        """
+        wanted = self._directly_called_names(head_sha, changed_symbols)
+        if not wanted:
+            return []
+        changed_paths = {symbol.path for symbol in changed_symbols}
+        # Prefer definitions in the changed files themselves, then the rest of the tree.
+        ordered = sorted(python_paths, key=lambda path: (path not in changed_paths, path))
+        ranked: list[_RankedSnippet] = []
+        seen: set[str] = set()
+        for path in ordered[: self.budget.max_reference_files_scanned]:
+            if len(ranked) >= self.budget.max_called_helpers:
+                break
+            if self._is_test_path(path):
+                continue
+            source = self._read_source(head_sha, path)
+            if source is None:
+                continue
+            tree = self._parse_python(source, path)
+            if tree is None:
+                continue
+            visitor = _CallableVisitor(path)
+            visitor.visit(tree)
+            for definition in visitor.definitions:
+                if len(ranked) >= self.budget.max_called_helpers:
+                    break
+                leaf = definition.qualified_name.rsplit(".", maxsplit=1)[-1]
+                if leaf not in wanted or leaf in seen:
+                    continue
+                node = definition.node
+                end_line = node.end_lineno or node.lineno
+                snippet = self._source_snippet(
+                    kind=SnippetKind.CALLED_HELPER,
+                    path=path,
+                    source=source,
+                    start_line=node.lineno,
+                    end_line=end_line,
+                    reason=f"unchanged helper called by changed code: {definition.qualified_name}",
+                )
+                if len(snippet.content) > self.budget.max_called_helper_chars:
+                    continue
+                seen.add(leaf)
+                ranked.append(_RankedSnippet(score=95, snippet=snippet))
+        return ranked
+
+    def _directly_called_names(
+        self, head_sha: str, changed_symbols: list[ChangedSymbol]
+    ) -> set[str]:
+        """Collect names called from inside the changed symbol spans, one hop only."""
+        called: set[str] = set()
+        changed_leaves = {
+            symbol.qualified_name.rsplit(".", maxsplit=1)[-1] for symbol in changed_symbols
+        }
+        for path in {symbol.path for symbol in changed_symbols}:
+            source = self._read_source(head_sha, path)
+            if source is None:
+                continue
+            tree = self._parse_python(source, path)
+            if tree is None:
+                continue
+            spans = [
+                (symbol.start_line, symbol.end_line)
+                for symbol in changed_symbols
+                if symbol.path == path
+            ]
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                line = getattr(node, "lineno", None)
+                if line is None or not any(start <= line <= end for start, end in spans):
+                    continue
+                if isinstance(node.func, ast.Name):
+                    called.add(node.func.id)
+                elif isinstance(node.func, ast.Attribute):
+                    called.add(node.func.attr)
+        return {
+            name
+            for name in called
+            if len(name) >= 3
+            and not keyword.iskeyword(name)
+            and name not in dir(builtins)
+            and name not in changed_leaves
+        }
+
+    def _cross_revision_interfaces(
+        self,
+        base_sha: str,
+        head_sha: str,
+        changed_files: list[ChangedFile],
+    ) -> CrossRevisionInterfaces:
+        """Partition changed-file symbols by whether they exist on BASE, HEAD, or both."""
+        base_symbols: set[str] = set()
+        head_symbols: set[str] = set()
+        for changed_file in changed_files:
+            if not changed_file.is_python or changed_file.is_test:
+                continue
+            base_path = changed_file.previous_path or changed_file.path
+            base_symbols |= self._defined_symbols(base_sha, base_path)
+            head_symbols |= self._defined_symbols(head_sha, changed_file.path)
+
+        limit = self.budget.max_interface_symbols
+        both = sorted(base_symbols & head_symbols)
+        added = sorted(head_symbols - base_symbols)
+        removed = sorted(base_symbols - head_symbols)
+        truncated = max(len(both), len(added), len(removed)) > limit
+        return CrossRevisionInterfaces(
+            present_on_both=tuple(both[:limit]),
+            new_on_head=tuple(added[:limit]),
+            removed_on_base=tuple(removed[:limit]),
+            truncated=truncated,
+        )
+
+    def _defined_symbols(self, revision_sha: str, path: str) -> set[str]:
+        """Return qualified callable and class names defined in one committed file."""
+        source = self._read_source(revision_sha, path)
+        if source is None:
+            return set()
+        tree = self._parse_python(source, path)
+        if tree is None:
+            return set()
+        visitor = _CallableVisitor(path)
+        visitor.visit(tree)
+        return {definition.qualified_name for definition in visitor.definitions}
 
     def retrieve_callable_signatures(
         self,
@@ -1198,3 +1353,46 @@ class DeterministicContextRetriever:
         if maximum <= len(_TRUNCATION_MARKER):
             return _TRUNCATION_MARKER[:maximum], True
         return value[: maximum - len(_TRUNCATION_MARKER)] + _TRUNCATION_MARKER, True
+
+
+class CrossRevisionInterfaces(BaseModel):
+    """Which symbols the candidate may rely on, partitioned by revision availability.
+
+    Why this exists
+    ---------------
+
+    Signature grounding and every source snippet were previously derived from HEAD
+    alone; the model's entire view of BASE was three lines of unified diff context. A
+    pull request that adds a helper therefore presents that helper to the agent with no
+    mechanism to ask whether it exists on BASE.
+
+    The consequence is not a lapse of judgment but a structural guarantee. In the sealed
+    unseen holdout, Rich #3938 introduced ``Segment.split_lines_terminator``; the agent
+    tested it, and the resulting test could only demonstrate that a new method exists --
+    which is trivially true on HEAD and impossible on BASE -- rather than the
+    user-visible styling behavior the helper was introduced to fix.
+
+    Partitioning the symbols mechanically lets PatchProof state the rule directly: prefer
+    an interface that exists on both revisions, because only a shared interface can carry
+    a differential experiment.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    #: Qualified names defined at both revisions. A claim should target one of these.
+    present_on_both: tuple[str, ...] = Field(default_factory=tuple, max_length=40)
+    #: Qualified names that exist only at HEAD. A test importing or calling one of these
+    #: cannot produce assertion evidence on BASE, only an import or attribute error.
+    new_on_head: tuple[str, ...] = Field(default_factory=tuple, max_length=40)
+    #: Qualified names that existed at BASE and are gone at HEAD.
+    removed_on_base: tuple[str, ...] = Field(default_factory=tuple, max_length=40)
+    truncated: bool = False
+
+    @property
+    def head_only_leaf_names(self) -> frozenset[str]:
+        """Leaf identifiers that appear only at HEAD, for mechanical candidate checks."""
+        return frozenset(
+            name.rsplit(".", maxsplit=1)[-1]
+            for name in self.new_on_head
+            if not name.rsplit(".", maxsplit=1)[-1].startswith("__")
+        )
