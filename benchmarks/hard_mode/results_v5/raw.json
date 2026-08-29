@@ -1,0 +1,1570 @@
+{
+  "cases": [
+    {
+      "base_sha": "8c1a0a7abbc1c36f70d1f65f3604acc46c5ce6ab",
+      "candidate_attempts": [
+        {
+          "artifact_sha256": "27c54e200acc5aa217c54cf2957e800b6c5586a307987198ceb6fe801ab29e2b",
+          "behavior_fingerprint": "3762be82a6eacea597ab58af6745f875c897c6875df640297d954b6f578eada4",
+          "candidate_id": "candidate-initial",
+          "feedback": null,
+          "issues": [],
+          "origin": "INITIAL",
+          "parent_artifact_sha256": null,
+          "parent_candidate_id": null,
+          "rationale": "Verify that Command.get_help_option returns a help option using the reserved parameter storage name '_click_default_help'.",
+          "raw_response_sha256": "25b885db85126dbd99987d1ec703f25f45dc65a7466b943d711533dac757fc55",
+          "sequence": 1,
+          "signature_context_count": 8,
+          "signature_context_sha256": "869c37207d88863d07a99379248fe3a28898b593a3c3f91d8435170dd77acd41",
+          "signature_context_truncated": true,
+          "source": "import click\n\ndef test_patchproof_generated_behavior():\n    cmd = click.Command(\"test\")\n    ctx = click.Context(cmd)\n    help_option = cmd.get_help_option(ctx)\n    assert help_option is not None\n    assert help_option.name == \"_click_default_help\"\n",
+          "status": "VALIDATED",
+          "target_path": "patchproof_generated_tests/test_patchproof_generated_initial.py",
+          "test_function": "test_patchproof_generated_behavior",
+          "usage": {
+            "cached_tokens": null,
+            "duration_seconds": 8.317128699971363,
+            "model_name": "gemini-3.6-flash",
+            "model_version": "gemini-3.6-flash",
+            "output_tokens": 125,
+            "prompt_tokens": 5838,
+            "provider_attempts": 1,
+            "total_tokens": 5963
+          }
+        }
+      ],
+      "candidate_evaluations": [
+        {
+          "artifact_sha256": "27c54e200acc5aa217c54cf2957e800b6c5586a307987198ceb6fe801ab29e2b",
+          "attempt_sequence": 1,
+          "base_execution": {
+            "artifact_sha256_after": "27c54e200acc5aa217c54cf2957e800b6c5586a307987198ceb6fe801ab29e2b",
+            "artifact_sha256_before": "27c54e200acc5aa217c54cf2957e800b6c5586a307987198ceb6fe801ab29e2b",
+            "collected_count": 1,
+            "detail": "AssertionError: assert 'help' == '_click_default_help'\n  \n  - _click_default_help\n  + help\npatchproof_generated_tests\\test_patchproof_generated_initial.py:8: in test_patchproof_generated_behavior\n    assert help_option.name == \"_click_default_help\"\nE   AssertionError: assert 'help' == '_click_default_help'\nE     \nE     - _click_default_help\nE     + help",
+            "duration_seconds": 2.0310000001918525,
+            "exit_code": 1,
+            "expected_artifact_sha256": "27c54e200acc5aa217c54cf2957e800b6c5586a307987198ceb6fe801ab29e2b",
+            "revision_sha": "8c1a0a7abbc1c36f70d1f65f3604acc46c5ce6ab",
+            "role": "BASE",
+            "status": "ASSERTION_FAILED",
+            "stderr": "",
+            "stdout": "F\r\n================================== FAILURES ===================================\r\n_____________________ test_patchproof_generated_behavior ______________________\r\npatchproof_generated_tests\\test_patchproof_generated_initial.py:8: in test_patchproof_generated_behavior\r\n    assert help_option.name == \"_click_default_help\"\r\nE   AssertionError: assert 'help' == '_click_default_help'\r\nE     \r\nE     - _click_default_help\r\nE     + help\r\n!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!\r\n1 failed in 0.87s\r\n",
+            "test_node_id": "patchproof_generated_tests/test_patchproof_generated_initial.py::test_patchproof_generated_behavior"
+          },
+          "differential_pattern": "BASE_ASSERTION_FAILED_HEAD_PASSED",
+          "head_execution": {
+            "artifact_sha256_after": "27c54e200acc5aa217c54cf2957e800b6c5586a307987198ceb6fe801ab29e2b",
+            "artifact_sha256_before": "27c54e200acc5aa217c54cf2957e800b6c5586a307987198ceb6fe801ab29e2b",
+            "collected_count": 1,
+            "detail": null,
+            "duration_seconds": 1.4379999998491257,
+            "exit_code": 0,
+            "expected_artifact_sha256": "27c54e200acc5aa217c54cf2957e800b6c5586a307987198ceb6fe801ab29e2b",
+            "revision_sha": "a28d839d3e68bb81b77bcd862fb29e35dcf894f9",
+            "role": "HEAD",
+            "status": "PASSED",
+            "stderr": "",
+            "stdout": ".                                                                        [100%]\r\n1 passed in 0.69s\r\n",
+            "test_node_id": "patchproof_generated_tests/test_patchproof_generated_initial.py::test_patchproof_generated_behavior"
+          },
+          "hidden_oracle_pattern": "BASE_ASSERTION_FAILED_HEAD_PASSED",
+          "matches_hidden_oracle_direction": true,
+          "mechanical_reason": "the identical selected test assertion failed on BASE and passed on HEAD; semantic claim support has not been assessed",
+          "mechanical_status": "DISCRIMINATING"
+        }
+      ],
+      "case_id": "click-3678-parameter-named-help",
+      "category": "CLI parser parameter storage collision",
+      "claim_result": {
+        "raw_response_sha256": "ed6f10f83c8a0c303f1641f36551359ec18184fda4470ff504c57129b1c60d97",
+        "selection": {
+          "claim": {
+            "action": "Call Command.get_help_option(ctx) to instantiate and retrieve the default help option object.",
+            "affected_symbols": [
+              {
+                "path": "src/click/core.py",
+                "qualified_name": "Command.get_help_option"
+              }
+            ],
+            "claim_id": "claim-selected-behavior",
+            "confidence": 0.95,
+            "expected_behavior": "The returned help option object uses '_click_default_help' as its internal parameter storage name, preventing conflicts when a user parameter (such as an argument named 'help') is present.",
+            "preconditions": [
+              "A click Command is created with add_help_option set to True (the default)."
+            ],
+            "reasoning_summary": "The change updates Command.get_help_option to pass the reserved storage name '_click_default_help' when instantiating the automatic help option, preventing conflict with user parameters named 'help'.",
+            "summary": "Automatic help option uses reserved name '_click_default_help' to prevent parameter name collisions with 'help'",
+            "supporting_context": [
+              {
+                "end_line": 1217,
+                "path": "src/click/core.py",
+                "relevance": "Passes _HELP_OPTION_STORAGE_NAME ('_click_default_help') when invoking help_option decorator in get_help_option.",
+                "start_line": 1209
+              }
+            ],
+            "testability": "TESTABLE"
+          },
+          "disposition": "SELECTED",
+          "explanation": "The change updates Command.get_help_option to pass the reserved storage name '_click_default_help' when instantiating the automatic help option, preventing conflict with user parameters named 'help'."
+        },
+        "usage": {
+          "cached_tokens": null,
+          "duration_seconds": 9.371873199939728,
+          "model_name": "gemini-3.6-flash",
+          "model_version": "gemini-3.6-flash",
+          "output_tokens": 352,
+          "prompt_tokens": 5554,
+          "provider_attempts": 1,
+          "total_tokens": 5906
+        }
+      },
+      "completed_at": "2026-08-29T10:14:28.806417+00:00",
+      "context": {
+        "base_sha": "8c1a0a7abbc1c36f70d1f65f3604acc46c5ce6ab",
+        "changed_files": [
+          {
+            "is_python": false,
+            "is_test": false,
+            "path": "CHANGES.md",
+            "previous_path": null,
+            "status": "MODIFIED"
+          },
+          {
+            "is_python": false,
+            "is_test": false,
+            "path": "docs/documentation.md",
+            "previous_path": null,
+            "status": "MODIFIED"
+          },
+          {
+            "is_python": true,
+            "is_test": false,
+            "path": "src/click/core.py",
+            "previous_path": null,
+            "status": "MODIFIED"
+          }
+        ],
+        "changed_symbols": [
+          {
+            "end_line": 1625,
+            "kind": "CLASS",
+            "path": "src/click/core.py",
+            "qualified_name": "Command",
+            "start_line": 960
+          },
+          {
+            "end_line": 1157,
+            "kind": "METHOD",
+            "path": "src/click/core.py",
+            "qualified_name": "Command.get_params",
+            "start_line": 1103
+          },
+          {
+            "end_line": 1218,
+            "kind": "METHOD",
+            "path": "src/click/core.py",
+            "qualified_name": "Command.get_help_option",
+            "start_line": 1186
+          }
+        ],
+        "diff": "diff --git a/src/click/core.py b/src/click/core.py\nindex 6de4216..cc8fb47 100644\n--- a/src/click/core.py\n+++ b/src/click/core.py\n@@ -55,6 +55,10 @@ if t.TYPE_CHECKING:\n F = t.TypeVar(\"F\", bound=\"t.Callable[..., t.Any]\")\n V = t.TypeVar(\"V\")\n \n+# Reserved storage name of the automatic help option. No user parameter is\n+# expected to claim it.\n+_HELP_OPTION_STORAGE_NAME = \"_click_default_help\"\n+\n \n def _complete_visible_commands(\n     ctx: Context, incomplete: str\n@@ -1119,6 +1123,37 @@ class Command:\n                     stacklevel=3,\n                 )\n \n+            # Options may deliberately share a storage name to compete for\n+            # the same value (feature switches), but an argument sharing a\n+            # name silently overwrites the other parameter's value.\n+            names_counter = Counter(param.name for param in params)\n+            duplicate_names = (\n+                name for name, count in names_counter.items() if count > 1\n+            )\n+\n+            for duplicate_name in duplicate_names:\n+                sharers = [param for param in params if param.name == duplicate_name]\n+\n+                if help_option in sharers:\n+                    warnings.warn(\n+                        (\n+                            f\"The name {duplicate_name!r} is reserved for the \"\n+                            \"automatic help option. Give the parameter a \"\n+                            \"different name.\"\n+                        ),\n+                        stacklevel=3,\n+                    )\n+                elif any(isinstance(param, Argument) for param in sharers):\n+                    warnings.warn(\n+                        (\n+                            f\"The name {duplicate_name!r} is used by an argument \"\n+                            \"and another parameter. They will overwrite each \"\n+                            \"other's value during parsing. Give each parameter \"\n+                            \"a unique name.\"\n+                        ),\n+                        stacklevel=3,\n+                    )\n+\n         return params\n \n     def format_usage(self, ctx: Context, formatter: HelpFormatter) -> None:\n@@ -1153,6 +1188,11 @@ class Command:\n \n         Skipped if :attr:`add_help_option` is ``False``.\n \n+        .. versionchanged:: 8.5.0\n+            The help option stores its value under the reserved name\n+            ``_click_default_help``, so a parameter named ``help`` no\n+            longer breaks parsing.\n+\n         .. versionchanged:: 8.1.8\n             The help option is now cached to avoid creating it multiple times.\n         \"\"\"\n@@ -1169,8 +1209,10 @@ class Command:\n             # Avoid circular import.\n             from .decorators import help_option\n \n-            # Apply help_option decorator and pop resulting option\n-            help_option(*help_option_names)(self)\n+            # The help option never exposes its value, so it uses a reserved\n+            # storage name, keeping it cl\n... [deterministically truncated by PatchProof]\ndiff --git a/CHANGES.md b/CHANGES.md\nindex fc3fada..e03b88e 100644\n--- a/CHANGES.md\n+++ b/CHANGES.md\n@@ -17,6 +17,14 @@ Unreleased\n   [discussion #3527](https://github.com/pallets/click/discussions/3527). {pr}`3581`\n - `style()` and `secho()` no longer silently drop the 256-color index `0`\n   (black) passed as `fg` or `bg`, and now validate color arguments. {pr}`3677`\n+- The automatic help option stores its value under the reserved name\n+  `_click_default_help` instead of `help`, so a parameter named `help` no\n+  longer breaks parsing. The new name is visible in\n+  {meth}`Command.to_info_dict` output. Parameters that overwrite each other's\n+  value trigger a warning: an argument sharing its name with another\n+  parameter, or any parameter claiming the reserved name. Options may still\n+  share a name to compete for the same value (feature switches).\n+  {issue}`2819` {pr}`3678`\n - `unstyle` and the ANSI handling behind help-text wrapping now strip the full\n   CSI escape-sequence grammar.\n \n\ndiff --git a/docs/documentation.md b/docs/documentation.md\nindex 1215c85..ae3f188 100644\n--- a/docs/documentation.md\n+++ b/docs/documentation.md\n@@ -322,7 +322,7 @@ The default placeholder variable ([meta variable](https://en.wikipedia.org/wiki/\n \n ## Help Parameter Customization\n \n-Help parameters are automatically added by Click for any command. The default is `--help` but can be overridden by the context setting {attr}`~Context.help_option_names`. Click also performs automatic conflict resolution on the default help parameter, so if a command itself implements a parameter named `help` then the default help will not be run.\n+Help parameters are automatically added by Click for any command. The default is `--help` but can be overridden by the context setting {attr}`~Context.help_option_names`. Click resolves conflicts automatically: an option reusing one of the help option names takes it over, and the default help parameter is dropped once all its names are taken. A parameter merely named `help`, like `click.argument(\"help\")`, does not disable it: both keep working independently.\n \n This example changes the default parameters to `-h` and `--help`\n instead of just `--help`:\n",
+        "head_sha": "a28d839d3e68bb81b77bcd862fb29e35dcf894f9",
+        "snippets": [
+          {
+            "content": "\n\nclass Command:\n    \"\"\"Commands are the basic building block of command line interfaces in\n    Click.  A basic command handles command line parsing and might dispatch\n    more parsing to commands nested below it.\n\n    :param name: the name of the command to use unless a group overrides it.\n    :param context_settings: an optional dictionary with defaults that are\n                             passed to the context object.\n    :param callback: the callback to invoke.  This is optional.\n    :param params: the parameters to register with this command.  This can\n                   be either :class:`Option` or :class:`Argument` objects.\n    :param help: the help string to use for this command.\n    :param epilog: like the help string but it's printed at the end of the\n                   help page after everything else.\n    :param short_help: the short help to use for this command.  This is\n                       shown on the command listing of the parent command.\n    :param add_help_option: by default each command registers a ``--help``\n                            option.  This can be disabled by this parameter.\n    :param no_args_is_help: this controls what happens if no arguments are\n                            provided.  This option is disabled by default.\n                            If enabled this will add ``--help`` as argument\n                            if no arguments are passed\n    :param hidden: hide this command from help outputs.\n    :param deprecated: If ``True`` or non-empty string, issues a message\n                        indicating that the command is deprecated and highlights\n                        its deprecation in --help. The message can be customized\n                        by using a string as the value.\n\n... [deterministically truncated by PatchProof]",
+            "end_line": 1627,
+            "kind": "CHANGED_SYMBOL",
+            "path": "src/click/core.py",
+            "reason": "changed class Command",
+            "start_line": 958
+          },
+          {
+            "content": "        return formatter.getvalue().rstrip(\"\\n\")\n\n    def get_params(self, ctx: Context) -> list[Parameter]:\n        params = self.params\n        help_option = self.get_help_option(ctx)\n\n        if help_option is not None:\n            params = [*params, help_option]\n\n        if __debug__:\n            import warnings\n\n            opts = [opt for param in params for opt in param.opts]\n            opts_counter = Counter(opts)\n            duplicate_opts = (opt for opt, count in opts_counter.items() if count > 1)\n\n            for duplicate_opt in duplicate_opts:\n                warnings.warn(\n                    (\n                        f\"The parameter {duplicate_opt} is used more than once. \"\n                        \"Remove its duplicate as parameters should be unique.\"\n                    ),\n                    stacklevel=3,\n                )\n\n            # Options may deliberately share a storage name to compete for\n            # the same value (feature switches), but an argument sharing a\n            # name silently overwrites the other parameter's value.\n            names_counter = Counter(param.name for param in params)\n            duplicate_names = (\n                name for name, count in names_counter.items() if count > 1\n            )\n\n            for duplicate_name in duplicate_names:\n                sharers = [param for param in params if param.name == duplicate_name]\n\n                if help_option in sharers:\n                    warnings.warn(\n                        (\n                            f\"The name {duplicate_name!r} is reserved for the \"\n                            \"automatic help option. Give the parameter a \"\n                            \"different name.\"\n                        ),\n                    \n... [deterministically truncated by PatchProof]",
+            "end_line": 1159,
+            "kind": "CHANGED_SYMBOL",
+            "path": "src/click/core.py",
+            "reason": "changed method Command.get_params",
+            "start_line": 1101
+          },
+          {
+            "content": "        return list(all_names)\n\n    def get_help_option(self, ctx: Context) -> Option | None:\n        \"\"\"Returns the help option object.\n\n        Skipped if :attr:`add_help_option` is ``False``.\n\n        .. versionchanged:: 8.5.0\n            The help option stores its value under the reserved name\n            ``_click_default_help``, so a parameter named ``help`` no\n            longer breaks parsing.\n\n        .. versionchanged:: 8.1.8\n            The help option is now cached to avoid creating it multiple times.\n        \"\"\"\n        help_option_names = self.get_help_option_names(ctx)\n\n        if not help_option_names or not self.add_help_option:\n            return None\n\n        # Cache the help option object in private _help_option attribute to\n        # avoid creating it multiple times. Not doing this will break the\n        # callback ordering by iter_params_for_processing(), which relies on\n        # object comparison.\n        if self._help_option is None:\n            # Avoid circular import.\n            from .decorators import help_option\n\n            # The help option never exposes its value, so it uses a reserved\n            # storage name, keeping it clear of user parameters (like an\n            # argument named \"help\") that would otherwise clobber its value.\n            help_option(*help_option_names, _HELP_OPTION_STORAGE_NAME)(self)\n            self._help_option = self.params.pop()  # type: ignore[assignment]\n\n        return self._help_option\n\n    def make_parser(self, ctx: Context) -> _OptionParser:",
+            "end_line": 1220,
+            "kind": "CHANGED_SYMBOL",
+            "path": "src/click/core.py",
+            "reason": "changed method Command.get_help_option",
+            "start_line": 1184
+          },
+          {
+            "content": "from __future__ import annotations",
+            "end_line": 1,
+            "kind": "IMPORT",
+            "path": "src/click/core.py",
+            "reason": "import used by a changed Python file",
+            "start_line": 1
+          },
+          {
+            "content": "import collections.abc as cabc",
+            "end_line": 3,
+            "kind": "IMPORT",
+            "path": "src/click/core.py",
+            "reason": "import used by a changed Python file",
+            "start_line": 3
+          },
+          {
+            "content": "import enum",
+            "end_line": 4,
+            "kind": "IMPORT",
+            "path": "src/click/core.py",
+            "reason": "import used by a changed Python file",
+            "start_line": 4
+          },
+          {
+            "content": "import errno",
+            "end_line": 5,
+            "kind": "IMPORT",
+            "path": "src/click/core.py",
+            "reason": "import used by a changed Python file",
+            "start_line": 5
+          },
+          {
+            "content": "\nfrom .core import Argument as Argument\nfrom .core import Command as Command\nfrom .core import CommandCollection as CommandCollection\nfrom .core import Context as Context",
+            "end_line": 13,
+            "kind": "SYMBOL_REFERENCE",
+            "path": "src/click/__init__.py",
+            "reason": "source references changed symbol(s): Command",
+            "start_line": 9
+          },
+          {
+            "content": "            return subprocess.call(args)\n        except OSError:\n            # Command not found\n            return 127\n",
+            "end_line": 823,
+            "kind": "SYMBOL_REFERENCE",
+            "path": "src/click/_termui_impl.py",
+            "reason": "source references changed symbol(s): Command",
+            "start_line": 819
+          },
+          {
+            "content": "\nfrom .core import Argument\nfrom .core import Command\nfrom .core import Context\nfrom .core import Group",
+            "end_line": 11,
+            "kind": "SYMBOL_REFERENCE",
+            "path": "src/click/decorators.py",
+            "reason": "source references changed symbol(s): Command",
+            "start_line": 7
+          },
+          {
+            "content": "\nif t.TYPE_CHECKING:\n    from .core import Command\n    from .core import Context\n    from .core import Parameter",
+            "end_line": 16,
+            "kind": "SYMBOL_REFERENCE",
+            "path": "src/click/exceptions.py",
+            "reason": "source references changed symbol(s): Command",
+            "start_line": 12
+          },
+          {
+            "content": "\nfrom .core import Argument\nfrom .core import Command\nfrom .core import Context\nfrom .core import Group",
+            "end_line": 12,
+            "kind": "SYMBOL_REFERENCE",
+            "path": "src/click/shell_completion.py",
+            "reason": "source references changed symbol(s): Command",
+            "start_line": 8
+          },
+          {
+            "content": "    from _typeshed import ReadableBuffer\n\n    from .core import Command\n\nif sys.platform == \"win32\":",
+            "end_line": 25,
+            "kind": "SYMBOL_REFERENCE",
+            "path": "src/click/testing.py",
+            "reason": "source references changed symbol(s): Command",
+            "start_line": 21
+          },
+          {
+            "content": ")\ndef test_required_argument(value, expect_missing, processed_value):\n    \"\"\"Test how a required argument is processing the provided values.\"\"\"\n    ctx = click.Context(click.Command(\"\"))\n    argument = click.Argument([\"a\"], required=True)\n\n    if expect_missing:\n        with pytest.raises(click.MissingParameter) as excinfo:\n            argument.process_value(ctx, value)\n        assert str(excinfo.value) == \"Missing parameter: a\"\n\n    else:\n        value = argument.process_value(ctx, value)\n        assert value == processed_value\n",
+            "end_line": 285,
+            "kind": "LIKELY_TEST",
+            "path": "tests/test_arguments.py",
+            "reason": "test references changed symbol(s): Command",
+            "start_line": 271
+          },
+          {
+            "content": "\ndef test_custom_command_no_parens(runner):\n    class CustomCommand(click.Command):\n        pass\n\n    class CustomGroup(click.Group):\n        command_class = CustomCommand\n\n    @click.group(cls=CustomGroup)\n    def grp():\n        pass\n\n    @grp.command\n    def cli():\n        click.echo(\"hello custom command class\")\n\n    result = runner.invoke(cli)\n    assert result.exception is None\n    assert result.output == \"hello custom command class\\n\"\n",
+            "end_line": 34,
+            "kind": "LIKELY_TEST",
+            "path": "tests/test_command_decorators.py",
+            "reason": "test references changed symbol(s): Command",
+            "start_line": 15
+          },
+          {
+            "content": "\ndef test_command_no_args_is_help(runner):\n    result = runner.invoke(click.Command(\"test\", no_args_is_help=True))\n    assert result.exit_code == 2\n    assert \"Show this message and exit.\" in result.output\n",
+            "end_line": 102,
+            "kind": "LIKELY_TEST",
+            "path": "tests/test_commands.py",
+            "reason": "test references changed symbol(s): Command",
+            "start_line": 97
+          }
+        ],
+        "stats": {
+          "changed_file_count": 6,
+          "changed_python_file_count": 4,
+          "excluded_changed_files": 3,
+          "excluded_python_paths": 3,
+          "omitted_changed_files": 0,
+          "python_path_count": 73,
+          "reference_files_scanned": 31,
+          "test_files_scanned": 41,
+          "truncated": true
+        }
+      },
+      "context_sha256": "6810523831fa21ebdab222db3fdee5e905baf4dec6ac97d1acf657828c785cee",
+      "difficulty_rationale": "The failure emerges only when automatic help-option state and a user parameter share a callback storage name; it crosses command construction, parsing, callback binding, and runner output.",
+      "error": null,
+      "final_mechanical": "DISCRIMINATING",
+      "final_outcome": "CLAIM_SUPPORTED_FOR_SCENARIO",
+      "head_sha": "a28d839d3e68bb81b77bcd862fb29e35dcf894f9",
+      "kind": "HISTORICAL_PR",
+      "narrative": {
+        "body": "This PR fixes #2819 by having ou pre-configured `--help` parameter automatically change its internal name used to store its value, in the case of a user providing its own argument or option conflicting with ours.\n\nNote that I arbitrarily used a convention of adding underscores `_` to that internal name until no other parameter conflict with it. I'm ready to change that strategy if it is does not look good.",
+        "linked_issue_context": [],
+        "title": "Fix parsing when a parameter is named `help`",
+        "truncated": false
+      },
+      "oracle_loaded_during_live_run": false,
+      "pull_request_number": 3678,
+      "repository": "pallets/click",
+      "semantic_assessment": {
+        "decision": {
+          "assertion_relation": "RELATED",
+          "confidence": 0.98,
+          "explanation": "The generated test directly verifies that `cmd.get_help_option(ctx).name` evaluates to '_click_default_help'. This assertion directly tests the claim that the automatic help option uses '_click_default_help' to avoid parameter name collisions. The test fails on BASE where the name was 'help' and passes on HEAD.",
+          "outcome": "CLAIM_SUPPORTED_FOR_SCENARIO"
+        },
+        "raw_response_sha256": "67fb4c9e3c66adb70e6f0aa991fc099087d8c62712f3073561eb9099c6b5f782",
+        "usage": {
+          "cached_tokens": null,
+          "duration_seconds": 5.720983300125226,
+          "model_name": "gemini-3.6-flash",
+          "model_version": "gemini-3.6-flash",
+          "output_tokens": 100,
+          "prompt_tokens": 1169,
+          "provider_attempts": 1,
+          "total_tokens": 1269
+        }
+      },
+      "started_at": "2026-08-29T10:13:53.648187+00:00",
+      "terminal_status": "CLAIM_SUPPORTED_FOR_SCENARIO",
+      "wall_duration_seconds": 35.15823
+    },
+    {
+      "base_sha": "ab7f8b2f4c0f747d5b1575247ce35e5adaad182e",
+      "candidate_attempts": [
+        {
+          "artifact_sha256": "f9e74b33b2a43bf374e8b82cbbeb62b4f398541363778d009caebb7fa0464029",
+          "behavior_fingerprint": "b2093cd5a19d172b703a2bc5c95d45146ff01716b5a894de92244b1ae15c0f68",
+          "candidate_id": "candidate-initial",
+          "feedback": null,
+          "issues": [],
+          "origin": "INITIAL",
+          "parent_artifact_sha256": null,
+          "parent_candidate_id": null,
+          "rationale": "Verify that nesting attr.validators.disabled() context managers restores the previous validation state upon exiting the inner block rather than unconditionally enabling validators to True.",
+          "raw_response_sha256": "3edcd5c08d3426431441c40cbe90169e9b559845fd3c4552500bd2cc1e5ffdf6",
+          "sequence": 1,
+          "signature_context_count": 3,
+          "signature_context_sha256": "e0eaaeb6b0d4309c981f510b118ba135919a809b9626682e494733a9a2b1b0b9",
+          "signature_context_truncated": true,
+          "source": "import attr\n\ndef test_patchproof_generated_behavior():\n    # Ensure validators start enabled\n    attr.validators.set_run_validators(True)\n    assert attr.validators.get_run_validators() is True\n    \n    with attr.validators.disabled():\n        assert attr.validators.get_run_validators() is False\n        with attr.validators.disabled():\n            assert attr.validators.get_run_validators() is False\n        # After exiting inner disabled() context, state should be False (the state prior to inner enter)\n        assert attr.validators.get_run_validators() is False\n    \n    # After exiting outer disabled() context, state should be restored to True\n    assert attr.validators.get_run_validators() is True\n",
+          "status": "VALIDATED",
+          "target_path": "patchproof_generated_tests/test_patchproof_generated_initial.py",
+          "test_function": "test_patchproof_generated_behavior",
+          "usage": {
+            "cached_tokens": null,
+            "duration_seconds": 4.625040099956095,
+            "model_name": "gemini-3.6-flash",
+            "model_version": "gemini-3.6-flash",
+            "output_tokens": 221,
+            "prompt_tokens": 2389,
+            "provider_attempts": 1,
+            "total_tokens": 2610
+          }
+        }
+      ],
+      "candidate_evaluations": [
+        {
+          "artifact_sha256": "f9e74b33b2a43bf374e8b82cbbeb62b4f398541363778d009caebb7fa0464029",
+          "attempt_sequence": 1,
+          "base_execution": {
+            "artifact_sha256_after": "f9e74b33b2a43bf374e8b82cbbeb62b4f398541363778d009caebb7fa0464029",
+            "artifact_sha256_before": "f9e74b33b2a43bf374e8b82cbbeb62b4f398541363778d009caebb7fa0464029",
+            "collected_count": 1,
+            "detail": "AssertionError: assert True is False\n +  where True = <function get_run_validators at 0x0000017470C23CE0>()\n +    where <function get_run_validators at 0x0000017470C23CE0> = <module 'attr.validators' from 'E:\\\\patchproof\\\\.patchproof-hard-mode-v5\\\\workspaces\\\\live\\\\attrs-1513-nested-disabled-state\\\\patchproof-run-02e2433dca7b49c4a3f2d5cf0a65d1fb\\\\base\\\\src\\\\attr\\\\validators.py'>.get_run_validators\n +      where <module 'attr.validators' from 'E:\\\\patchproof\\\\.patchproof-hard-mode-v5\\\\workspaces\\\\live\\\\attrs-1513-nested-disabled-state\\\\patchproof-run-02e2433dca7b49c4a3f2d5cf0a65d1fb\\\\base\\\\src\\\\attr\\\\validators.py'> = attr.validators\npatchproof_generated_tests\\test_patchproof_generated_initial.py:13: in test_patchproof_generated_behavior\n    assert attr.validators.get_run_validators() is False\nE   AssertionError: assert True is False\nE    +  where True = <function get_run_validators at 0x0000017470C23CE0>()\nE    +    where <function get_run_validators at 0x0000017470C23CE0> = <module 'attr.validators' from 'E:\\\\patchproof\\\\.patchproof-hard-mode-v5\\\\workspaces\\\\live\\\\attrs-1513-nested-disabled-state\\\\patchproof-run-02e2433dca7b49c4a3f2d5cf0a65d1fb\\\\base\\\\src\\\\attr\\\\validators.py'>.get_run_validators\nE    +      where <module 'attr.validators' from 'E:\\\\patchproof\\\\.patchproof-hard-mode-v5\\\\workspaces\\\\live\\\\attrs-1513-nested-disabled-state\\\\patchproof-run-02e2433dca7b49c4a3f2d5cf0a65d1fb\\\\base\\\\src\\\\attr\\\\validators.py'> = attr.validators",
+            "duration_seconds": 0.796000000089407,
+            "exit_code": 1,
+            "expected_artifact_sha256": "f9e74b33b2a43bf374e8b82cbbeb62b4f398541363778d009caebb7fa0464029",
+            "revision_sha": "ab7f8b2f4c0f747d5b1575247ce35e5adaad182e",
+            "role": "BASE",
+            "status": "ASSERTION_FAILED",
+            "stderr": "",
+            "stdout": "F\r\n================================== FAILURES ===================================\r\n_____________________ test_patchproof_generated_behavior ______________________\r\npatchproof_generated_tests\\test_patchproof_generated_initial.py:13: in test_patchproof_generated_behavior\r\n    assert attr.validators.get_run_validators() is False\r\nE   AssertionError: assert True is False\r\nE    +  where True = <function get_run_validators at 0x0000017470C23CE0>()\r\nE    +    where <function get_run_validators at 0x0000017470C23CE0> = <module 'attr.validators' from 'E:\\\\patchproof\\\\.patchproof-hard-mode-v5\\\\workspaces\\\\live\\\\attrs-1513-nested-disabled-state\\\\patchproof-run-02e2433dca7b49c4a3f2d5cf0a65d1fb\\\\base\\\\src\\\\attr\\\\validators.py'>.get_run_validators\r\nE    +      where <module 'attr.validators' from 'E:\\\\patchproof\\\\.patchproof-hard-mode-v5\\\\workspaces\\\\live\\\\attrs-1513-nested-disabled-state\\\\patchproof-run-02e2433dca7b49c4a3f2d5cf0a65d1fb\\\\base\\\\src\\\\attr\\\\validators.py'> = attr.validators\r\n!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!\r\n1 failed in 0.24s\r\n",
+            "test_node_id": "patchproof_generated_tests/test_patchproof_generated_initial.py::test_patchproof_generated_behavior"
+          },
+          "differential_pattern": "BASE_ASSERTION_FAILED_HEAD_PASSED",
+          "head_execution": {
+            "artifact_sha256_after": "f9e74b33b2a43bf374e8b82cbbeb62b4f398541363778d009caebb7fa0464029",
+            "artifact_sha256_before": "f9e74b33b2a43bf374e8b82cbbeb62b4f398541363778d009caebb7fa0464029",
+            "collected_count": 1,
+            "detail": null,
+            "duration_seconds": 0.7189999998081475,
+            "exit_code": 0,
+            "expected_artifact_sha256": "f9e74b33b2a43bf374e8b82cbbeb62b4f398541363778d009caebb7fa0464029",
+            "revision_sha": "91f3695fe70a6d58c95660addd5ef8d46bfebd61",
+            "role": "HEAD",
+            "status": "PASSED",
+            "stderr": "",
+            "stdout": ".                                                                        [100%]\r\n1 passed in 0.23s\r\n",
+            "test_node_id": "patchproof_generated_tests/test_patchproof_generated_initial.py::test_patchproof_generated_behavior"
+          },
+          "hidden_oracle_pattern": "BASE_ASSERTION_FAILED_HEAD_PASSED",
+          "matches_hidden_oracle_direction": true,
+          "mechanical_reason": "the identical selected test assertion failed on BASE and passed on HEAD; semantic claim support has not been assessed",
+          "mechanical_status": "DISCRIMINATING"
+        }
+      ],
+      "case_id": "attrs-1513-nested-disabled-state",
+      "category": "Nested context-manager state restoration",
+      "claim_result": {
+        "raw_response_sha256": "730412b5c0da0bb07e7cd1f103fa62d0be155c0da038dc4102217be11d6e4a31",
+        "selection": {
+          "claim": {
+            "action": "Enter and exit nested with attr.validators.disabled() blocks.",
+            "affected_symbols": [
+              {
+                "path": "src/attr/validators.py",
+                "qualified_name": "disabled"
+              }
+            ],
+            "claim_id": "claim-selected-behavior",
+            "confidence": 0.95,
+            "expected_behavior": "Exiting an inner disabled() context restores the validator state to what it was before entering the inner block rather than forcing validators to True.",
+            "preconditions": [
+              "attr.validators is imported and validators are currently disabled or enabled via set_run_validators()."
+            ],
+            "reasoning_summary": "The patch updates `disabled()` to store `get_run_validators()` before setting it to False, restoring `prev` on context exit. This directly fixes nested usage.",
+            "summary": "validators.disabled() saves and restores previous validation state upon exit, allowing nested context managers.",
+            "supporting_context": [
+              {
+                "end_line": 89,
+                "path": "src/attr/validators.py",
+                "relevance": "Saves get_run_validators() state prior to setting False and restores previous state in finally block.",
+                "start_line": 83
+              }
+            ],
+            "testability": "TESTABLE"
+          },
+          "disposition": "SELECTED",
+          "explanation": "The patch updates `disabled()` to store `get_run_validators()` before setting it to False, restoring `prev` on context exit. This directly fixes nested usage."
+        },
+        "usage": {
+          "cached_tokens": null,
+          "duration_seconds": 6.5931908001657575,
+          "model_name": "gemini-3.6-flash",
+          "model_version": "gemini-3.6-flash",
+          "output_tokens": 305,
+          "prompt_tokens": 2490,
+          "provider_attempts": 1,
+          "total_tokens": 2795
+        }
+      },
+      "completed_at": "2026-08-29T10:37:19.924114+00:00",
+      "context": {
+        "base_sha": "ab7f8b2f4c0f747d5b1575247ce35e5adaad182e",
+        "changed_files": [
+          {
+            "is_python": false,
+            "is_test": false,
+            "path": "changelog.d/1513.change.md",
+            "previous_path": null,
+            "status": "ADDED"
+          },
+          {
+            "is_python": true,
+            "is_test": false,
+            "path": "src/attr/validators.py",
+            "previous_path": null,
+            "status": "MODIFIED"
+          }
+        ],
+        "changed_symbols": [
+          {
+            "end_line": 89,
+            "kind": "FUNCTION",
+            "path": "src/attr/validators.py",
+            "qualified_name": "disabled",
+            "start_line": 72
+          }
+        ],
+        "diff": "diff --git a/src/attr/validators.py b/src/attr/validators.py\nindex 837e003..0b1a294 100644\n--- a/src/attr/validators.py\n+++ b/src/attr/validators.py\n@@ -79,12 +79,14 @@ def disabled():\n         This context manager is not thread-safe!\n \n     .. versionadded:: 21.3.0\n+    .. versionchanged:: 26.1.0 The contextmanager is nestable.\n     \"\"\"\n+    prev = get_run_validators()\n     set_run_validators(False)\n     try:\n         yield\n     finally:\n-        set_run_validators(True)\n+        set_run_validators(prev)\n \n \n @attrs(repr=False, slots=True, unsafe_hash=True)\n\ndiff --git a/changelog.d/1513.change.md b/changelog.d/1513.change.md\nnew file mode 100644\nindex 0000000..8cbc63c\n--- /dev/null\n+++ b/changelog.d/1513.change.md\n@@ -0,0 +1 @@\n+The `attrs.validators.disabled()` contextmanager can now be nested.\n",
+        "head_sha": "91f3695fe70a6d58c95660addd5ef8d46bfebd61",
+        "snippets": [
+          {
+            "content": "\n\n@contextmanager\ndef disabled():\n    \"\"\"\n    Context manager that disables running validators within its context.\n\n    .. warning::\n\n        This context manager is not thread-safe!\n\n    .. versionadded:: 21.3.0\n    .. versionchanged:: 26.1.0 The contextmanager is nestable.\n    \"\"\"\n    prev = get_run_validators()\n    set_run_validators(False)\n    try:\n        yield\n    finally:\n        set_run_validators(prev)\n\n",
+            "end_line": 91,
+            "kind": "CHANGED_SYMBOL",
+            "path": "src/attr/validators.py",
+            "reason": "changed function disabled",
+            "start_line": 70
+          },
+          {
+            "content": "import operator",
+            "end_line": 7,
+            "kind": "IMPORT",
+            "path": "src/attr/validators.py",
+            "reason": "import used by a changed Python file",
+            "start_line": 7
+          },
+          {
+            "content": "import re",
+            "end_line": 8,
+            "kind": "IMPORT",
+            "path": "src/attr/validators.py",
+            "reason": "import used by a changed Python file",
+            "start_line": 8
+          },
+          {
+            "content": "from contextlib import contextmanager",
+            "end_line": 10,
+            "kind": "IMPORT",
+            "path": "src/attr/validators.py",
+            "reason": "import used by a changed Python file",
+            "start_line": 10
+          },
+          {
+            "content": "from re import Pattern",
+            "end_line": 11,
+            "kind": "IMPORT",
+            "path": "src/attr/validators.py",
+            "reason": "import used by a changed Python file",
+            "start_line": 11
+          },
+          {
+            "content": "            all pass.\n\n            Validators can be globally disabled and re-enabled using\n            `attrs.validators.get_disabled` / `attrs.validators.set_disabled`.\n",
+            "end_line": 495,
+            "kind": "SYMBOL_REFERENCE",
+            "path": "src/attr/_next_gen.py",
+            "reason": "source references changed symbol(s): disabled",
+            "start_line": 491
+          },
+          {
+            "content": "\n\nwith attrs.validators.disabled():\n    Validated(num=-1)\n",
+            "end_line": 123,
+            "kind": "SYMBOL_REFERENCE",
+            "path": "typing-examples/baseline.py",
+            "reason": "source references changed symbol(s): disabled",
+            "start_line": 119
+          },
+          {
+            "content": "\n\nwith attr.validators.disabled():\n    Validated2(num=-1)\n",
+            "end_line": 301,
+            "kind": "SYMBOL_REFERENCE",
+            "path": "typing-examples/mypy.py",
+            "reason": "source references changed symbol(s): disabled",
+            "start_line": 297
+          }
+        ],
+        "stats": {
+          "changed_file_count": 3,
+          "changed_python_file_count": 2,
+          "excluded_changed_files": 1,
+          "excluded_python_paths": 1,
+          "omitted_changed_files": 0,
+          "python_path_count": 53,
+          "reference_files_scanned": 21,
+          "test_files_scanned": 31,
+          "truncated": false
+        }
+      },
+      "context_sha256": "18704b8e1be059118d24665fa62285207e4c87f17180a81ebc42fd9476d68484",
+      "difficulty_rationale": "The observable bug requires entering and leaving two nested stateful contexts and checking the intermediate state, not merely the final cleanup state.",
+      "error": null,
+      "final_mechanical": "DISCRIMINATING",
+      "final_outcome": "CLAIM_SUPPORTED_FOR_SCENARIO",
+      "head_sha": "91f3695fe70a6d58c95660addd5ef8d46bfebd61",
+      "kind": "HISTORICAL_PR",
+      "narrative": {
+        "body": "## Summary\n\n`validators.disabled()` unconditionally re-enables validators in its `finally` block instead of restoring the previous state. This breaks nested usage — the inner context manager prematurely re-enables validators when it exits.\n\n```python\nwith disabled():\n    with disabled():\n        pass\n    # BUG: validators are now ENABLED even though we're still in the outer disabled()\n    C(x=\"not_int\")  # raises TypeError unexpectedly\n```\n\nThe fix saves the current state with `get_run_validators()` before disabling, then restores it in `finally`. This is a one-line semantic change.\n\nThe same pattern of nesting breakage also applies when `set_run_validators(False)` was called before entering `disabled()` — the context manager would unexpectedly override that.\n",
+        "linked_issue_context": [],
+        "title": "Fix validators.disabled() to save/restore state on nesting",
+        "truncated": false
+      },
+      "oracle_loaded_during_live_run": false,
+      "pull_request_number": 1513,
+      "repository": "python-attrs/attrs",
+      "semantic_assessment": {
+        "decision": {
+          "assertion_relation": "RELATED",
+          "confidence": 0.95,
+          "explanation": "The candidate test directly tests nested invocation of attr.validators.disabled() context managers, verifying that exiting an inner disabled context preserves the outer disabled state rather than forcing validators to True.",
+          "outcome": "CLAIM_SUPPORTED_FOR_SCENARIO"
+        },
+        "raw_response_sha256": "b0059bec19c5b5aaa4de27bda7b54db8bf5311cb5145050820bcd1bc54a17e8c",
+        "usage": {
+          "cached_tokens": null,
+          "duration_seconds": 5.269874999998137,
+          "model_name": "gemini-3.6-flash",
+          "model_version": "gemini-3.6-flash",
+          "output_tokens": 82,
+          "prompt_tokens": 1503,
+          "provider_attempts": 1,
+          "total_tokens": 1726
+        }
+      },
+      "started_at": "2026-08-29T10:36:54.854245+00:00",
+      "terminal_status": "CLAIM_SUPPORTED_FOR_SCENARIO",
+      "wall_duration_seconds": 25.069869
+    },
+    {
+      "base_sha": "65374df0c31cdc45acc4435741779298201306a2",
+      "candidate_attempts": [
+        {
+          "artifact_sha256": "6dffdd821acaca75f1722c47c55c104be5b3c550d8df7b019e02412967843a2d",
+          "behavior_fingerprint": "486b382b385f60142e1fb662f8e413b5841511cdeffd6fcf866187355939579b",
+          "candidate_id": "candidate-initial",
+          "feedback": null,
+          "issues": [],
+          "origin": "INITIAL",
+          "parent_artifact_sha256": null,
+          "parent_candidate_id": null,
+          "rationale": "Verifies that passing partial=(\"attr_name.nested_field\",) when data_key is configured on a Nested field correctly uses attr_name as the sub-partial prefix during deserialization.",
+          "raw_response_sha256": "5506809c6ef4ab948ea6ac1af824eac1bf3a98dad12856169550e486918b5c8b",
+          "sequence": 1,
+          "signature_context_count": 8,
+          "signature_context_sha256": "c317fad9d83754aba27eafe999a152288ce496c0aaa853e8aa04f2119cad3405",
+          "signature_context_truncated": true,
+          "source": "from marshmallow import Schema, fields\n\n\nclass ChildSchema(Schema):\n    nested_field = fields.Str(required=True)\n\n\nclass ParentSchema(Schema):\n    child = fields.Nested(ChildSchema, data_key=\"childDataKey\")\n\n\ndef test_patchproof_generated_behavior():\n    schema = ParentSchema()\n    # When specifying partial loading using the attribute name ('child.nested_field'),\n    # the sub-partial calculation should use attr_name ('child'), making missing nested_field\n    # partial and resulting in successful deserialization.\n    result = schema.load({\"childDataKey\": {}}, partial=(\"child.nested_field\",))\n    assert result == {\"child\": {}}\n",
+          "status": "VALIDATED",
+          "target_path": "patchproof_generated_tests/test_patchproof_generated_initial.py",
+          "test_function": "test_patchproof_generated_behavior",
+          "usage": {
+            "cached_tokens": null,
+            "duration_seconds": 7.208907800028101,
+            "model_name": "gemini-3.6-flash",
+            "model_version": "gemini-3.6-flash",
+            "output_tokens": 232,
+            "prompt_tokens": 4370,
+            "provider_attempts": 1,
+            "total_tokens": 4602
+          }
+        },
+        {
+          "artifact_sha256": null,
+          "behavior_fingerprint": "486b382b385f60142e1fb662f8e413b5841511cdeffd6fcf866187355939579b",
+          "candidate_id": "candidate-repair",
+          "feedback": {
+            "category": "EXECUTION_EVIDENCE",
+            "observations": [
+              "BASE status=TEST_ERROR; exception_type=marshmallow.exceptions.ValidationError; message={'childDataKey': {'nested_field': ['Missing data for required field.']}}; generated_line=17:result = schema.load({\"childDataKey\": {}}, partial=(\"child.nested_field\",))",
+              "HEAD status=PASSED",
+              "mechanical_status=ENVIRONMENTAL; pattern=NOT_COMPARABLE",
+              "An exception escaping on one revision is mechanically TEST_ERROR. If it represents expected claim behavior and its exception import is grounded in the supplied context, convert it into an explicit deterministic pytest assertion/failure; do not catch unrelated exceptions."
+            ],
+            "summary": "The previous candidate did not produce discriminating BASE/HEAD evidence. Use only these bounded execution facts to repair the generated test."
+          },
+          "issues": [
+            "NO_BEHAVIORAL_REPAIR_CHANGE: repair must materially change executable test behavior, not only formatting, comments, or unused imports"
+          ],
+          "origin": "REPAIR",
+          "parent_artifact_sha256": "6dffdd821acaca75f1722c47c55c104be5b3c550d8df7b019e02412967843a2d",
+          "parent_candidate_id": "candidate-initial",
+          "rationale": "Verify that passing a dot-delimited attribute name to partial when data_key is configured on a Nested field allows partial deserialization on the nested schema without raising a ValidationError.",
+          "raw_response_sha256": "943e76253d3da3cd200d63973820820056c7d16632c390db8d2421aee49e98b6",
+          "sequence": 2,
+          "signature_context_count": 8,
+          "signature_context_sha256": "c317fad9d83754aba27eafe999a152288ce496c0aaa853e8aa04f2119cad3405",
+          "signature_context_truncated": true,
+          "source": "import pytest\nfrom marshmallow import Schema, fields, ValidationError\n\n\nclass ChildSchema(Schema):\n    nested_field = fields.Str(required=True)\n\n\nclass ParentSchema(Schema):\n    child = fields.Nested(ChildSchema, data_key=\"childDataKey\")\n\n\ndef test_patchproof_generated_behavior():\n    schema = ParentSchema()\n    result = schema.load({\"childDataKey\": {}}, partial=(\"child.nested_field\",))\n    assert result == {\"child\": {}}\n",
+          "status": "REJECTED",
+          "target_path": "patchproof_generated_tests/test_patchproof_generated_repair.py",
+          "test_function": "test_patchproof_generated_behavior",
+          "usage": {
+            "cached_tokens": null,
+            "duration_seconds": 2.249794099945575,
+            "model_name": "gemini-3.6-flash",
+            "model_version": "gemini-3.6-flash",
+            "output_tokens": 180,
+            "prompt_tokens": 4804,
+            "provider_attempts": 1,
+            "total_tokens": 4984
+          }
+        }
+      ],
+      "candidate_evaluations": [
+        {
+          "artifact_sha256": "6dffdd821acaca75f1722c47c55c104be5b3c550d8df7b019e02412967843a2d",
+          "attempt_sequence": 1,
+          "base_execution": {
+            "artifact_sha256_after": "6dffdd821acaca75f1722c47c55c104be5b3c550d8df7b019e02412967843a2d",
+            "artifact_sha256_before": "6dffdd821acaca75f1722c47c55c104be5b3c550d8df7b019e02412967843a2d",
+            "collected_count": 1,
+            "detail": "marshmallow.exceptions.ValidationError: {'childDataKey': {'nested_field': ['Missing data for required field.']}}\npatchproof_generated_tests\\test_patchproof_generated_initial.py:17: in test_patchproof_generated_behavior\n    result = schema.load({\"childDataKey\": {}}, partial=(\"child.nested_field\",))\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nsrc\\marshmallow\\schema.py:730: in load\n    return self._do_load(\nsrc\\marshmallow\\schema.py:938: in _do_load\n    raise exc\nE   marshmallow.exceptions.ValidationError: {'childDataKey': {'nested_field': ['Missing data for required field.']}}",
+            "duration_seconds": 1.5,
+            "exit_code": 1,
+            "expected_artifact_sha256": "6dffdd821acaca75f1722c47c55c104be5b3c550d8df7b019e02412967843a2d",
+            "revision_sha": "65374df0c31cdc45acc4435741779298201306a2",
+            "role": "BASE",
+            "status": "TEST_ERROR",
+            "stderr": "",
+            "stdout": "F\r\n================================== FAILURES ===================================\r\n_____________________ test_patchproof_generated_behavior ______________________\r\npatchproof_generated_tests\\test_patchproof_generated_initial.py:17: in test_patchproof_generated_behavior\r\n    result = schema.load({\"childDataKey\": {}}, partial=(\"child.nested_field\",))\r\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\nsrc\\marshmallow\\schema.py:730: in load\r\n    return self._do_load(\r\nsrc\\marshmallow\\schema.py:938: in _do_load\r\n    raise exc\r\nE   marshmallow.exceptions.ValidationError: {'childDataKey': {'nested_field': ['Missing data for required field.']}}\r\n!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!\r\n1 failed in 0.63s\r\n",
+            "test_node_id": "patchproof_generated_tests/test_patchproof_generated_initial.py::test_patchproof_generated_behavior"
+          },
+          "differential_pattern": "NOT_COMPARABLE",
+          "head_execution": {
+            "artifact_sha256_after": "6dffdd821acaca75f1722c47c55c104be5b3c550d8df7b019e02412967843a2d",
+            "artifact_sha256_before": "6dffdd821acaca75f1722c47c55c104be5b3c550d8df7b019e02412967843a2d",
+            "collected_count": 1,
+            "detail": null,
+            "duration_seconds": 1.0469999997876585,
+            "exit_code": 0,
+            "expected_artifact_sha256": "6dffdd821acaca75f1722c47c55c104be5b3c550d8df7b019e02412967843a2d",
+            "revision_sha": "7f8ac62da6150191f465ed44ae00043a4dcb611c",
+            "role": "HEAD",
+            "status": "PASSED",
+            "stderr": "",
+            "stdout": ".                                                                        [100%]\r\n1 passed in 0.47s\r\n",
+            "test_node_id": "patchproof_generated_tests/test_patchproof_generated_initial.py::test_patchproof_generated_behavior"
+          },
+          "hidden_oracle_pattern": "BASE_ASSERTION_FAILED_HEAD_PASSED",
+          "matches_hidden_oracle_direction": false,
+          "mechanical_reason": "execution environments did not produce comparable assertion outcomes: BASE=TEST_ERROR, HEAD=PASSED",
+          "mechanical_status": "ENVIRONMENTAL"
+        }
+      ],
+      "case_id": "marshmallow-2903-nested-partial-data-key",
+      "category": "Nested schema partial deserialization with aliased input keys",
+      "claim_result": {
+        "raw_response_sha256": "ccea4202f691d03d679c4b72a635b313497742daf3a248cf324a71fa98408bd5",
+        "selection": {
+          "claim": {
+            "action": "Deserialize data using schema.load(data, partial=(\"attr_name.nested_field\",)) where partial is a collection containing dot-delimited attribute names.",
+            "affected_symbols": [
+              {
+                "path": "src/marshmallow/schema.py",
+                "qualified_name": "Schema._deserialize"
+              }
+            ],
+            "claim_id": "claim-selected-behavior",
+            "confidence": 0.95,
+            "expected_behavior": "The sub-partial filter correctly matches prefix using attr_name, allowing partial validation/deserialization on the nested schema field.",
+            "preconditions": [
+              "A Schema contains a Nested field where data_key is configured to be different from the attribute name."
+            ],
+            "reasoning_summary": "The change alters prefix in Schema._deserialize from field_name + '.' to attr_name + '.', enabling proper nested partial resolution when a field has data_key set.",
+            "summary": "Use attr_name instead of field_name for prefix when constructing sub-partial keys for nested schemas",
+            "supporting_context": [
+              {
+                "end_line": 660,
+                "path": "src/marshmallow/schema.py",
+                "relevance": "prefix calculation inside Schema._deserialize for nested field sub_partial filtering",
+                "start_line": 654
+              }
+            ],
+            "testability": "TESTABLE"
+          },
+          "disposition": "SELECTED",
+          "explanation": "The change alters prefix in Schema._deserialize from field_name + '.' to attr_name + '.', enabling proper nested partial resolution when a field has data_key set."
+        },
+        "usage": {
+          "cached_tokens": null,
+          "duration_seconds": 6.933764699846506,
+          "model_name": "gemini-3.6-flash",
+          "model_version": "gemini-3.6-flash",
+          "output_tokens": 240,
+          "prompt_tokens": 4410,
+          "provider_attempts": 1,
+          "total_tokens": 4650
+        }
+      },
+      "completed_at": "2026-08-29T10:38:42.530375+00:00",
+      "context": {
+        "base_sha": "65374df0c31cdc45acc4435741779298201306a2",
+        "changed_files": [
+          {
+            "is_python": false,
+            "is_test": false,
+            "path": "AUTHORS.rst",
+            "previous_path": null,
+            "status": "MODIFIED"
+          },
+          {
+            "is_python": false,
+            "is_test": false,
+            "path": "CHANGELOG.rst",
+            "previous_path": null,
+            "status": "MODIFIED"
+          },
+          {
+            "is_python": true,
+            "is_test": false,
+            "path": "src/marshmallow/schema.py",
+            "previous_path": null,
+            "status": "MODIFIED"
+          }
+        ],
+        "changed_symbols": [
+          {
+            "end_line": 1246,
+            "kind": "CLASS",
+            "path": "src/marshmallow/schema.py",
+            "qualified_name": "Schema",
+            "start_line": 224
+          },
+          {
+            "end_line": 701,
+            "kind": "METHOD",
+            "path": "src/marshmallow/schema.py",
+            "qualified_name": "Schema._deserialize",
+            "start_line": 592
+          }
+        ],
+        "diff": "diff --git a/src/marshmallow/schema.py b/src/marshmallow/schema.py\nindex d4a853b2..4288f050 100644\n--- a/src/marshmallow/schema.py\n+++ b/src/marshmallow/schema.py\n@@ -654,7 +654,7 @@ class Schema(metaclass=SchemaMeta):\n                 d_kwargs = {}\n                 # Allow partial loading of nested schemas.\n                 if partial_is_collection:\n-                    prefix = field_name + \".\"\n+                    prefix = attr_name + \".\"\n                     len_prefix = len(prefix)\n                     sub_partial = [\n                         f[len_prefix:] for f in partial if f.startswith(prefix)\n\ndiff --git a/AUTHORS.rst b/AUTHORS.rst\nindex 9c954eca..3249fc27 100644\n--- a/AUTHORS.rst\n+++ b/AUTHORS.rst\n@@ -186,3 +186,4 @@ Contributors (chronological)\n - Emmanuel Ferdman  `@emmanuel-ferdman  <https://github.com/emmanuel-ferdman>`_\n - Fridayworks `@worksbyfriday  <https://github.com/worksbyfriday>`_\n - `@rstar327 <https://github.com/rstar327>`_\n+- Kadir Can Ozden  `@bysiber  <https://github.com/bysiber>`_\n\ndiff --git a/CHANGELOG.rst b/CHANGELOG.rst\nindex b6d871b5..427395ed 100644\n--- a/CHANGELOG.rst\n+++ b/CHANGELOG.rst\n@@ -12,6 +12,8 @@ Bug fixes:\n   Thanks :user:`nosnickid` for the report and :user:`worksbyfriday` for the PR.\n - Fix `marshmallow.validate.OneOf` emitting extra pairs when labels outnumber choices (:issue:`2869`).\n   Thanks: user:`T90REAL` for the report and :user:`rstar327` for the PR.\n+- Fix behavior when passing a dot-delited attribute name to ``partial`` for a key with ``data_key`` set (:pr:`2903`).\n+  Thanks :user:`bysiber` for the PR.\n \n \n 4.2.2 (2026-02-04)\n",
+        "head_sha": "7f8ac62da6150191f465ed44ae00043a4dcb611c",
+        "snippets": [
+          {
+            "content": "\n\nclass Schema(metaclass=SchemaMeta):\n    \"\"\"Base schema class with which to define schemas.\n\n    Example usage:\n\n    .. code-block:: python\n\n        import datetime as dt\n        from dataclasses import dataclass\n\n        from marshmallow import Schema, fields\n\n\n        @dataclass\n        class Album:\n            title: str\n            release_date: dt.date\n\n\n        class AlbumSchema(Schema):\n            title = fields.Str()\n            release_date = fields.Date()\n\n\n        album = Album(\"Beggars Banquet\", dt.date(1968, 12, 6))\n        schema = AlbumSchema()\n        data = schema.dump(album)\n        data  # {'release_date': '1968-12-06', 'title': 'Beggars Banquet'}\n\n    :param only: Whitelist of the declared fields to select when\n        instantiating the Schema. If None, all fields are used. Nested fields\n        can be represented with dot delimiters.\n    :param exclude: Blacklist of the declared fields to exclude\n        when instantiating the Schema. If a field appears in both `only` and\n        `exclude`, it is not used. Nested fields can be represented with dot\n        delimiters.\n    :param many: Should be set to `True` if ``obj`` is a collection\n        so that the object will be serialized to a list.\n    :param load_only: Fields to skip during serialization (write-only fields)\n    :param dump_only: Fields to skip during deserialization (read-only fields)\n    :param partial: Whether to ignore missing fields and not require\n        any fields declared. Propagates down to ``Nested`` fields as well. If\n        its value is an iterable, only missing fields listed in that iterable\n        will be ignored. Use dot delimiters to specify nested fields.\n    :param unknown: Whether to exclude, include, or raise an error f\n... [deterministically truncated by PatchProof]",
+            "end_line": 1248,
+            "kind": "CHANGED_SYMBOL",
+            "path": "src/marshmallow/schema.py",
+            "reason": "changed class Schema",
+            "start_line": 222
+          },
+          {
+            "content": "        return self.opts.render_module.dumps(serialized, *args, **kwargs)\n\n    def _deserialize(\n        self,\n        data: Mapping[str, typing.Any] | Sequence[Mapping[str, typing.Any]],\n        *,\n        error_store: ErrorStore,\n        many: bool = False,\n        partial=None,\n        unknown: types.UnknownOption = RAISE,\n        index=None,\n    ) -> typing.Any | list[typing.Any]:\n        \"\"\"Deserialize ``data``.\n\n        :param data: The data to deserialize.\n        :param error_store: Structure to store errors.\n        :param many: `True` if ``data`` should be deserialized as a collection.\n        :param partial: Whether to ignore missing fields and not require\n            any fields declared. Propagates down to ``Nested`` fields as well. If\n            its value is an iterable, only missing fields listed in that iterable\n            will be ignored. Use dot delimiters to specify nested fields.\n        :param unknown: Whether to exclude, include, or raise an error for unknown\n            fields in the data. Use `EXCLUDE`, `INCLUDE` or `RAISE`.\n        :param index: Index of the item being serialized (for storing errors) if\n            serializing a collection, otherwise `None`.\n        :return: The deserialized data as `dict_class` instance or list of `dict_class`\n        instances if `many` is `True`.\n        \"\"\"\n        index_errors = self.opts.index_errors\n        index = index if index_errors else None\n        if many:\n            if not is_sequence_but_not_string(data):\n                error_store.store_error([self.error_messages[\"type\"]], index=index)\n                ret_l = []\n            else:\n                ret_l = [\n                    self._deserialize(\n                        d,\n                        e\n... [deterministically truncated by PatchProof]",
+            "end_line": 703,
+            "kind": "CHANGED_SYMBOL",
+            "path": "src/marshmallow/schema.py",
+            "reason": "changed method Schema._deserialize",
+            "start_line": 590
+          },
+          {
+            "content": "from __future__ import annotations",
+            "end_line": 4,
+            "kind": "IMPORT",
+            "path": "src/marshmallow/schema.py",
+            "reason": "import used by a changed Python file",
+            "start_line": 4
+          },
+          {
+            "content": "import copy",
+            "end_line": 6,
+            "kind": "IMPORT",
+            "path": "src/marshmallow/schema.py",
+            "reason": "import used by a changed Python file",
+            "start_line": 6
+          },
+          {
+            "content": "import datetime as dt",
+            "end_line": 7,
+            "kind": "IMPORT",
+            "path": "src/marshmallow/schema.py",
+            "reason": "import used by a changed Python file",
+            "start_line": 7
+          },
+          {
+            "content": "import decimal",
+            "end_line": 8,
+            "kind": "IMPORT",
+            "path": "src/marshmallow/schema.py",
+            "reason": "import used by a changed Python file",
+            "start_line": 8
+          },
+          {
+            "content": "\nexclude_patterns = [\"_build\"]\n# Ignore WARNING: more than one target found for cross-reference 'Schema': marshmallow.schema.Schema, marshmallow.Schema\nsuppress_warnings = [\"ref.python\"]\n",
+            "end_line": 32,
+            "kind": "SYMBOL_REFERENCE",
+            "path": "docs/conf.py",
+            "reason": "source references changed symbol(s): Schema",
+            "start_line": 28
+          },
+          {
+            "content": "from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship\n\nfrom marshmallow import Schema, ValidationError, fields, pre_load\n\napp = Flask(__name__)",
+            "end_line": 21,
+            "kind": "SYMBOL_REFERENCE",
+            "path": "examples/flask_example.py",
+            "reason": "source references changed symbol(s): Schema",
+            "start_line": 17
+          },
+          {
+            "content": "# ]\n# ///\nfrom marshmallow import Schema, fields\n\n",
+            "end_line": 9,
+            "kind": "SYMBOL_REFERENCE",
+            "path": "examples/inflection_example.py",
+            "reason": "source references changed symbol(s): Schema",
+            "start_line": 5
+          },
+          {
+            "content": "from packaging import version\n\nfrom marshmallow import INCLUDE, Schema, ValidationError, fields\n\n",
+            "end_line": 16,
+            "kind": "SYMBOL_REFERENCE",
+            "path": "examples/package_json_example.py",
+            "reason": "source references changed symbol(s): Schema",
+            "start_line": 12
+          },
+          {
+            "content": "import timeit\n\nfrom marshmallow import Schema, ValidationError, fields, post_dump\n\n",
+            "end_line": 15,
+            "kind": "SYMBOL_REFERENCE",
+            "path": "performance/benchmark.py",
+            "reason": "source references changed symbol(s): Schema",
+            "start_line": 11
+          },
+          {
+            "content": ")\nfrom marshmallow.exceptions import ValidationError\nfrom marshmallow.schema import Schema, SchemaOpts\n\nfrom . import fields",
+            "end_line": 13,
+            "kind": "SYMBOL_REFERENCE",
+            "path": "src/marshmallow/__init__.py",
+            "reason": "source references changed symbol(s): Schema",
+            "start_line": 9
+          },
+          {
+            "content": "\"\"\"A registry of :class:`Schema <marshmallow.Schema>` classes. This allows for string\nlookup of schemas, which may be used with\nclass:`fields.Nested <marshmallow.fields.Nested>`.",
+            "end_line": 3,
+            "kind": "SYMBOL_REFERENCE",
+            "path": "src/marshmallow/class_registry.py",
+            "reason": "source references changed symbol(s): Schema",
+            "start_line": 1
+          },
+          {
+            "content": "\n    from marshmallow import (\n        Schema,\n        pre_load,\n        pre_dump,",
+            "end_line": 20,
+            "kind": "SYMBOL_REFERENCE",
+            "path": "src/marshmallow/decorators.py",
+            "reason": "source references changed symbol(s): Schema",
+            "start_line": 16
+          },
+          {
+            "content": "    import typing\n\n    from marshmallow import Schema, fields\n    from marshmallow.experimental.context import Context\n",
+            "end_line": 11,
+            "kind": "SYMBOL_REFERENCE",
+            "path": "src/marshmallow/experimental/context.py",
+            "reason": "source references changed symbol(s): Schema",
+            "start_line": 7
+          },
+          {
+            "content": "\nif typing.TYPE_CHECKING:\n    from marshmallow.schema import Schema, SchemaMeta\n\n",
+            "end_line": 43,
+            "kind": "SYMBOL_REFERENCE",
+            "path": "src/marshmallow/fields.py",
+            "reason": "source references changed symbol(s): Schema",
+            "start_line": 39
+          }
+        ],
+        "stats": {
+          "changed_file_count": 4,
+          "changed_python_file_count": 2,
+          "excluded_changed_files": 1,
+          "excluded_python_paths": 1,
+          "omitted_changed_files": 0,
+          "python_path_count": 37,
+          "reference_files_scanned": 18,
+          "test_files_scanned": 18,
+          "truncated": true
+        }
+      },
+      "context_sha256": "e3abf01d8ea2e2ed0d600b0b2eab63b5931a602962a1a7b19e5fc7382abcab7c",
+      "difficulty_rationale": "The regression needs two schema levels, a required nested field, an external data_key distinct from the attribute name, and a dot-delimited partial path to interact correctly.",
+      "error": null,
+      "final_mechanical": "INVALID_TEST",
+      "final_outcome": "INSUFFICIENT_EVIDENCE",
+      "head_sha": "7f8ac62da6150191f465ed44ae00043a4dcb611c",
+      "kind": "HISTORICAL_PR",
+      "narrative": {
+        "body": "## Summary\n\nWhen using dot-delimited `partial` with nested schemas, the sub-partial prefix is derived from `field_name` (the `data_key`) instead of `attr_name`. This causes the nested partial to silently break when a field has `data_key` set.\n\n## Problem\n\nThe `partial` parameter accepts dot-delimited attribute names:\n```python\nschema.load(data, partial=(\"address.zip_code\",))\n```\n\nIn `_deserialize`, the top-level partial check correctly uses `attr_name`:\n```python\npartial_is_collection and attr_name in partial\n```\n\nBut the nested sub-partial extraction uses `field_name` (which is the `data_key` if set):\n```python\nprefix = field_name + \".\"  # field_name could be \"homeAddress\" (data_key)\n```\n\nIf a field is declared as `address = Nested(AddressSchema, data_key=\"homeAddress\")`, then:\n- `attr_name` = `\"address\"`\n- `field_name` = `\"homeAddress\"` (from data_key)\n- User passes `partial=(\"address.zip_code\",)`\n- `prefix` = `\"homeAddress.\"` — doesn't match `\"address.zip_code\"`\n- Result: `sub_partial` is empty, nested schema doesn't get `partial`\n\n## Fix\n\nUse `attr_name` instead of `field_name` for the prefix, consistent with how the top-level partial check works.\n",
+        "linked_issue_context": [],
+        "title": "Fix nested partial to use attr_name instead of data_key for prefix",
+        "truncated": false
+      },
+      "oracle_loaded_during_live_run": false,
+      "pull_request_number": 2903,
+      "repository": "marshmallow-code/marshmallow",
+      "semantic_assessment": null,
+      "started_at": "2026-08-29T10:38:19.934908+00:00",
+      "terminal_status": "INVALID_TEST",
+      "wall_duration_seconds": 22.595467
+    },
+    {
+      "base_sha": "3258d5ff67d39b0a04383066f7a135aaf7edc422",
+      "candidate_attempts": [
+        {
+          "artifact_sha256": "c1b5efc3e4e4a451bff519c36a87928540ec49fd57e40c0b413f0721f5ae9240",
+          "behavior_fingerprint": "9dba403a31a29715321b6934979ccb32b48bb093fcea5eb19c52967b4e45c820",
+          "candidate_id": "candidate-initial",
+          "feedback": null,
+          "issues": [],
+          "origin": "INITIAL",
+          "parent_artifact_sha256": null,
+          "parent_candidate_id": null,
+          "rationale": "Verifies that TreeRebuilder._get_position_info handles TokenError raised by generate_tokens when parsing incomplete/malformed code by returning None rather than propagating the TokenError exception.",
+          "raw_response_sha256": "1c4b7e45956d8e131d4eb0488714e35f97609d8f3fad0a7150bac9df32d39248",
+          "sequence": 1,
+          "signature_context_count": 8,
+          "signature_context_sha256": "e9067113cfc182f7729a77d16f604d6d7cda618f7c93b3d5615085c9b211a2e3",
+          "signature_context_truncated": true,
+          "source": "import ast\nimport pytest\nfrom tokenize import TokenError\nfrom astroid.rebuilder import TreeRebuilder\nfrom astroid.nodes import FunctionDef\nfrom astroid.manager import AstroidManager\n\ndef test_patchproof_generated_behavior():\n    manager = AstroidManager()\n    rebuilder = TreeRebuilder(manager=manager, data=\"def foo((\\n    pass\")\n    ast_node = ast.parse(\"def foo(): pass\").body[0]\n    ast_node.lineno = 1\n    ast_node.end_lineno = 2\n    ast_node.body[0].lineno = 2\n    parent_node = FunctionDef(name=\"foo\", lineno=1, col_offset=0, parent=None, end_lineno=2, end_col_offset=8)\n    try:\n        res = rebuilder._get_position_info(ast_node, parent_node)\n        assert res is None\n    except TokenError:\n        pytest.fail(\"TreeRebuilder._get_position_info raised TokenError instead of returning None\")",
+          "status": "VALIDATED",
+          "target_path": "patchproof_generated_tests/test_patchproof_generated_initial.py",
+          "test_function": "test_patchproof_generated_behavior",
+          "usage": {
+            "cached_tokens": null,
+            "duration_seconds": 7.806008500047028,
+            "model_name": "gemini-3.6-flash",
+            "model_version": "gemini-3.6-flash",
+            "output_tokens": 315,
+            "prompt_tokens": 4055,
+            "provider_attempts": 1,
+            "total_tokens": 4370
+          }
+        },
+        {
+          "artifact_sha256": "6b3c68beffc47b4a557957131851abead7187cc4e8c5800afbfd038043f7311f",
+          "behavior_fingerprint": "b9b49d0802ca72047bb62eed4e5059d532b8fe76bf22210f4bc5d8c52749efb6",
+          "candidate_id": "candidate-repair",
+          "feedback": {
+            "category": "EXECUTION_EVIDENCE",
+            "observations": [
+              "BASE status=ASSERTION_FAILED; generated_line=18:assert res is None",
+              "HEAD status=ASSERTION_FAILED; generated_line=18:assert res is None",
+              "mechanical_status=NON_DISCRIMINATING; pattern=BOTH_ASSERTION_FAILED"
+            ],
+            "summary": "The previous candidate did not produce discriminating BASE/HEAD evidence. Use only these bounded execution facts to repair the generated test."
+          },
+          "issues": [],
+          "origin": "REPAIR",
+          "parent_artifact_sha256": "c1b5efc3e4e4a451bff519c36a87928540ec49fd57e40c0b413f0721f5ae9240",
+          "parent_candidate_id": "candidate-initial",
+          "rationale": "Corrected the data slice passed to TreeRebuilder so that generate_tokens actually raises a tokenize.TokenError (e.g. from an unclosed parenthesis without closing token), demonstrating that BASE propagates TokenError while HEAD catches it and returns None.",
+          "raw_response_sha256": "b973772b115e56a8c5dd684e9beb589139f6efa21eb9f49490b44650c7c9ad0b",
+          "sequence": 2,
+          "signature_context_count": 8,
+          "signature_context_sha256": "e9067113cfc182f7729a77d16f604d6d7cda618f7c93b3d5615085c9b211a2e3",
+          "signature_context_truncated": true,
+          "source": "import ast\nfrom astroid.rebuilder import TreeRebuilder\nfrom astroid.nodes import FunctionDef\nfrom astroid.manager import AstroidManager\n\ndef test_patchproof_generated_behavior():\n    manager = AstroidManager()\n    rebuilder = TreeRebuilder(manager=manager, data=\"def foo(\\n\")\n    ast_node = ast.parse(\"def foo(): pass\").body[0]\n    ast_node.lineno = 1\n    ast_node.end_lineno = 1\n    ast_node.body[0].lineno = 1\n    parent_node = FunctionDef(name=\"foo\", lineno=1, col_offset=0, parent=None, end_lineno=1, end_col_offset=8)\n    res = rebuilder._get_position_info(ast_node, parent_node)\n    assert res is None",
+          "status": "VALIDATED",
+          "target_path": "patchproof_generated_tests/test_patchproof_generated_repair.py",
+          "test_function": "test_patchproof_generated_behavior",
+          "usage": {
+            "cached_tokens": null,
+            "duration_seconds": 2.9664752001408488,
+            "model_name": "gemini-3.6-flash",
+            "model_version": "gemini-3.6-flash",
+            "output_tokens": 278,
+            "prompt_tokens": 4498,
+            "provider_attempts": 1,
+            "total_tokens": 4776
+          }
+        }
+      ],
+      "candidate_evaluations": [
+        {
+          "artifact_sha256": "c1b5efc3e4e4a451bff519c36a87928540ec49fd57e40c0b413f0721f5ae9240",
+          "attempt_sequence": 1,
+          "base_execution": {
+            "artifact_sha256_after": "c1b5efc3e4e4a451bff519c36a87928540ec49fd57e40c0b413f0721f5ae9240",
+            "artifact_sha256_before": "c1b5efc3e4e4a451bff519c36a87928540ec49fd57e40c0b413f0721f5ae9240",
+            "collected_count": 1,
+            "detail": "assert Position(lineno=1, col_offset=0, end_lineno=1, end_col_offset=7) is None\npatchproof_generated_tests\\test_patchproof_generated_initial.py:18: in test_patchproof_generated_behavior\n    assert res is None\nE   assert Position(lineno=1, col_offset=0, end_lineno=1, end_col_offset=7) is None",
+            "duration_seconds": 2.875,
+            "exit_code": 1,
+            "expected_artifact_sha256": "c1b5efc3e4e4a451bff519c36a87928540ec49fd57e40c0b413f0721f5ae9240",
+            "revision_sha": "3258d5ff67d39b0a04383066f7a135aaf7edc422",
+            "role": "BASE",
+            "status": "ASSERTION_FAILED",
+            "stderr": "",
+            "stdout": "F\r\n================================== FAILURES ===================================\r\n_____________________ test_patchproof_generated_behavior ______________________\r\npatchproof_generated_tests\\test_patchproof_generated_initial.py:18: in test_patchproof_generated_behavior\r\n    assert res is None\r\nE   assert Position(lineno=1, col_offset=0, end_lineno=1, end_col_offset=7) is None\r\n!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!\r\n1 failed in 1.95s\r\n",
+            "test_node_id": "patchproof_generated_tests/test_patchproof_generated_initial.py::test_patchproof_generated_behavior"
+          },
+          "differential_pattern": "BOTH_ASSERTION_FAILED",
+          "head_execution": {
+            "artifact_sha256_after": "c1b5efc3e4e4a451bff519c36a87928540ec49fd57e40c0b413f0721f5ae9240",
+            "artifact_sha256_before": "c1b5efc3e4e4a451bff519c36a87928540ec49fd57e40c0b413f0721f5ae9240",
+            "collected_count": 1,
+            "detail": "assert Position(lineno=1, col_offset=0, end_lineno=1, end_col_offset=7) is None\npatchproof_generated_tests\\test_patchproof_generated_initial.py:18: in test_patchproof_generated_behavior\n    assert res is None\nE   assert Position(lineno=1, col_offset=0, end_lineno=1, end_col_offset=7) is None",
+            "duration_seconds": 2.6869999999180436,
+            "exit_code": 1,
+            "expected_artifact_sha256": "c1b5efc3e4e4a451bff519c36a87928540ec49fd57e40c0b413f0721f5ae9240",
+            "revision_sha": "29a23547ed755dcd53c086097449999608511002",
+            "role": "HEAD",
+            "status": "ASSERTION_FAILED",
+            "stderr": "",
+            "stdout": "F\r\n================================== FAILURES ===================================\r\n_____________________ test_patchproof_generated_behavior ______________________\r\npatchproof_generated_tests\\test_patchproof_generated_initial.py:18: in test_patchproof_generated_behavior\r\n    assert res is None\r\nE   assert Position(lineno=1, col_offset=0, end_lineno=1, end_col_offset=7) is None\r\n!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!\r\n1 failed in 2.25s\r\n",
+            "test_node_id": "patchproof_generated_tests/test_patchproof_generated_initial.py::test_patchproof_generated_behavior"
+          },
+          "hidden_oracle_pattern": "BASE_ASSERTION_FAILED_HEAD_PASSED",
+          "matches_hidden_oracle_direction": false,
+          "mechanical_reason": "the identical selected test asserted unsuccessfully on both revisions",
+          "mechanical_status": "NON_DISCRIMINATING"
+        },
+        {
+          "artifact_sha256": "6b3c68beffc47b4a557957131851abead7187cc4e8c5800afbfd038043f7311f",
+          "attempt_sequence": 2,
+          "base_execution": {
+            "artifact_sha256_after": "6b3c68beffc47b4a557957131851abead7187cc4e8c5800afbfd038043f7311f",
+            "artifact_sha256_before": "6b3c68beffc47b4a557957131851abead7187cc4e8c5800afbfd038043f7311f",
+            "collected_count": 1,
+            "detail": "assert Position(lineno=1, col_offset=0, end_lineno=1, end_col_offset=7) is None\npatchproof_generated_tests\\test_patchproof_generated_repair.py:15: in test_patchproof_generated_behavior\n    assert res is None\nE   assert Position(lineno=1, col_offset=0, end_lineno=1, end_col_offset=7) is None",
+            "duration_seconds": 1.827999999979511,
+            "exit_code": 1,
+            "expected_artifact_sha256": "6b3c68beffc47b4a557957131851abead7187cc4e8c5800afbfd038043f7311f",
+            "revision_sha": "3258d5ff67d39b0a04383066f7a135aaf7edc422",
+            "role": "BASE",
+            "status": "ASSERTION_FAILED",
+            "stderr": "",
+            "stdout": "F\r\n================================== FAILURES ===================================\r\n_____________________ test_patchproof_generated_behavior ______________________\r\npatchproof_generated_tests\\test_patchproof_generated_repair.py:15: in test_patchproof_generated_behavior\r\n    assert res is None\r\nE   assert Position(lineno=1, col_offset=0, end_lineno=1, end_col_offset=7) is None\r\n!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!\r\n1 failed in 1.40s\r\n",
+            "test_node_id": "patchproof_generated_tests/test_patchproof_generated_repair.py::test_patchproof_generated_behavior"
+          },
+          "differential_pattern": "BOTH_ASSERTION_FAILED",
+          "head_execution": {
+            "artifact_sha256_after": "6b3c68beffc47b4a557957131851abead7187cc4e8c5800afbfd038043f7311f",
+            "artifact_sha256_before": "6b3c68beffc47b4a557957131851abead7187cc4e8c5800afbfd038043f7311f",
+            "collected_count": 1,
+            "detail": "assert Position(lineno=1, col_offset=0, end_lineno=1, end_col_offset=7) is None\npatchproof_generated_tests\\test_patchproof_generated_repair.py:15: in test_patchproof_generated_behavior\n    assert res is None\nE   assert Position(lineno=1, col_offset=0, end_lineno=1, end_col_offset=7) is None",
+            "duration_seconds": 2.6089999999385327,
+            "exit_code": 1,
+            "expected_artifact_sha256": "6b3c68beffc47b4a557957131851abead7187cc4e8c5800afbfd038043f7311f",
+            "revision_sha": "29a23547ed755dcd53c086097449999608511002",
+            "role": "HEAD",
+            "status": "ASSERTION_FAILED",
+            "stderr": "",
+            "stdout": "F\r\n================================== FAILURES ===================================\r\n_____________________ test_patchproof_generated_behavior ______________________\r\npatchproof_generated_tests\\test_patchproof_generated_repair.py:15: in test_patchproof_generated_behavior\r\n    assert res is None\r\nE   assert Position(lineno=1, col_offset=0, end_lineno=1, end_col_offset=7) is None\r\n!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!\r\n1 failed in 1.96s\r\n",
+            "test_node_id": "patchproof_generated_tests/test_patchproof_generated_repair.py::test_patchproof_generated_behavior"
+          },
+          "hidden_oracle_pattern": "BASE_ASSERTION_FAILED_HEAD_PASSED",
+          "matches_hidden_oracle_direction": false,
+          "mechanical_reason": "the identical selected test asserted unsuccessfully on both revisions",
+          "mechanical_status": "NON_DISCRIMINATING"
+        }
+      ],
+      "case_id": "astroid-3075-token-error-position",
+      "category": "AST reconstruction under tokenizer failure",
+      "claim_result": {
+        "raw_response_sha256": "f4a415aff98e328efc401adda7cc4bcc277caf472fb8d0a0806d8e3be7db4a8a",
+        "selection": {
+          "claim": {
+            "action": "Call TreeRebuilder._get_position_info on the node.",
+            "affected_symbols": [
+              {
+                "path": "astroid/rebuilder.py",
+                "qualified_name": "TreeRebuilder._get_position_info"
+              }
+            ],
+            "claim_id": "claim-selected-behavior",
+            "confidence": 0.95,
+            "expected_behavior": "TreeRebuilder._get_position_info catches tokenize.TokenError and returns None.",
+            "preconditions": [
+              "TreeRebuilder instance initialized with source code data.",
+              "TreeRebuilder._get_position_info is called for a class or function definition node whose code slice causes generate_tokens to raise tokenize.TokenError."
+            ],
+            "reasoning_summary": "TreeRebuilder._get_position_info now catches TokenError from generate_tokens when parsing malformed code slices and returns None instead of letting the exception propagate.",
+            "summary": "TreeRebuilder._get_position_info handles TokenError from generate_tokens by returning None instead of raising TokenError.",
+            "supporting_context": [
+              {
+                "end_line": 154,
+                "path": "astroid/rebuilder.py",
+                "relevance": "Wraps the tokenize.generate_tokens loop in a try...except TokenError block to return None.",
+                "start_line": 134
+              }
+            ],
+            "testability": "TESTABLE"
+          },
+          "disposition": "SELECTED",
+          "explanation": "TreeRebuilder._get_position_info now catches TokenError from generate_tokens when parsing malformed code slices and returns None instead of letting the exception propagate."
+        },
+        "usage": {
+          "cached_tokens": null,
+          "duration_seconds": 7.902975300094113,
+          "model_name": "gemini-3.6-flash",
+          "model_version": "gemini-3.6-flash",
+          "output_tokens": 274,
+          "prompt_tokens": 3860,
+          "provider_attempts": 1,
+          "total_tokens": 4134
+        }
+      },
+      "completed_at": "2026-08-29T10:40:35.815249+00:00",
+      "context": {
+        "base_sha": "3258d5ff67d39b0a04383066f7a135aaf7edc422",
+        "changed_files": [
+          {
+            "is_python": false,
+            "is_test": false,
+            "path": "ChangeLog",
+            "previous_path": null,
+            "status": "MODIFIED"
+          },
+          {
+            "is_python": true,
+            "is_test": false,
+            "path": "astroid/rebuilder.py",
+            "previous_path": null,
+            "status": "MODIFIED"
+          }
+        ],
+        "changed_symbols": [
+          {
+            "end_line": 2015,
+            "kind": "CLASS",
+            "path": "astroid/rebuilder.py",
+            "qualified_name": "TreeRebuilder",
+            "start_line": 53
+          },
+          {
+            "end_line": 161,
+            "kind": "METHOD",
+            "path": "astroid/rebuilder.py",
+            "qualified_name": "TreeRebuilder._get_position_info",
+            "start_line": 104
+          }
+        ],
+        "diff": "diff --git a/astroid/rebuilder.py b/astroid/rebuilder.py\nindex 6267b95d..941dd015 100644\n--- a/astroid/rebuilder.py\n+++ b/astroid/rebuilder.py\n@@ -14,7 +14,7 @@ import sys\n import token\n from collections.abc import Callable, Collection, Generator\n from io import StringIO\n-from tokenize import TokenInfo, generate_tokens\n+from tokenize import TokenError, TokenInfo, generate_tokens\n from typing import TYPE_CHECKING, Final, TypeVar, cast, overload\n \n from astroid import nodes\n@@ -131,21 +131,26 @@ class TreeRebuilder:\n         else:\n             search_token = \"class\"\n \n-        for t in generate_tokens(StringIO(data).readline):\n-            if (\n-                start_token is not None\n-                and t.type == token.NAME\n-                and t.string == node.name\n-            ):\n-                break\n-            if t.type in keyword_tokens:\n-                if t.string == search_token:\n-                    start_token = t\n-                    continue\n-                if t.string in {\"def\"}:\n-                    continue\n-            start_token = None\n-        else:\n+        try:\n+            for t in generate_tokens(StringIO(data).readline):\n+                if (\n+                    start_token is not None\n+                    and t.type == token.NAME\n+                    and t.string == node.name\n+                ):\n+                    break\n+                if t.type in keyword_tokens:\n+                    if t.string == search_token:\n+                        start_token = t\n+                        continue\n+                    if t.string in {\"def\"}:\n+                        continue\n+                start_token = None\n+            else:\n+                return None\n+        except TokenError:\n+            # Malformed source can make ``generate_tokens`` raise (e.g. an\n+            # unterminated bracket on Python < 3.12); no position info then.\n             return None\n \n         return Position(\n\ndiff --git a/ChangeLog b/ChangeLog\nindex df526b5c..617c0ba6 100644\n--- a/ChangeLog\n+++ b/ChangeLog\n@@ -48,6 +48,13 @@ Release date: TBA\n \n   References pylint-dev/pylint#872\n \n+* Fix uncaught ``TokenError`` when building a class or function whose source\n+  slice is malformed. ``tokenize.generate_tokens`` may raise (e.g. on an\n+  unterminated bracket on Python < 3.12); position computation now treats such\n+  a node as having no position information instead of crashing.\n+\n+  Closes #2527\n+\n * Fix ``AttributeError`` crash when looking up a special method on a class\n   whose explicit metaclass infers to a non-class node (e.g. a function). Such\n   a metaclass has no MRO, so the dunder lookup now raises\n",
+        "head_sha": "29a23547ed755dcd53c086097449999608511002",
+        "snippets": [
+          {
+            "content": "\n# noinspection PyMethodMayBeStatic\nclass TreeRebuilder:\n    \"\"\"Rebuilds the _ast tree to become an Astroid tree.\"\"\"\n\n    def __init__(\n        self,\n        manager: AstroidManager,\n        parser_module: ParserModule | None = None,\n        data: str | None = None,\n    ) -> None:\n        self._manager = manager\n        self._data = data.split(\"\\n\") if data else None\n        self._global_names: list[dict[str, list[nodes.Global]]] = []\n        self._import_from_nodes: list[tuple[nodes.ImportFrom, Collection[str]]] = []\n        self._delayed_assattr: list[nodes.AssignAttr] = []\n        self._visit_meths: dict[\n            type[ast.AST], Callable[[ast.AST, nodes.NodeNG], nodes.NodeNG]\n        ] = {}\n\n        if parser_module is None:\n            self._parser_module = get_parser_module()\n        else:\n            self._parser_module = parser_module\n\n    def _get_doc(self, node: T_Doc) -> tuple[T_Doc, ast.Constant | None]:\n        \"\"\"Return the doc ast node.\"\"\"\n        try:\n            if node.body and isinstance(node.body[0], ast.Expr):\n                first_value = node.body[0].value\n                if isinstance(first_value, ast.Constant) and isinstance(\n                    first_value.value, str\n                ):\n                    doc_ast_node = first_value\n                    node.body = node.body[1:]\n                    return node, doc_ast_node\n        except IndexError:\n            pass  # ast built from scratch\n        return node, None\n\n    def _get_context(\n        self,\n        node: (\n            ast.Attribute\n            | ast.List\n            | ast.Name\n            | ast.Subscript\n            | ast.Starred\n            | ast.Tuple\n        ),\n    ) -> Context:\n        return self._parser_module.context_classes.g\n... [deterministically truncated by PatchProof]",
+            "end_line": 2015,
+            "kind": "CHANGED_SYMBOL",
+            "path": "astroid/rebuilder.py",
+            "reason": "changed class TreeRebuilder",
+            "start_line": 51
+          },
+          {
+            "content": "        return self._parser_module.context_classes.get(type(node.ctx), Context.Load)\n\n    def _get_position_info(\n        self,\n        node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef,\n        parent: nodes.ClassDef | nodes.FunctionDef | nodes.AsyncFunctionDef,\n    ) -> Position | None:\n        \"\"\"Return position information for ClassDef and FunctionDef nodes.\n\n        In contrast to AST positions, these only include the actual keyword(s)\n        and the class / function name.\n\n        >>> @decorator\n        >>> async def some_func(var: int) -> None:\n        >>> ^^^^^^^^^^^^^^^^^^^\n        \"\"\"\n        if not self._data:\n            return None\n        end_lineno = node.end_lineno\n        if node.body:\n            end_lineno = node.body[0].lineno\n        data = \"\\n\".join(self._data[node.lineno - 1 : end_lineno])\n\n        start_token: TokenInfo | None = None\n        keyword_tokens: tuple[int, ...] = (token.NAME,)\n        if isinstance(parent, nodes.AsyncFunctionDef):\n            search_token = \"async\"\n        elif isinstance(parent, nodes.FunctionDef):\n            search_token = \"def\"\n        else:\n            search_token = \"class\"\n\n        try:\n            for t in generate_tokens(StringIO(data).readline):\n                if (\n                    start_token is not None\n                    and t.type == token.NAME\n                    and t.string == node.name\n                ):\n                    break\n                if t.type in keyword_tokens:\n                    if t.string == search_token:\n                        start_token = t\n                        continue\n                    if t.string in {\"def\"}:\n                        continue\n                start_token = None\n            else:\n                \n... [deterministically truncated by PatchProof]",
+            "end_line": 163,
+            "kind": "CHANGED_SYMBOL",
+            "path": "astroid/rebuilder.py",
+            "reason": "changed method TreeRebuilder._get_position_info",
+            "start_line": 102
+          },
+          {
+            "content": "from __future__ import annotations",
+            "end_line": 9,
+            "kind": "IMPORT",
+            "path": "astroid/rebuilder.py",
+            "reason": "import used by a changed Python file",
+            "start_line": 9
+          },
+          {
+            "content": "import ast",
+            "end_line": 11,
+            "kind": "IMPORT",
+            "path": "astroid/rebuilder.py",
+            "reason": "import used by a changed Python file",
+            "start_line": 11
+          },
+          {
+            "content": "import itertools",
+            "end_line": 12,
+            "kind": "IMPORT",
+            "path": "astroid/rebuilder.py",
+            "reason": "import used by a changed Python file",
+            "start_line": 12
+          },
+          {
+            "content": "import sys",
+            "end_line": 13,
+            "kind": "IMPORT",
+            "path": "astroid/rebuilder.py",
+            "reason": "import used by a changed Python file",
+            "start_line": 13
+          },
+          {
+            "content": "\n    def _post_build(\n        self, module: nodes.Module, builder: rebuilder.TreeRebuilder, encoding: str\n    ) -> nodes.Module:\n        \"\"\"Handles encoding and delayed nodes after a module has been built.\"\"\"",
+            "end_line": 162,
+            "kind": "SYMBOL_REFERENCE",
+            "path": "astroid/builder.py",
+            "reason": "source references changed symbol(s): TreeRebuilder",
+            "start_line": 158
+          },
+          {
+            "content": "\n        if self._metaclass:\n            # Expects this from Py3k TreeRebuilder\n            try:\n                return next(",
+            "end_line": 2665,
+            "kind": "SYMBOL_REFERENCE",
+            "path": "astroid/nodes/scoped_nodes/scoped_nodes.py",
+            "reason": "source references changed symbol(s): TreeRebuilder",
+            "start_line": 2661
+          }
+        ],
+        "stats": {
+          "changed_file_count": 3,
+          "changed_python_file_count": 2,
+          "excluded_changed_files": 1,
+          "excluded_python_paths": 1,
+          "omitted_changed_files": 0,
+          "python_path_count": 265,
+          "reference_files_scanned": 97,
+          "test_files_scanned": 167,
+          "truncated": false
+        }
+      },
+      "context_sha256": "88237d14af0fd4d15b9e9f5c8ae8ea57e253915dd2b7a11d6b75c5803fbb1981",
+      "difficulty_rationale": "The behavior sits behind AST rebuilding and position extraction and requires a deterministic injected tokenizer failure to distinguish graceful degradation from an uncaught exception.",
+      "error": null,
+      "final_mechanical": "NON_DISCRIMINATING",
+      "final_outcome": "INSUFFICIENT_EVIDENCE",
+      "head_sha": "29a23547ed755dcd53c086097449999608511002",
+      "kind": "HISTORICAL_PR",
+      "narrative": {
+        "body": "## Type of Changes\n\n|     | Type          |\n| --- | ------------- |\n| ✓   | :bug: Bug fix |\n\n## Description\n\n`RebuildVisitor._get_position_info` tokenizes a slice of the source to locate the keyword/name span of a class or function definition. On Python < 3.12, `tokenize.generate_tokens` can raise `TokenError` for malformed input (e.g. an unterminated bracket), which escaped as an uncaught non-`AstroidError` exception during the build.\n\nPosition computation now catches `TokenError` and treats such a node as having no position information, instead of crashing.\n\nCloses #2527",
+        "linked_issue_context": [],
+        "title": "fix: avoid uncaught TokenError when computing node positions",
+        "truncated": false
+      },
+      "oracle_loaded_during_live_run": false,
+      "pull_request_number": 3075,
+      "repository": "pylint-dev/astroid",
+      "semantic_assessment": null,
+      "started_at": "2026-08-29T10:39:42.643319+00:00",
+      "terminal_status": "NON_DISCRIMINATING",
+      "wall_duration_seconds": 53.17193
+    },
+    {
+      "base_sha": "da3210f15fdf50fafa7005b988d0baddc237f443",
+      "candidate_attempts": [
+        {
+          "artifact_sha256": "b5f5cde298d1765b8788ac2dce6cef8c1d28927d9c2a39c806b16aa96050802d",
+          "behavior_fingerprint": "1dceaa8b27b2f41338826002d51c2b8ae06d0d7e5d92fb15aed9c3b9a73f5f9f",
+          "candidate_id": "candidate-initial",
+          "feedback": null,
+          "issues": [],
+          "origin": "INITIAL",
+          "parent_artifact_sha256": null,
+          "parent_candidate_id": null,
+          "rationale": "Verify resolve_owner selects the workspace candidate with the maximum root path depth (deepest) instead of the shallowest.",
+          "raw_response_sha256": "6bc42a9c295938bef5905686519a4998acef7676955c989d0f6f268a6608c726",
+          "sequence": 1,
+          "signature_context_count": 2,
+          "signature_context_sha256": "9ecd32103a6f3d944e0f1dfcf3bfe4c4c00c57189e4cf57b86fb7e731601d248",
+          "signature_context_truncated": false,
+          "source": "import pytest\nfrom dataclasses import dataclass\nfrom workspace_registry import resolve_owner\n\n@dataclass\nclass MockWorkspace:\n    root: str\n\nclass MockRegistry:\n    def __init__(self, candidates):\n        self._candidates = candidates\n    def candidates_for(self, candidate_path: str):\n        return self._candidates\n\ndef test_patchproof_generated_behavior():\n    shallow = MockWorkspace(root=\"/projects\")\n    deep = MockWorkspace(root=\"/projects/app/src\")\n    registry = MockRegistry(candidates=[shallow, deep])\n    \n    result = resolve_owner(registry, \"/projects/app/src/main.py\")\n    assert result == deep\n",
+          "status": "VALIDATED",
+          "target_path": "patchproof_generated_tests/test_patchproof_generated_initial.py",
+          "test_function": "test_patchproof_generated_behavior",
+          "usage": {
+            "cached_tokens": null,
+            "duration_seconds": 7.652344699949026,
+            "model_name": "gemini-3.6-flash",
+            "model_version": "gemini-3.6-flash",
+            "output_tokens": 209,
+            "prompt_tokens": 1813,
+            "provider_attempts": 1,
+            "total_tokens": 2022
+          }
+        }
+      ],
+      "candidate_evaluations": [
+        {
+          "artifact_sha256": "b5f5cde298d1765b8788ac2dce6cef8c1d28927d9c2a39c806b16aa96050802d",
+          "attempt_sequence": 1,
+          "base_execution": {
+            "artifact_sha256_after": "b5f5cde298d1765b8788ac2dce6cef8c1d28927d9c2a39c806b16aa96050802d",
+            "artifact_sha256_before": "b5f5cde298d1765b8788ac2dce6cef8c1d28927d9c2a39c806b16aa96050802d",
+            "collected_count": 1,
+            "detail": "AssertionError: assert MockWorkspace...t='/projects') == MockWorkspace...ects/app/src')\n  \n  Differing attributes:\n  ['root']\n  \n  Drill down into differing attribute root:\n    root: '/projects' != '/projects/app/src'\n    - /projects/app/src\n    + /projects\npatchproof_generated_tests\\test_patchproof_generated_initial.py:21: in test_patchproof_generated_behavior\n    assert result == deep\nE   AssertionError: assert MockWorkspace...t='/projects') == MockWorkspace...ects/app/src')\nE     \nE     Differing attributes:\nE     ['root']\nE     \nE     Drill down into differing attribute root:\nE       root: '/projects' != '/projects/app/src'\nE       - /projects/app/src\nE       + /projects",
+            "duration_seconds": 0.7819999998901039,
+            "exit_code": 1,
+            "expected_artifact_sha256": "b5f5cde298d1765b8788ac2dce6cef8c1d28927d9c2a39c806b16aa96050802d",
+            "revision_sha": "da3210f15fdf50fafa7005b988d0baddc237f443",
+            "role": "BASE",
+            "status": "ASSERTION_FAILED",
+            "stderr": "",
+            "stdout": "F\r\n================================== FAILURES ===================================\r\n_____________________ test_patchproof_generated_behavior ______________________\r\npatchproof_generated_tests\\test_patchproof_generated_initial.py:21: in test_patchproof_generated_behavior\r\n    assert result == deep\r\nE   AssertionError: assert MockWorkspace...t='/projects') == MockWorkspace...ects/app/src')\r\nE     \r\nE     Differing attributes:\r\nE     ['root']\r\nE     \r\nE     Drill down into differing attribute root:\r\nE       root: '/projects' != '/projects/app/src'\r\nE       - /projects/app/src\r\nE       + /projects\r\n!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!\r\n1 failed in 0.22s\r\n",
+            "test_node_id": "patchproof_generated_tests/test_patchproof_generated_initial.py::test_patchproof_generated_behavior"
+          },
+          "differential_pattern": "BASE_ASSERTION_FAILED_HEAD_PASSED",
+          "head_execution": {
+            "artifact_sha256_after": "b5f5cde298d1765b8788ac2dce6cef8c1d28927d9c2a39c806b16aa96050802d",
+            "artifact_sha256_before": "b5f5cde298d1765b8788ac2dce6cef8c1d28927d9c2a39c806b16aa96050802d",
+            "collected_count": 1,
+            "detail": null,
+            "duration_seconds": 0.8589999999385327,
+            "exit_code": 0,
+            "expected_artifact_sha256": "b5f5cde298d1765b8788ac2dce6cef8c1d28927d9c2a39c806b16aa96050802d",
+            "revision_sha": "0ad93cdffbdfb51d53bd99d28c4092138932179d",
+            "role": "HEAD",
+            "status": "PASSED",
+            "stderr": "",
+            "stdout": ".                                                                        [100%]\r\n1 passed in 0.19s\r\n",
+            "test_node_id": "patchproof_generated_tests/test_patchproof_generated_initial.py::test_patchproof_generated_behavior"
+          },
+          "hidden_oracle_pattern": "BASE_ASSERTION_FAILED_HEAD_PASSED",
+          "matches_hidden_oracle_direction": true,
+          "mechanical_reason": "the identical selected test assertion failed on BASE and passed on HEAD; semantic claim support has not been assessed",
+          "mechanical_status": "DISCRIMINATING"
+        }
+      ],
+      "case_id": "synthetic-nested-workspace-owner",
+      "category": "Overlapping monorepo workspace ownership resolution",
+      "claim_result": {
+        "raw_response_sha256": "0aacc90e013fc92f930d14571752d30683c1abe2f88fcb6ef08eaa76bc18aa3d",
+        "selection": {
+          "claim": {
+            "action": "Call resolve_owner(registry, candidate_path) with candidate_path matching multiple workspaces.",
+            "affected_symbols": [
+              {
+                "path": "workspace_registry.py",
+                "qualified_name": "resolve_owner"
+              }
+            ],
+            "claim_id": "claim-selected-behavior",
+            "confidence": 0.95,
+            "expected_behavior": "resolve_owner returns the Workspace candidate with the maximum number of path parts in its root path.",
+            "preconditions": [
+              "A ProjectRegistry instance contains multiple matching Workspace candidates for a given path, with different root path depth lengths."
+            ],
+            "reasoning_summary": "The change replaces min() with max() in resolve_owner when selecting among candidates by path depth, returning the deepest owning workspace.",
+            "summary": "resolve_owner selects the deepest workspace owning candidate_path instead of the shallowest.",
+            "supporting_context": [
+              {
+                "end_line": 34,
+                "path": "workspace_registry.py",
+                "relevance": "resolve_owner uses max() instead of min() on path depth parts to choose the deepest owning workspace.",
+                "start_line": 30
+              }
+            ],
+            "testability": "TESTABLE"
+          },
+          "disposition": "SELECTED",
+          "explanation": "The change replaces min() with max() in resolve_owner when selecting among candidates by path depth, returning the deepest owning workspace."
+        },
+        "usage": {
+          "cached_tokens": null,
+          "duration_seconds": 6.9502026999834925,
+          "model_name": "gemini-3.6-flash",
+          "model_version": "gemini-3.6-flash",
+          "output_tokens": 292,
+          "prompt_tokens": 1814,
+          "provider_attempts": 1,
+          "total_tokens": 2106
+        }
+      },
+      "completed_at": "2026-08-29T10:42:01.412499+00:00",
+      "context": {
+        "base_sha": "da3210f15fdf50fafa7005b988d0baddc237f443",
+        "changed_files": [
+          {
+            "is_python": true,
+            "is_test": false,
+            "path": "workspace_registry.py",
+            "previous_path": null,
+            "status": "MODIFIED"
+          }
+        ],
+        "changed_symbols": [
+          {
+            "end_line": 34,
+            "kind": "FUNCTION",
+            "path": "workspace_registry.py",
+            "qualified_name": "resolve_owner",
+            "start_line": 30
+          }
+        ],
+        "diff": "diff --git a/workspace_registry.py b/workspace_registry.py\nindex 444bd85..cb0c3d0 100644\n--- a/workspace_registry.py\n+++ b/workspace_registry.py\n@@ -31,4 +31,4 @@ def resolve_owner(registry: ProjectRegistry, candidate_path: str) -> Workspace |\n     candidates = registry.candidates_for(candidate_path)\n     if not candidates:\n         return None\n-    return min(candidates, key=lambda workspace: len(PurePosixPath(workspace.root).parts))\n+    return max(candidates, key=lambda workspace: len(PurePosixPath(workspace.root).parts))\n",
+        "head_sha": "0ad93cdffbdfb51d53bd99d28c4092138932179d",
+        "snippets": [
+          {
+            "content": "\n\ndef resolve_owner(registry: ProjectRegistry, candidate_path: str) -> Workspace | None:\n    candidates = registry.candidates_for(candidate_path)\n    if not candidates:\n        return None\n    return max(candidates, key=lambda workspace: len(PurePosixPath(workspace.root).parts))",
+            "end_line": 34,
+            "kind": "CHANGED_SYMBOL",
+            "path": "workspace_registry.py",
+            "reason": "changed function resolve_owner",
+            "start_line": 28
+          },
+          {
+            "content": "from __future__ import annotations",
+            "end_line": 1,
+            "kind": "IMPORT",
+            "path": "workspace_registry.py",
+            "reason": "import used by a changed Python file",
+            "start_line": 1
+          },
+          {
+            "content": "from dataclasses import dataclass",
+            "end_line": 3,
+            "kind": "IMPORT",
+            "path": "workspace_registry.py",
+            "reason": "import used by a changed Python file",
+            "start_line": 3
+          },
+          {
+            "content": "from pathlib import PurePosixPath",
+            "end_line": 4,
+            "kind": "IMPORT",
+            "path": "workspace_registry.py",
+            "reason": "import used by a changed Python file",
+            "start_line": 4
+          }
+        ],
+        "stats": {
+          "changed_file_count": 1,
+          "changed_python_file_count": 1,
+          "excluded_changed_files": 0,
+          "excluded_python_paths": 0,
+          "omitted_changed_files": 0,
+          "python_path_count": 1,
+          "reference_files_scanned": 0,
+          "test_files_scanned": 0,
+          "truncated": false
+        }
+      },
+      "context_sha256": "3b79181421d4ebab1a7b7826eac11d4b36f4ccb5e92f7aa02acc427c9c19921d",
+      "difficulty_rationale": "The scenario combines three nested workspace objects, path-containment logic, registry filtering, and a resolver tie-break rule; a shallow or single-object test cannot expose the bug.",
+      "error": null,
+      "final_mechanical": "DISCRIMINATING",
+      "final_outcome": "CLAIM_SUPPORTED_FOR_SCENARIO",
+      "head_sha": "0ad93cdffbdfb51d53bd99d28c4092138932179d",
+      "kind": "LOCAL_SYNTHETIC",
+      "narrative": {
+        "body": "A registry may contain a monorepo root, a backend workspace, and a nested API workspace whose roots all contain the same file. Resolution should return the most specific (deepest) owning workspace, while paths outside every configured workspace should remain unresolved.",
+        "linked_issue_context": [],
+        "title": "Prefer the deepest workspace that owns a nested project path",
+        "truncated": false
+      },
+      "oracle_loaded_during_live_run": false,
+      "pull_request_number": null,
+      "repository": "local/nested-workspace-fixture",
+      "semantic_assessment": {
+        "decision": {
+          "assertion_relation": "RELATED",
+          "confidence": 1.0,
+          "explanation": "The generated test directly verifies that resolve_owner selects the deepest workspace candidate ('/projects/app/src' over '/projects') for a matching path. The test failed on BASE (which returned the shallowest workspace) and passed on HEAD, confirming the claim.",
+          "outcome": "CLAIM_SUPPORTED_FOR_SCENARIO"
+        },
+        "raw_response_sha256": "cb29f1c2f5871515b1fb10d61c85f00bd2ea09c87696137af7053b63e345d539",
+        "usage": {
+          "cached_tokens": null,
+          "duration_seconds": 7.133437700103968,
+          "model_name": "gemini-3.6-flash",
+          "model_version": "gemini-3.6-flash",
+          "output_tokens": 82,
+          "prompt_tokens": 1297,
+          "provider_attempts": 1,
+          "total_tokens": 1379
+        }
+      },
+      "started_at": "2026-08-29T10:41:35.916405+00:00",
+      "terminal_status": "CLAIM_SUPPORTED_FOR_SCENARIO",
+      "wall_duration_seconds": 25.496094
+    }
+  ],
+  "completed_at": "2026-08-29T10:42:01.611425+00:00",
+  "declared_available_provider_calls": 40,
+  "declared_run_id": "hard-mode-v5-gemini-3.6-flash-vertex-2026-08-29",
+  "exactly_once_journal": "live_journal.jsonl",
+  "inter_case_delay_seconds": 60.0,
+  "manifest_sha256": "a017e984cb6d1144c2243b98136c887cdb545b9e83173e108dc3b466cf39f1fa",
+  "maximum_possible_logical_model_calls": 20,
+  "maximum_possible_provider_calls": 40,
+  "model_call_budget_preflight_passed": true,
+  "model_name": "gemini-3.6-flash",
+  "oracle_gate_sha256": "c3fafc748d4be2811a3d178d869ae0277060039cfcf81e02ab42b9ab52ce801c",
+  "pacing_policy": "BETWEEN_CASES",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "provider_surface": "VERTEX_AI",
+  "python_version": "3.12.6",
+  "schema_version": 1,
+  "started_at": "2026-08-29T10:13:53.643190+00:00"
+}
