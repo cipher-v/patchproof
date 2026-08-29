@@ -28,7 +28,10 @@ def test_child_environment_uses_an_allowlist_and_isolated_runtime_paths(
     assert environment["PATH"] == str(Path(sys.executable).parent)
     assert environment["HOME"].startswith(str(runtime_root.resolve()))
     assert environment["UV_CACHE_DIR"].startswith(str(runtime_root.resolve()))
-    assert environment["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1"
+    # Autoload must stay enabled: a repository's own conftest.py imports its declared
+    # plugins, and its addopts reference their options. Interfering plugins are
+    # disabled by name in pytest_runner.DISABLED_PYTEST_PLUGINS instead.
+    assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD" not in environment
     assert (
         not {
             "GOOGLE_API_KEY",

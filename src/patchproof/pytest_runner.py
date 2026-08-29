@@ -21,6 +21,43 @@ from patchproof.execution_runtime import (
 )
 from patchproof.models import ExecutionResult, Revision, TestArtifact, TestExecutionStatus
 
+#: Plugins that would make one selected node non-comparable across BASE and HEAD, or
+#: that rewrite the report PatchProof parses. These are disabled by name rather than by
+#: disabling autoload wholesale, because a repository's own `conftest.py` legitimately
+#: needs its declared plugins in order to import at all.
+#:
+#: Wholesale autoload suppression was the cause of the anyio and cattrs PROCESS_ERROR
+#: results in the sealed unseen holdout: the repositories declare plugin options in
+#: their `addopts`, pytest rejected the unknown options during argument parsing, and the
+#: run ended before any JUnit report existed. Installing the dependencies did not help,
+#: because autoload suppression prevented the installed plugins from registering.
+DISABLED_PYTEST_PLUGINS = (
+    "cacheprovider",  # writes .pytest_cache into the immutable worktree
+    "randomly",  # randomizes order and seeds; destroys BASE/HEAD comparability
+    "xdist",  # distributes execution; PatchProof requires exactly one node in-process
+    "cov",  # rewrites the terminal report and can alter exit codes
+)
+
+#: PatchProof's fixed pytest arguments for one selected node.
+#:
+#: `-o addopts=` neutralizes the repository's own `addopts`. Without it, PatchProof
+#: inherits every option the repository's test suite happens to want -- coverage
+#: thresholds, benchmark options, strict-marker settings -- none of which are relevant
+#: to running one generated node, and any of which can abort the run during argument
+#: parsing. Overriding `addopts` is not a weakening of the execution contract: the
+#: contract still supplies the command, and PatchProof still appends only this fixed,
+#: model-inaccessible argument vector.
+PYTEST_ISOLATION_ARGUMENTS: tuple[str, ...] = (
+    *(argument for plugin in DISABLED_PYTEST_PLUGINS for argument in ("-p", f"no:{plugin}")),
+    "-o",
+    "addopts=",
+    "--color=no",
+    "--tb=short",
+    "--maxfail=1",
+    "-q",
+    "-rxX",
+)
+
 _UNEXPECTED_EXCEPTION_PATTERN = re.compile(
     r"(?m)^\s*(?:E\s+)?(?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*"
     r"(?:Error|Exception|Exit|Interrupt):\s*"
@@ -298,13 +335,7 @@ class PytestRunner:
             report_path = result_directory / "pytest.xml"
             command = (
                 *self._test_command(workspace),
-                "-p",
-                "no:cacheprovider",
-                "--color=no",
-                "--tb=short",
-                "--maxfail=1",
-                "-q",
-                "-rxX",
+                *PYTEST_ISOLATION_ARGUMENTS,
                 "-o",
                 "junit_family=xunit2",
                 f"--junitxml={report_path}",

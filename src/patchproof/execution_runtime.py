@@ -29,7 +29,22 @@ class BoundedProcessResult:
 
 
 class ChildProcessEnvironmentPolicy:
-    """Build an explicit environment that excludes control-plane credentials."""
+    """Build an explicit environment that excludes control-plane credentials.
+
+    Note on pytest plugins: this policy deliberately does **not** set
+    `PYTEST_DISABLE_PLUGIN_AUTOLOAD`. A repository's own `conftest.py` frequently
+    imports its declared pytest plugins, and its `addopts` frequently reference their
+    options, so suppressing autoload wholesale makes the repository's own test
+    configuration unloadable and aborts the run during argument parsing. PatchProof
+    instead disables specific interfering plugins by name via
+    `patchproof.pytest_runner.DISABLED_PYTEST_PLUGINS` and neutralizes the
+    repository's `addopts`, which preserves comparability without breaking collection.
+
+    This is not a security relaxation. Repository code -- including `conftest.py` --
+    already executes inside this sandbox by design; that is what a BASE/HEAD challenge
+    is. Isolation comes from the credential-free environment built here, the private
+    executor identity, and the disposable worktree, not from plugin suppression.
+    """
 
     inherited_names = (
         "PATH",
@@ -67,7 +82,6 @@ class ChildProcessEnvironmentPolicy:
                 "UV_NO_CACHE": "1",
                 "UV_NO_PROGRESS": "1",
                 "UV_PYTHON_DOWNLOADS": "never",
-                "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
                 "PYTHONDONTWRITEBYTECODE": "1",
                 "PYTHONIOENCODING": "utf-8",
                 "PYTHONUTF8": "1",
