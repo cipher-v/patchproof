@@ -1,0 +1,78 @@
+{
+  "accepted": true,
+  "case_count": 10,
+  "cases": [
+    {
+      "accepted": true,
+      "anti_leakage": {
+        "context_sha256": "1cb7cc1f69b71ba18e7c8ac764fdf7cee7025c0c0db9a4fed95552a243d6ae91"
+      },
+      "case_id": "jsonschema-1208-enum-equality"
+    },
+    {
+      "accepted": true,
+      "anti_leakage": {
+        "context_sha256": "c7ede29a45bdc71b6b10138d04d578ccbb75746670bfe9cb06fb92385eb114da"
+      },
+      "case_id": "dateutil-751-midnight-rollover"
+    },
+    {
+      "accepted": true,
+      "anti_leakage": {
+        "context_sha256": "05303af1f8ceda1bbcaa59828ae357edfdc42c064e68dce6362b2eef7e0269fc"
+      },
+      "case_id": "more-itertools-1128-negative-slice"
+    },
+    {
+      "accepted": true,
+      "anti_leakage": {
+        "context_sha256": "de795d3b58e69cd5db608eb52a32545cbdb155c41d5db7214a982ee0e1c2b994"
+      },
+      "case_id": "packaging-1345-true-end"
+    },
+    {
+      "accepted": true,
+      "anti_leakage": {
+        "context_sha256": "76a551630ac708a80f42e8f9ce04a34011dff22c33fc21cbe74d75d4625be275"
+      },
+      "case_id": "starlette-3317-authorityless-url"
+    },
+    {
+      "accepted": true,
+      "anti_leakage": {
+        "context_sha256": "e1c35a593db6d37ff0674078acc1d856366cc1365d5ff30bce0fb2de9e3bf2df"
+      },
+      "case_id": "rich-3938-soft-wrap-background"
+    },
+    {
+      "accepted": true,
+      "anti_leakage": {
+        "context_sha256": "bac84c39b2096741de2718e50495b40a84cf2aea9822b349cad1e75d8ceb80b7"
+      },
+      "case_id": "jinja-2029-missing-singleton"
+    },
+    {
+      "accepted": true,
+      "anti_leakage": {
+        "context_sha256": "cfd1774cd2a93672a9dad208ae5e05e28b4a49a18a3d013e6d3af6398b2eebed"
+      },
+      "case_id": "platformdirs-523-separator-only-xdg"
+    },
+    {
+      "accepted": true,
+      "anti_leakage": {
+        "context_sha256": "d1052b8c2634685ed127c65c65ffd0eb88fb15fdc0ef00470be05a2ae8e9199f"
+      },
+      "case_id": "anyio-1200-empty-stem"
+    },
+    {
+      "accepted": true,
+      "anti_leakage": {
+        "context_sha256": "022511225b4ab84ab49ec01d28a03cf8e05a8ca463920fdb002a8b2a19104a8a"
+      },
+      "case_id": "cattrs-696-converted-default"
+    }
+  ],
+  "manifest_sha256": "2192168c32389843c259c4d1dcb945533a49e843cbf6e5a4e13df45449d98d30",
+  "schema_version": 1
+}

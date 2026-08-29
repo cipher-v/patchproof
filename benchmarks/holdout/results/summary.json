@@ -1,0 +1,218 @@
+{
+  "schema_version": 1,
+  "dataset_id": "unseen-historical-python-pr-holdout-v1",
+  "declared_run_id": "unseen-holdout-v1-gemini-3.6-flash-vertex-2026-08-29",
+  "run_policy": {
+    "blind_runs": 1,
+    "case_reruns": 0,
+    "post_result_tuning": false
+  },
+  "provenance": {
+    "frozen_implementation_sha": "baf333afc160cd75a90cea1e0568120a9889fb7e",
+    "holdout_construction_sha": "113fc1af287b42447a7cde6b0a91241b7363c52c",
+    "orchestration_sha": "61afb7cedba1642a0b33689d1146be8731dfa131",
+    "manifest_sha256": "2192168c32389843c259c4d1dcb945533a49e843cbf6e5a4e13df45449d98d30"
+  },
+  "artifacts": {
+    "live_journal_sha256": "dde659ccccad53c57196056c5197aec47f81b81231adc2af28da7695c1b8c438",
+    "raw_result_sha256": "c70076f2c5cbc50780f9b99b0563dc05aaef6c51932ba74fb222cdb2e85486b8",
+    "live_context_gate_sha256": "e5e6e5d87337a1ce547172b270a11ec7ed2a5aa414f65ed433cbdca101c1e8be",
+    "raw_oracle_gate_sha256_field_meaning": "No-oracle live context gate created by holdout orchestration, not the sealed developer oracle gate."
+  },
+  "provider": {
+    "surface": "VERTEX_AI",
+    "model": "gemini-3.6-flash",
+    "project": "patchproof-506606",
+    "location": "global"
+  },
+  "budgets": {
+    "maximum_logical_calls": 40,
+    "maximum_provider_calls": 80,
+    "declared_available_provider_calls": 80,
+    "preflight_passed": true
+  },
+  "counts": {
+    "total_cases": 10,
+    "historical_cases": 10,
+    "claims_selected": 10,
+    "claim_abstentions": 0,
+    "invalid_claim_outputs": 0,
+    "provider_terminal_failures": 0,
+    "candidate_attempts": 18,
+    "validated_candidates": 17,
+    "valid_initial_candidates": 9,
+    "invalid_candidate_structured_outputs": 0,
+    "static_candidate_rejections": 1,
+    "initial_candidates_executed": 9,
+    "mechanically_comparable_initial_candidates": 3,
+    "repairs_attempted": 8,
+    "repairs_rejected_as_behavioral_no_op": 0,
+    "repairs_executed": 8,
+    "repairs_producing_discrimination": 0,
+    "candidate_evaluations": 17,
+    "discriminating_cases": 2,
+    "supported_scenarios": 2,
+    "insufficient_evidence_cases": 8,
+    "environmental_evaluations": 13,
+    "non_discriminating_evaluations": 2,
+    "invalid_test_outcomes": 0,
+    "potential_regressions": 0,
+    "incorrect_supports": 0,
+    "logical_model_results": 30,
+    "provider_attempts": 30,
+    "structured_output_failures": 0
+  },
+  "usage": {
+    "prompt_tokens": 121351,
+    "output_tokens": 6205,
+    "total_tokens": 128767,
+    "total_model_duration_seconds": 144.23418720043264,
+    "mean_model_duration_seconds": 4.807806240014421
+  },
+  "outcomes": {
+    "claim_supported_for_scenario": 2,
+    "insufficient_evidence": 8,
+    "terminal_statuses": {
+      "CLAIM_SUPPORTED_FOR_SCENARIO": 2,
+      "ENVIRONMENTAL": 7,
+      "NON_DISCRIMINATING": 1
+    },
+    "descriptive_support_proportion": 0.2,
+    "scope": "The 2/10 proportion describes holdout scenario support. It is not conventional predictive accuracy, whole-PR correctness, or a representative production estimate."
+  },
+  "false_support_audit": {
+    "supported_case_count": 2,
+    "all_supported_base_assertion_failed": true,
+    "all_supported_head_passed": true,
+    "all_supported_mechanical_discriminating": true,
+    "all_supported_semantic_related": true,
+    "all_supported_match_oracle_direction": true,
+    "incorrect_support_count": 0
+  },
+  "cases": [
+    {
+      "case_id": "jsonschema-1208-enum-equality",
+      "category": "validation and recursive equality",
+      "claim": "The enum keyword uses type-sensitive equality to prevent boolean/integer coercion.",
+      "initial": "VALIDATED; BASE PASSED, HEAD PASSED",
+      "repair": "VALIDATED and executed; behaviorally distinct but again BOTH_PASSED",
+      "mechanical": "NON_DISCRIMINATING",
+      "semantic": null,
+      "final": "INSUFFICIENT_EVIDENCE"
+    },
+    {
+      "case_id": "dateutil-751-midnight-rollover",
+      "category": "date-time parsing",
+      "claim": "isoparse advances by one day when parsing hour 24.",
+      "initial": "VALIDATED; BASE and HEAD COLLECTION_ERROR",
+      "repair": "VALIDATED and executed; behaviorally distinct but again COLLECTION_ERROR on both revisions",
+      "mechanical": "ENVIRONMENTAL",
+      "semantic": null,
+      "final": "INSUFFICIENT_EVIDENCE"
+    },
+    {
+      "case_id": "more-itertools-1128-negative-slice",
+      "category": "sequence transformation",
+      "claim": "Negative-step numeric_range slicing follows slice.indices semantics.",
+      "initial": "VALIDATED; BASE ASSERTION_FAILED, HEAD PASSED",
+      "repair": "NOT_USED",
+      "mechanical": "DISCRIMINATING",
+      "semantic": "RELATED",
+      "final": "CLAIM_SUPPORTED_FOR_SCENARIO"
+    },
+    {
+      "case_id": "packaging-1345-true-end",
+      "category": "requirement parsing",
+      "claim": "The END tokenizer rule changes from $ to the true-end regex \\Z.",
+      "initial": "VALIDATED; BASE ASSERTION_FAILED, HEAD PASSED",
+      "repair": "NOT_USED",
+      "mechanical": "DISCRIMINATING",
+      "semantic": "RELATED",
+      "final": "CLAIM_SUPPORTED_FOR_SCENARIO"
+    },
+    {
+      "case_id": "starlette-3317-authorityless-url",
+      "category": "URL object construction and error handling",
+      "claim": "URL.replace avoids IndexError on authorityless URLs.",
+      "initial": "VALIDATED; BASE TEST_ERROR, HEAD PASSED",
+      "repair": "VALIDATED and executed; behaviorally distinct but retained BASE TEST_ERROR / HEAD PASSED",
+      "mechanical": "ENVIRONMENTAL",
+      "semantic": null,
+      "final": "INSUFFICIENT_EVIDENCE"
+    },
+    {
+      "case_id": "rich-3938-soft-wrap-background",
+      "category": "terminal text rendering",
+      "claim": "Segment splitting exposes whether each rendered line ended with a newline.",
+      "initial": "VALIDATED; BASE TEST_ERROR, HEAD PASSED",
+      "repair": "VALIDATED and executed; behaviorally distinct but retained BASE TEST_ERROR / HEAD PASSED",
+      "mechanical": "ENVIRONMENTAL",
+      "semantic": null,
+      "final": "INSUFFICIENT_EVIDENCE"
+    },
+    {
+      "case_id": "jinja-2029-missing-singleton",
+      "category": "serialization and singleton identity",
+      "claim": "The missing singleton supports pickle round-tripping through __reduce__.",
+      "initial": "VALIDATED; BASE and HEAD COLLECTION_ERROR",
+      "repair": "VALIDATED and executed; behaviorally distinct but again COLLECTION_ERROR on both revisions",
+      "mechanical": "ENVIRONMENTAL",
+      "semantic": null,
+      "final": "INSUFFICIENT_EVIDENCE"
+    },
+    {
+      "case_id": "platformdirs-523-separator-only-xdg",
+      "category": "filesystem paths and environment configuration",
+      "claim": "Separator-only XDG entries are filtered so empty lists can fall back.",
+      "initial": "VALIDATED; BASE and HEAD COLLECTION_ERROR",
+      "repair": "VALIDATED and executed; behaviorally distinct but again COLLECTION_ERROR on both revisions",
+      "mechanical": "ENVIRONMENTAL",
+      "semantic": null,
+      "final": "INSUFFICIENT_EVIDENCE"
+    },
+    {
+      "case_id": "anyio-1200-empty-stem",
+      "category": "path manipulation and validation",
+      "claim": "Path.with_stem raises ValueError for an empty stem with a suffix.",
+      "initial": "VALIDATED; BASE and HEAD PROCESS_ERROR",
+      "repair": "VALIDATED and executed; behaviorally distinct but again PROCESS_ERROR on both revisions",
+      "mechanical": "ENVIRONMENTAL",
+      "semantic": null,
+      "final": "INSUFFICIENT_EVIDENCE"
+    },
+    {
+      "case_id": "cattrs-696-converted-default",
+      "category": "serialization and converted defaults",
+      "claim": "omit_if_default compares against a converter-applied default.",
+      "initial": "REJECTED by deterministic grounding because import root attrs was absent from context; not executed",
+      "repair": "VALIDATED and executed; BASE and HEAD PROCESS_ERROR",
+      "mechanical": "ENVIRONMENTAL",
+      "semantic": null,
+      "final": "INSUFFICIENT_EVIDENCE"
+    }
+  ],
+  "category_observation": "The sequence-transformation and requirement-parsing cases were supported. Each of the other eight single-case categories produced insufficient evidence; one observation per category does not support statistical generalization.",
+  "development_v5_comparison": {
+    "v5_cases": 5,
+    "v5_supported": 3,
+    "v5_incorrect_supports": 0,
+    "holdout_cases": 10,
+    "holdout_supported": 2,
+    "holdout_incorrect_supports": 0,
+    "interpretation": "The descriptive proportions differ, but this does not establish causality. The holdout repositories were not used for tuning, the implementation was frozen first, selection and oracle validation used no PatchProof semantic agents, the blind run occurred once, and its results did not change the evaluated implementation."
+  },
+  "verification": {
+    "pytest": "295 passed, 1 failed, 1 skipped; the sole failure is the pre-run assertion that benchmarks/holdout/results must not exist after the authorized results were created",
+    "ruff": "passed",
+    "format": "passed",
+    "build": "passed",
+    "post_result_code_changes": false
+  },
+  "observed_limitations": [
+    "One case remained non-discriminating after a behaviorally distinct repair.",
+    "Seven cases ended environmental: three categories encountered collection errors, two encountered BASE test errors with HEAD passes, and two encountered process errors.",
+    "Eight repairs were executed, but none converted a case into discriminating evidence.",
+    "One initial candidate was rejected by deterministic import grounding before execution.",
+    "One orchestration test encodes the pre-run assumption that the results directory is absent and therefore fails after the authorized immutable results exist; it was not changed after observing the holdout."
+  ]
+}
