@@ -233,3 +233,89 @@ def test_candidate_using_the_shared_interface_is_accepted(
 def test_no_head_only_symbols_means_no_extra_restriction() -> None:
     """The check must be inert when a pull request adds nothing new."""
     assert CrossRevisionInterfaces().head_only_leaf_names == frozenset()
+
+
+def test_claim_must_name_an_interface_present_on_both_revisions(
+    helper_introducing_repository: tuple[Path, str, str],
+) -> None:
+    """A claim aimed at a HEAD-only symbol is rejected at selection, not three attempts later."""
+    import asyncio
+
+    from patchproof.claim_agent import (
+        AffectedSymbolRef,
+        BehavioralClaimAgent,
+        BehavioralClaimDraft,
+        ClaimSelectionDisposition,
+        ClaimSelectionDraft,
+        InvalidClaimAgentOutput,
+        ModelUsage,
+        PullRequestNarrative,
+        RawClaimModelResponse,
+        SupportingContextRef,
+    )
+
+    repository, base_sha, head_sha = helper_introducing_repository
+    context = DeterministicContextRetriever(source_repository=repository).retrieve(
+        base_sha=base_sha, head_sha=head_sha
+    )
+    symbol = next(
+        item for item in context.changed_symbols if item.qualified_name.startswith("Renderer")
+    )
+    snippet = next(item for item in context.snippets if item.path == symbol.path)
+
+    def _draft(shared_interface: str) -> str:
+        return ClaimSelectionDraft(
+            disposition=ClaimSelectionDisposition.SELECTED,
+            claim=BehavioralClaimDraft(
+                summary="Rendered lines are terminated.",
+                observable_operation="Renderer.render(text, style)",
+                trigger_condition="The text contains a newline.",
+                expected_head_observation="The newline is preceded by a terminator marker.",
+                expected_base_hypothesis="The newline is emitted without a terminator marker.",
+                shared_interface=shared_interface,
+                preconditions=("A renderer instance exists.",),
+                action="Render text containing a newline.",
+                expected_behavior="The output marks the line terminator.",
+                affected_symbols=(
+                    AffectedSymbolRef(path=symbol.path, qualified_name=symbol.qualified_name),
+                ),
+                supporting_context=(
+                    SupportingContextRef(
+                        path=snippet.path,
+                        start_line=snippet.start_line,
+                        end_line=snippet.end_line,
+                        relevance="The changed render body delegates to the new helper.",
+                    ),
+                ),
+                confidence=0.9,
+            ),
+            explanation="The rendered output gains a line terminator marker.",
+        ).model_dump_json()
+
+    class FixedModel:
+        def __init__(self, payload: str) -> None:
+            self.payload = payload
+
+        async def invoke(self, request):
+            del request
+            return RawClaimModelResponse(
+                text=self.payload,
+                usage=ModelUsage(model_name="test-model", duration_seconds=0.1),
+            )
+
+    narrative = PullRequestNarrative.from_untrusted(title="Terminate rendered lines")
+
+    with pytest.raises(InvalidClaimAgentOutput, match="only on HEAD"):
+        asyncio.run(
+            BehavioralClaimAgent(model=FixedModel(_draft("split_terminated"))).select_claim(
+                context=context, narrative=narrative
+            )
+        )
+
+    result = asyncio.run(
+        BehavioralClaimAgent(model=FixedModel(_draft("Renderer.render"))).select_claim(
+            context=context, narrative=narrative
+        )
+    )
+    assert result.selection.claim is not None
+    assert result.selection.claim.expected_base_hypothesis

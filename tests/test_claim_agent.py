@@ -74,6 +74,11 @@ def _selected(context: PullRequestContext) -> ClaimSelection:
         claim=BehavioralClaim(
             claim_id="claim-selected-behavior",
             summary="Workspace resolution prefers the most-specific matching path.",
+            observable_operation="WorkspaceResolver.choose_workspace(candidates)",
+            trigger_condition="Two or more candidate paths differ in depth and length.",
+            expected_head_observation="The deepest, longest candidate path is returned.",
+            expected_base_hypothesis="The first candidate is returned regardless of depth.",
+            shared_interface="workspace.py::WorkspaceResolver.choose_workspace",
             preconditions=("At least two matching workspace paths are available.",),
             action="Resolve the project workspace from those candidates.",
             expected_behavior="The candidate with the deepest and longest path is returned.",
@@ -103,6 +108,11 @@ def _draft_json(selection: ClaimSelection) -> str:
         claim=(
             BehavioralClaimDraft(
                 summary=claim.summary,
+                observable_operation=claim.observable_operation,
+                trigger_condition=claim.trigger_condition,
+                expected_head_observation=claim.expected_head_observation,
+                expected_base_hypothesis=claim.expected_base_hypothesis,
+                shared_interface=claim.shared_interface,
                 preconditions=claim.preconditions,
                 action=claim.action,
                 expected_behavior=claim.expected_behavior,

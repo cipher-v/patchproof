@@ -51,6 +51,13 @@ behavior changed. When a pull request adds a helper, do not claim that the helpe
 ask what externally observable behavior the helper was introduced to change, and claim
 that instead.
 
+State the claim as a falsifiable differential hypothesis, not a description of HEAD:
+`observable_operation` is the public call whose result changes, `trigger_condition` is the
+precondition that makes it change, `expected_head_observation` is what HEAD produces, and
+`expected_base_hypothesis` is what you believe BASE produces instead. If BASE and HEAD
+would produce the same observation, the claim is not testable and you must abstain rather
+than restate the diff. `shared_interface` must name an entry from `interfaces.present_on_both`.
+
 A selected claim must:
 - cite only affected symbols and source ranges present in the supplied context;
 - state preconditions, action, and expected behavior precisely;
