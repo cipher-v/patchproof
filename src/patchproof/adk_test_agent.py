@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import time
+from dataclasses import replace
 from uuid import uuid4
 
 from google.adk.agents import LlmAgent
@@ -20,6 +21,7 @@ from patchproof.gemini_provider import (
     normalize_provider_failure,
 )
 from patchproof.model_reliability import ModelInvocationFailure
+from patchproof.reasoning_budget import AgentTask, ReasoningBudget, budget_for
 from patchproof.test_generation import (
     CandidateModelRequest,
     CandidateTestDraft,
@@ -27,7 +29,7 @@ from patchproof.test_generation import (
 )
 
 _MODEL_PATTERN = re.compile(r"gemini-(\d+)\.(\d+)-[a-z0-9.-]+")
-DEFAULT_CANDIDATE_MAX_OUTPUT_TOKENS = 12_000
+DEFAULT_CANDIDATE_MAX_OUTPUT_TOKENS = budget_for(AgentTask.CANDIDATE_GENERATION).max_output_tokens
 
 CANDIDATE_AGENT_INSTRUCTION = """
 You are PatchProof's single semantic agent performing its candidate-test task.
@@ -86,12 +88,14 @@ class AdkGeminiCandidateModel:
         provider_config: GeminiProviderConfig | None = None,
         max_output_tokens: int = DEFAULT_CANDIDATE_MAX_OUTPUT_TOKENS,
         timeout_seconds: float = 60.0,
+        reasoning_budget: ReasoningBudget | None = None,
     ) -> None:
         match = _MODEL_PATTERN.fullmatch(model_name)
         if match is None or (int(match.group(1)), int(match.group(2))) < (3, 5):
             raise ValueError("candidate model must be an explicit Gemini 3.5-or-newer model")
         if max_output_tokens <= 0 or timeout_seconds <= 0:
             raise ValueError("ADK output-token and timeout budgets must be positive")
+        self.reasoning_budget = reasoning_budget or budget_for(AgentTask.CANDIDATE_GENERATION)
         self.model_name = model_name
         self.provider_config = provider_config or GeminiProviderConfig.developer_api()
         self.adk_model = self.provider_config.adk_model(model_name)
@@ -104,13 +108,9 @@ class AdkGeminiCandidateModel:
             output_schema=CandidateTestDraft,
             include_contents="none",
             tools=[],
-            generate_content_config=types.GenerateContentConfig(
-                temperature=0.1,
-                max_output_tokens=max_output_tokens,
-                thinking_config=types.ThinkingConfig(
-                    thinking_level=types.ThinkingLevel.LOW,
-                ),
-            ),
+            generate_content_config=replace(
+                self.reasoning_budget, max_output_tokens=max_output_tokens
+            ).generate_content_config(),
             timeout=timeout_seconds,
         )
 

@@ -23,6 +23,7 @@ from patchproof.claim_agent import (
     SupportingContextRef,
 )
 from patchproof.context_retrieval import PullRequestContext, RetrievalStats
+from patchproof.reasoning_budget import AgentTask, budget_for
 from patchproof.test_generation import CandidateModelRequest, CandidateTestDraft
 
 
@@ -88,14 +89,14 @@ def test_candidate_adapter_is_the_same_logical_stateless_tool_free_agent() -> No
     assert model.agent.tools == []
     assert model.agent.timeout == 60.0
     assert model.agent.generate_content_config.temperature == 0.1
+    budget = budget_for(AgentTask.CANDIDATE_GENERATION)
     assert (
         model.agent.generate_content_config.max_output_tokens
         == DEFAULT_CANDIDATE_MAX_OUTPUT_TOKENS
-        == 12_000
+        == budget.max_output_tokens
     )
     assert (
-        model.agent.generate_content_config.thinking_config.thinking_level
-        is types.ThinkingLevel.LOW
+        model.agent.generate_content_config.thinking_config.thinking_level is budget.thinking_level
     )
     assert "UNTRUSTED DATA" in CANDIDATE_AGENT_INSTRUCTION
     assert "must not propose or execute commands" in CANDIDATE_AGENT_INSTRUCTION
