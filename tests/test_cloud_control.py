@@ -18,11 +18,13 @@ from patchproof.cloud_executor import (
     ExecutionResultDocument,
     ExecutorChallengeRequest,
     ExecutorChallengeResponse,
+    ExecutorEnvironmentResponse,
     artifact_digest,
 )
 from patchproof.execution_contract import ExecutionContract
 from patchproof.models import (
     DifferentialPattern,
+    EnvironmentReadinessStatus,
     MechanicalEvidenceStatus,
     RevisionRole,
     TestExecutionStatus,
@@ -204,6 +206,36 @@ def test_remote_challenge_sends_oidc_and_rejects_artifact_substitution() -> None
     assert captured["authorization"] == "Bearer short-lived-id-token"
     assert result.artifact.sha256 == request.artifact_sha256
     assert callbacks == [result.base]
+
+
+def test_remote_challenge_checks_environment_before_candidate_execution() -> None:
+    captured = {}
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        captured["path"] = http_request.url.path
+        captured["payload"] = http_request.read()
+        return httpx.Response(
+            200,
+            content=ExecutorEnvironmentResponse(
+                status=EnvironmentReadinessStatus.READY,
+                reason="repository-declared setup completed on BASE and HEAD",
+            ).model_dump_json(),
+        )
+
+    challenge = RemoteBaseHeadChallenge(
+        repository="owner/repo",
+        pull_request_number=4,
+        contract=contract(),
+        executor_url="https://executor.example",
+        tokens=StubTokenProvider(),
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    readiness = challenge.prepare_environment(base_ref="a" * 40, head_ref="b" * 40)
+
+    assert readiness.ready
+    assert captured["path"] == "/internal/environment-readiness"
+    assert b"artifact_source" not in captured["payload"]
 
 
 def test_google_task_verifier_pins_audience_issuer_and_email(monkeypatch) -> None:

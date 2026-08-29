@@ -18,6 +18,8 @@ from patchproof.git_workspace import GitWorkspaceManager
 from patchproof.models import (
     ChallengeResult,
     DifferentialPattern,
+    EnvironmentReadiness,
+    EnvironmentReadinessStatus,
     EvidenceAssessment,
     ExecutionResult,
     MechanicalEvidenceStatus,
@@ -30,8 +32,8 @@ from patchproof.pytest_runner import PytestRunner
 from patchproof.workflow import normalize_repository_name
 
 
-class ExecutorChallengeRequest(BaseModel):
-    """Bounded data contract crossing from the credentialed control plane."""
+class ExecutorEnvironmentRequest(BaseModel):
+    """Immutable repository and setup contract crossing into the executor."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -40,15 +42,20 @@ class ExecutorChallengeRequest(BaseModel):
     base_sha: str = Field(pattern=r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
     head_sha: str = Field(pattern=r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
     contract: ExecutionContract
-    artifact_path: str = Field(min_length=1, max_length=300)
-    node_id: str = Field(min_length=1, max_length=500)
-    artifact_source: str = Field(min_length=1, max_length=16_000)
-    artifact_sha256: str = Field(pattern=r"[0-9a-f]{64}")
 
     @field_validator("repository")
     @classmethod
     def normalize_repository(cls, value: str) -> str:
         return normalize_repository_name(value)
+
+
+class ExecutorChallengeRequest(ExecutorEnvironmentRequest):
+    """Bounded candidate data crossing from the credentialed control plane."""
+
+    artifact_path: str = Field(min_length=1, max_length=300)
+    node_id: str = Field(min_length=1, max_length=500)
+    artifact_source: str = Field(min_length=1, max_length=16_000)
+    artifact_sha256: str = Field(pattern=r"[0-9a-f]{64}")
 
     def artifact(self) -> TestArtifact:
         artifact = TestArtifact.from_text(
@@ -164,8 +171,28 @@ class ExecutorChallengeResponse(BaseModel):
         )
 
 
+class ExecutorEnvironmentResponse(BaseModel):
+    """Stable setup-readiness result without candidate or process-log content."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    status: EnvironmentReadinessStatus
+    reason: str = Field(min_length=1, max_length=2_000)
+
+    @classmethod
+    def from_domain(cls, result: EnvironmentReadiness) -> ExecutorEnvironmentResponse:
+        return cls(status=result.status, reason=result.reason)
+
+    def to_domain(self) -> EnvironmentReadiness:
+        return EnvironmentReadiness(status=self.status, reason=self.reason)
+
+
 class ChallengeExecutor(Protocol):
     """Injectable private execution boundary."""
+
+    def prepare_environment(
+        self, request: ExecutorEnvironmentRequest
+    ) -> ExecutorEnvironmentResponse: ...
 
     def execute(self, request: ExecutorChallengeRequest) -> ExecutorChallengeResponse: ...
 
@@ -197,28 +224,7 @@ class EphemeralChallengeExecutor:
 
         with tempfile.TemporaryDirectory(prefix="patchproof-executor-") as temporary:
             root = Path(temporary)
-            repository = root / "repository.git"
-            self._prepare_repository(request=request, destination=repository)
-            loader = ExecutionContractLoader()
-            base_contract = loader.load_bytes(
-                self._git_output(repository, ("show", f"{request.base_sha}:{loader.filename}"))
-            )
-            head_contract = loader.load_bytes(
-                self._git_output(repository, ("show", f"{request.head_sha}:{loader.filename}"))
-            )
-            if base_contract != head_contract or head_contract != request.contract:
-                raise ValueError("immutable BASE/HEAD execution contracts do not match")
-            challenge = BaseHeadChallenge(
-                workspaces=GitWorkspaceManager(
-                    source_repository=repository,
-                    workspace_root=root / "worktrees",
-                ),
-                runner=PytestRunner(
-                    contract=head_contract,
-                    python_executable=Path(sys.executable),
-                    install_dependencies=True,
-                ),
-            )
+            challenge = self._prepare_challenge(request=request, root=root)
             return ExecutorChallengeResponse.from_domain(
                 challenge.run(
                     base_ref=request.base_sha,
@@ -227,7 +233,49 @@ class EphemeralChallengeExecutor:
                 )
             )
 
-    def _prepare_repository(self, *, request: ExecutorChallengeRequest, destination: Path) -> None:
+    def prepare_environment(
+        self, request: ExecutorEnvironmentRequest
+    ) -> ExecutorEnvironmentResponse:
+        if request.repository not in self.allowed_repositories:
+            raise PermissionError("repository is not allowlisted")
+        with tempfile.TemporaryDirectory(prefix="patchproof-executor-") as temporary:
+            challenge = self._prepare_challenge(request=request, root=Path(temporary))
+            return ExecutorEnvironmentResponse.from_domain(
+                challenge.prepare_environment(
+                    base_ref=request.base_sha,
+                    head_ref=request.head_sha,
+                )
+            )
+
+    def _prepare_challenge(
+        self, *, request: ExecutorEnvironmentRequest, root: Path
+    ) -> BaseHeadChallenge:
+        repository = root / "repository.git"
+        self._prepare_repository(request=request, destination=repository)
+        loader = ExecutionContractLoader()
+        base_contract = loader.load_bytes(
+            self._git_output(repository, ("show", f"{request.base_sha}:{loader.filename}"))
+        )
+        head_contract = loader.load_bytes(
+            self._git_output(repository, ("show", f"{request.head_sha}:{loader.filename}"))
+        )
+        if base_contract != head_contract or head_contract != request.contract:
+            raise ValueError("immutable BASE/HEAD execution contracts do not match")
+        return BaseHeadChallenge(
+            workspaces=GitWorkspaceManager(
+                source_repository=repository,
+                workspace_root=root / "worktrees",
+            ),
+            runner=PytestRunner(
+                contract=head_contract,
+                python_executable=Path(sys.executable),
+                install_dependencies=True,
+            ),
+        )
+
+    def _prepare_repository(
+        self, *, request: ExecutorEnvironmentRequest, destination: Path
+    ) -> None:
         destination.mkdir()
         self._run(("git", "-C", str(destination), "init", "--bare"))
         url = f"https://github.com/{request.repository}.git"
@@ -285,6 +333,19 @@ def create_executor_app(*, executor: ChallengeExecutor) -> FastAPI:
     async def challenge(request: ExecutorChallengeRequest) -> ExecutorChallengeResponse:
         try:
             return executor.execute(request)
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except Exception as error:
+            raise HTTPException(status_code=503, detail="executor failed closed") from error
+
+    @app.post("/internal/environment-readiness", response_model=ExecutorEnvironmentResponse)
+    async def environment_readiness(
+        request: ExecutorEnvironmentRequest,
+    ) -> ExecutorEnvironmentResponse:
+        try:
+            return executor.prepare_environment(request)
         except PermissionError as error:
             raise HTTPException(status_code=403, detail=str(error)) from error
         except ValueError as error:

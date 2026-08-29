@@ -55,7 +55,7 @@ the initial call and one retry. A retry is allowed only for explicit timeout, tr
 5xx, throttling, and selected conflict/deadline statuses. Malformed structured output, grounding
 failure, ordinary 4xx responses, and deterministic validation failures are not retried.
 
-The candidate policy is still separate: one initial candidate and at most one repair. A provider
+The candidate policy is still separate: one initial candidate and at most two repairs. A provider
 retry repeats the same logical call; it does not create another candidate or an agent-directed
 loop. `ModelUsage.provider_attempts` records whether one or two provider attempts were consumed.
 
@@ -85,7 +85,8 @@ product results and are not worker failures.
 | Older or stale HEAD event | Record/acknowledge it without replacing or executing the current revision. |
 | Newer HEAD during active work | Mark the old occurrence terminal and superseded; it cannot resume or publish. |
 | Worker/subprocess timeout | Terminate the process tree, retain bounded facts, classify execution conservatively. |
-| Invalid candidate/path/import/call | Reject before workspace execution; at most one bounded repair is possible. |
+| Invalid candidate/path/import/call | Reject before workspace execution; at most two bounded repairs are possible. |
+| BASE/HEAD contract mismatch or setup failure | Fail closed before candidate generation; persist conservative environment evidence when setup ran. |
 | Malformed or ungrounded model output | Fail closed without a provider retry. |
 | Explicit transient model failure | Retry the identical logical call once, then surface a sanitized failure. |
 | GitHub 408/409/425/429/5xx or network failure | Mark publication retryable; retry only stored evidence publication. |
@@ -111,7 +112,7 @@ The relevant hard ceilings are:
 
 - authenticated webhook body and repository allowlist limits from Phase 2;
 - bounded diff, file, snippet, reference, and serialized context limits from Phase 3;
-- strict candidate input/output/source/path budgets, two candidate calls, and one repair;
+- strict candidate input/output/source/path budgets, three candidate calls, and two repairs;
 - at most two provider attempts per logical semantic call and adapter request timeouts;
 - validated installation/test argv templates and a repository timeout of at most 300 seconds;
 - bounded per-stream subprocess capture before any evidence object is created;

@@ -6,7 +6,13 @@ from collections.abc import Callable
 
 from patchproof.evidence import MechanicalEvidenceClassifier
 from patchproof.git_workspace import GitWorkspaceManager
-from patchproof.models import ChallengeResult, ExecutionResult, TestArtifact
+from patchproof.models import (
+    ChallengeResult,
+    EnvironmentReadiness,
+    EnvironmentReadinessStatus,
+    ExecutionResult,
+    TestArtifact,
+)
 from patchproof.pytest_runner import PytestRunner
 
 
@@ -23,6 +29,26 @@ class BaseHeadChallenge:
         self.workspaces = workspaces
         self.runner = runner
         self.classifier = classifier or MechanicalEvidenceClassifier()
+
+    def prepare_environment(self, *, base_ref: str, head_ref: str) -> EnvironmentReadiness:
+        """Validate repository-declared setup on both immutable revisions without a candidate."""
+        with self.workspaces.create_pair(base_ref=base_ref, head_ref=head_ref) as pair:
+            base_error = self.runner.prepare_environment(workspace=pair.base_path)
+            if base_error is not None:
+                return EnvironmentReadiness(
+                    status=EnvironmentReadinessStatus.BASE_SETUP_FAILED,
+                    reason=f"BASE repository environment setup failed: {base_error}",
+                )
+            head_error = self.runner.prepare_environment(workspace=pair.head_path)
+            if head_error is not None:
+                return EnvironmentReadiness(
+                    status=EnvironmentReadinessStatus.HEAD_SETUP_FAILED,
+                    reason=f"HEAD repository environment setup failed: {head_error}",
+                )
+        return EnvironmentReadiness(
+            status=EnvironmentReadinessStatus.READY,
+            reason="repository-declared setup completed on BASE and HEAD",
+        )
 
     def run(
         self,

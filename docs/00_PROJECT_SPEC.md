@@ -57,7 +57,7 @@ PatchProof supports only:
 - pure-Python projects using Python 3.12 and pytest;
 - deterministic unit tests or small integration tests;
 - one primary behavioral claim per verification run;
-- at most two generated candidate tests and at most one repair attempt;
+- at most three generated candidate tests: one initial attempt and at most two repairs;
 - execution commands taken from a validated repository execution contract;
 - conservative abstention when evidence is insufficient.
 
@@ -103,8 +103,8 @@ is a valid product result, not a system failure.
 ## System boundary and responsibility split
 
 The target system uses one bounded Google ADK agent for semantic choices: selecting a claim,
-ranking deterministic context, constructing a test, deciding whether a failure appears related to
-the claim, choosing whether the one permitted repair is worthwhile, and abstaining.
+ranking deterministic context, constructing a test, revising it from immediately preceding bounded
+feedback at most twice, deciding whether a failure appears related to the claim, and abstaining.
 
 Deterministic code owns trust-boundary work: webhook HMAC validation, repository allowlisting,
 immutable SHA capture, idempotency, workspace management, artifact hashing, command validation,
@@ -129,7 +129,7 @@ slice. The agent uses an explicit Gemini 3.6 Flash model and must select at most
 or abstain; its live integration test has completed successfully. The same logical agent can now
 propose a structured pytest candidate through a separate task schema. Deterministic code validates
 the candidate path, syntax, test shape, imports, selected unsafe calls, immutable content hash, and
-at-most-two/one-repair lineage against `.patchproof.yaml`. Local orchestration now connects claim,
+at-most-three/two-repair lineage against `.patchproof.yaml`. Local orchestration now connects claim,
 candidate, install, BASE/HEAD execution, self-rejection/repair, constrained assessment, immutable
 evidence persistence, GitHub App installation authentication, and retry-safe Check publication.
 Repository processes now use an explicit credential-minimized environment, bounded streaming

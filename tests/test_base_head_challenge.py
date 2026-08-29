@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from collections import deque
 from pathlib import Path
 
 import pytest
@@ -11,10 +12,14 @@ from conftest import RepositoryHistory
 
 from patchproof.challenge import BaseHeadChallenge
 from patchproof.execution_contract import ExecutionContract
+from patchproof.execution_runtime import BoundedProcessResult
 from patchproof.git_workspace import GitWorkspaceManager
 from patchproof.models import (
     DifferentialPattern,
+    EnvironmentReadinessStatus,
     MechanicalEvidenceStatus,
+    Revision,
+    RevisionRole,
     TestArtifact,
     TestExecutionStatus,
 )
@@ -70,6 +75,102 @@ def _run(
     )
     assert list(repository_history.workspace_root.iterdir()) == []
     return result
+
+
+class _SetupRunner:
+    def __init__(self, *results: str | None) -> None:
+        self.results = deque(results)
+        self.calls = 0
+
+    def prepare_environment(self, *, workspace: Path) -> str | None:
+        assert workspace.is_dir()
+        self.calls += 1
+        return self.results.popleft()
+
+
+def test_environment_readiness_distinguishes_base_setup_failure(
+    repository_history: RepositoryHistory,
+) -> None:
+    runner = _SetupRunner("dependency installation failed")
+    challenge = BaseHeadChallenge(
+        workspaces=GitWorkspaceManager(
+            source_repository=repository_history.path,
+            workspace_root=repository_history.workspace_root,
+        ),
+        runner=runner,  # type: ignore[arg-type]
+    )
+
+    readiness = challenge.prepare_environment(
+        base_ref=repository_history.base_sha,
+        head_ref=repository_history.head_sha,
+    )
+
+    assert readiness.status is EnvironmentReadinessStatus.BASE_SETUP_FAILED
+    assert "BASE" in readiness.reason
+    assert runner.calls == 1
+    assert list(repository_history.workspace_root.iterdir()) == []
+
+
+def test_environment_readiness_distinguishes_head_setup_failure(
+    repository_history: RepositoryHistory,
+) -> None:
+    runner = _SetupRunner(None, "dependency installation timed out")
+    challenge = BaseHeadChallenge(
+        workspaces=GitWorkspaceManager(
+            source_repository=repository_history.path,
+            workspace_root=repository_history.workspace_root,
+        ),
+        runner=runner,  # type: ignore[arg-type]
+    )
+
+    readiness = challenge.prepare_environment(
+        base_ref=repository_history.base_sha,
+        head_ref=repository_history.head_sha,
+    )
+
+    assert readiness.status is EnvironmentReadinessStatus.HEAD_SETUP_FAILED
+    assert "HEAD" in readiness.reason
+    assert runner.calls == 2
+    assert list(repository_history.workspace_root.iterdir()) == []
+
+
+def test_install_failure_has_a_distinct_status_and_uses_only_contract_argv(
+    writable_test_directory: Path,
+) -> None:
+    class FailingProcesses:
+        def __init__(self) -> None:
+            self.commands = []
+
+        def run(self, command, **kwargs):
+            del kwargs
+            self.commands.append(command)
+            return BoundedProcessResult(
+                returncode=2,
+                duration_seconds=0.01,
+                stdout="resolver failed",
+                stderr="",
+            )
+
+    workspace = writable_test_directory / "failed-install-workspace"
+    workspace.mkdir()
+    processes = FailingProcesses()
+    runner = PytestRunner(
+        contract=ExecutionContract.model_validate(_CONTRACT_DATA),
+        python_executable=Path(sys.executable),
+        install_dependencies=True,
+        processes=processes,  # type: ignore[arg-type]
+    )
+    artifact = _artifact("test_never_runs", "def test_never_runs():\n    assert True\n")
+
+    result = runner.run(
+        workspace=workspace,
+        revision=Revision(role=RevisionRole.BASE, sha="a" * 40),
+        artifact=artifact,
+    )
+
+    assert result.status is TestExecutionStatus.ENVIRONMENT_SETUP_FAILED
+    assert processes.commands == [("uv", "sync", "--frozen")]
+    assert not (workspace / _ARTIFACT_PATH).exists()
 
 
 def test_base_assertion_failure_and_head_pass_are_mechanically_discriminating(

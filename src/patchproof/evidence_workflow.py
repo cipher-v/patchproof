@@ -31,6 +31,8 @@ from patchproof.models import (
     ChallengeResult,
     ClaimOutcome,
     DifferentialPattern,
+    EnvironmentReadiness,
+    EnvironmentReadinessStatus,
     ExecutionResult,
     MechanicalEvidenceStatus,
     RevisionRole,
@@ -116,7 +118,7 @@ class CandidateAttemptEvidence(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    sequence: int = Field(ge=1, le=2)
+    sequence: int = Field(ge=1, le=3)
     origin: str
     status: str
     parent_candidate_id: str | None
@@ -162,13 +164,26 @@ class CandidateEvaluationEvidence(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    attempt_sequence: int = Field(ge=1, le=2)
+    attempt_sequence: int = Field(ge=1, le=3)
     artifact_sha256: str
     base_execution: ExecutionEvidence
     head_execution: ExecutionEvidence
     mechanical_status: MechanicalEvidenceStatus
     differential_pattern: DifferentialPattern
     mechanical_reason: str = Field(min_length=1, max_length=2_000)
+
+
+class EnvironmentReadinessEvidence(BaseModel):
+    """Durable setup result established before candidate-generation calls."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    status: EnvironmentReadinessStatus
+    reason: str = Field(min_length=1, max_length=2_000)
+
+    @classmethod
+    def from_domain(cls, result: EnvironmentReadiness) -> EnvironmentReadinessEvidence:
+        return cls(status=result.status, reason=result.reason[:2_000])
 
 
 class EvidenceReport(BaseModel):
@@ -186,8 +201,12 @@ class EvidenceReport(BaseModel):
     claim: BehavioralClaim | None
     claim_usage: ModelUsage
     claim_response_sha256: str
-    candidate_attempts: tuple[CandidateAttemptEvidence, ...] = Field(max_length=2)
-    candidate_evaluations: tuple[CandidateEvaluationEvidence, ...] = Field(max_length=2)
+    environment_readiness: EnvironmentReadinessEvidence | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    candidate_attempts: tuple[CandidateAttemptEvidence, ...] = Field(max_length=3)
+    candidate_evaluations: tuple[CandidateEvaluationEvidence, ...] = Field(max_length=3)
     selected_artifact_sha256: str | None
     base_execution: ExecutionEvidence | None
     head_execution: ExecutionEvidence | None
@@ -314,6 +333,24 @@ class EvidenceWorkflow:
             self._persist_terminal(run, report)
             return report
 
+        environment_readiness = self.challenge.prepare_environment(
+            base_ref=run.base_sha,
+            head_ref=run.head_sha,
+        )
+        readiness_evidence = EnvironmentReadinessEvidence.from_domain(environment_readiness)
+        if not environment_readiness.ready:
+            report = self._abstention_report(
+                run=run,
+                claim_result=claim_result,
+                attempts=(),
+                evaluations=(),
+                mechanical_status=MechanicalEvidenceStatus.ENVIRONMENTAL,
+                reason=environment_readiness.reason,
+                environment_readiness=readiness_evidence,
+            )
+            self._persist_terminal(run, report)
+            return report
+
         run = self._transition(run, RunTransition(phase=RunPhase.TEST_GENERATION))
         signature_context = self.context_retriever.retrieve_callable_signatures(
             head_sha=run.head_sha,
@@ -337,7 +374,7 @@ class EvidenceWorkflow:
         attempt = await generator.generate_initial()
         attempts.append(attempt)
 
-        for attempt_number in range(2):
+        for attempt_number in range(3):
             if attempt.validated is not None:
                 self._require_current(self.store.get_run(run_id))
                 run = self._advance_for_execution(run)
@@ -357,6 +394,21 @@ class EvidenceWorkflow:
                 evaluations.append(self._evaluation_evidence(attempt.sequence, challenge))
                 if run.phase is not RunPhase.ASSESSMENT:
                     run = self._transition(run, RunTransition(phase=RunPhase.ASSESSMENT))
+                setup_failure = self._candidate_environment_failure(challenge)
+                if setup_failure is not None:
+                    readiness_evidence = EnvironmentReadinessEvidence.from_domain(setup_failure)
+                    report = self._abstention_report(
+                        run=run,
+                        claim_result=claim_result,
+                        attempts=tuple(attempts),
+                        evaluations=tuple(evaluations),
+                        mechanical_status=MechanicalEvidenceStatus.ENVIRONMENTAL,
+                        reason=setup_failure.reason,
+                        challenge=challenge,
+                        environment_readiness=readiness_evidence,
+                    )
+                    self._persist_terminal(run, report)
+                    return report
                 if (
                     challenge.assessment.mechanical_status
                     is MechanicalEvidenceStatus.DISCRIMINATING
@@ -374,11 +426,12 @@ class EvidenceWorkflow:
                         evaluations=tuple(evaluations),
                         challenge=challenge,
                         semantic_result=semantic_result,
+                        environment_readiness=readiness_evidence,
                     )
                     self._persist_terminal(run, report)
                     return report
 
-            if attempt_number == 1:
+            if attempt_number == 2:
                 break
             feedback = self._repair_feedback(attempt=attempt, challenge=challenge)
             attempt = await generator.repair(feedback=feedback)
@@ -393,7 +446,7 @@ class EvidenceWorkflow:
         reason = (
             challenge.assessment.reason
             if challenge is not None
-            else "Both bounded candidate attempts failed deterministic validation."
+            else "All three bounded candidate attempts failed deterministic validation."
         )
         report = self._abstention_report(
             run=run,
@@ -403,6 +456,7 @@ class EvidenceWorkflow:
             mechanical_status=status,
             reason=reason,
             challenge=challenge,
+            environment_readiness=readiness_evidence,
         )
         self._persist_terminal(run, report)
         return report
@@ -436,6 +490,7 @@ class EvidenceWorkflow:
         evaluations: tuple[CandidateEvaluationEvidence, ...],
         challenge: ChallengeResult,
         semantic_result: SemanticAssessmentResult,
+        environment_readiness: EnvironmentReadinessEvidence,
     ) -> EvidenceReport:
         claim = claim_result.selection.claim
         assert claim is not None
@@ -451,6 +506,7 @@ class EvidenceWorkflow:
             claim=claim,
             claim_usage=claim_result.usage,
             claim_response_sha256=claim_result.raw_response_sha256,
+            environment_readiness=environment_readiness,
             candidate_attempts=tuple(self._attempt_evidence(item) for item in attempts),
             candidate_evaluations=evaluations,
             selected_artifact_sha256=challenge.artifact.sha256,
@@ -475,6 +531,7 @@ class EvidenceWorkflow:
         mechanical_status: MechanicalEvidenceStatus,
         reason: str,
         challenge: ChallengeResult | None = None,
+        environment_readiness: EnvironmentReadinessEvidence | None = None,
     ) -> EvidenceReport:
         return EvidenceReport(
             run_id=run.run_id,
@@ -486,6 +543,7 @@ class EvidenceWorkflow:
             claim=claim_result.selection.claim,
             claim_usage=claim_result.usage,
             claim_response_sha256=claim_result.raw_response_sha256,
+            environment_readiness=environment_readiness,
             candidate_attempts=tuple(self._attempt_evidence(item) for item in attempts),
             candidate_evaluations=evaluations,
             selected_artifact_sha256=challenge.artifact.sha256 if challenge else None,
@@ -505,6 +563,24 @@ class EvidenceWorkflow:
             ),
             created_at=self._now(),
         )
+
+    @staticmethod
+    def _candidate_environment_failure(
+        challenge: ChallengeResult,
+    ) -> EnvironmentReadiness | None:
+        if challenge.base.status is TestExecutionStatus.ENVIRONMENT_SETUP_FAILED:
+            detail = challenge.base.detail or "repository-declared setup failed"
+            return EnvironmentReadiness(
+                status=EnvironmentReadinessStatus.BASE_SETUP_FAILED,
+                reason=f"BASE repository environment setup failed: {detail}"[:2_000],
+            )
+        if challenge.head.status is TestExecutionStatus.ENVIRONMENT_SETUP_FAILED:
+            detail = challenge.head.detail or "repository-declared setup failed"
+            return EnvironmentReadiness(
+                status=EnvironmentReadinessStatus.HEAD_SETUP_FAILED,
+                reason=f"HEAD repository environment setup failed: {detail}"[:2_000],
+            )
+        return None
 
     def _advance_for_execution(self, run: VerificationRun) -> VerificationRun:
         if run.phase is RunPhase.TEST_GENERATION:

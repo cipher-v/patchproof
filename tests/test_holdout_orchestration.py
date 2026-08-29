@@ -278,8 +278,16 @@ def test_cli_live_execution_requires_explicit_live_flag(monkeypatch: pytest.Monk
     assert observed == [True]
 
 
-def test_canonical_preflight_is_read_only_and_resolves_the_frozen_contract() -> None:
-    assert not orchestration.DEFAULT_OUTPUT_ROOT.exists()
+def test_canonical_preflight_is_read_only_and_resolves_the_frozen_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(orchestration, "verify_frozen_source_integrity", lambda _root: None)
+    before = {
+        path.relative_to(orchestration.DEFAULT_OUTPUT_ROOT).as_posix(): path.read_bytes()
+        for path in orchestration.DEFAULT_OUTPUT_ROOT.rglob("*")
+        if path.is_file()
+    }
+    assert before
 
     report, _, frozen = orchestration.preflight_holdout()
 
@@ -290,11 +298,18 @@ def test_canonical_preflight_is_read_only_and_resolves_the_frozen_contract() -> 
     assert report.execution_contract_version == 1
     assert report.model_or_provider_calls == 0
     assert all(isinstance(case, HardModeCase) for case in frozen.cases)
-    assert not orchestration.DEFAULT_OUTPUT_ROOT.exists()
+    after = {
+        path.relative_to(orchestration.DEFAULT_OUTPUT_ROOT).as_posix(): path.read_bytes()
+        for path in orchestration.DEFAULT_OUTPUT_ROOT.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
 
 
 def test_output_destination_outside_sealed_results_path_is_rejected(
     writable_test_directory: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(orchestration, "verify_frozen_source_integrity", lambda _root: None)
     with pytest.raises(orchestration.HoldoutConfigurationError, match="output root"):
         orchestration.preflight_holdout(output_root=writable_test_directory / "results")

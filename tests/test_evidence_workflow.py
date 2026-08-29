@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import sys
 from collections import deque
 from datetime import UTC, datetime
@@ -31,6 +32,7 @@ from patchproof.claim_agent import (
 from patchproof.context_retrieval import DeterministicContextRetriever
 from patchproof.evidence_workflow import (
     AssertionRelation,
+    EvidenceReport,
     EvidenceWorkflow,
     SemanticAssessmentResult,
     SemanticEvidenceDecision,
@@ -48,6 +50,8 @@ from patchproof.github_checks import (
 from patchproof.models import (
     ClaimOutcome,
     DifferentialPattern,
+    EnvironmentReadiness,
+    EnvironmentReadinessStatus,
     MechanicalEvidenceStatus,
     TestExecutionStatus,
 )
@@ -140,10 +144,33 @@ class CountingChallenge:
         self.inner = challenge
         self.runner = challenge.runner
         self.calls = 0
+        self.readiness_calls = 0
+
+    def prepare_environment(self, **kwargs):
+        self.readiness_calls += 1
+        return self.inner.prepare_environment(**kwargs)
 
     def run(self, **kwargs):
         self.calls += 1
         return self.inner.run(**kwargs)
+
+
+class FixedReadinessChallenge:
+    def __init__(self, *, contract, readiness: EnvironmentReadiness) -> None:
+        self.runner = SimpleNamespace(contract=contract, install_dependencies=True)
+        self.readiness = readiness
+        self.readiness_calls = 0
+        self.calls = 0
+
+    def prepare_environment(self, **kwargs):
+        del kwargs
+        self.readiness_calls += 1
+        return self.readiness
+
+    def run(self, **kwargs):
+        del kwargs
+        self.calls += 1
+        raise AssertionError("candidate execution must not start when setup is not ready")
 
 
 def _claim_selection(retriever: DeterministicContextRetriever, history) -> ClaimSelection:
@@ -327,6 +354,10 @@ def test_non_discriminating_candidate_repairs_then_persists_and_publication_retr
     claim_model = FakeClaimModel(_claim_selection(retriever, history))
     candidate_model = FakeCandidateModel(
         _proposal("candidate-non-discriminating", ["org/team/project", "org"]),
+        _proposal(
+            "candidate-still-non-discriminating",
+            ["org/team/project", "org/team", "org"],
+        ),
         _proposal("candidate-repaired-order", ["org", "org/team/project"]),
     )
     assessor = FakeAssessor()
@@ -371,20 +402,26 @@ def test_non_discriminating_candidate_repairs_then_persists_and_publication_retr
     report = asyncio.run(workflow.execute(run_id=run.run_id))
 
     assert claim_model.calls == 1
-    assert candidate_model.calls == 2
-    assert challenge.calls == 2
+    assert candidate_model.calls == 3
+    assert challenge.calls == 3
+    assert challenge.readiness_calls == 1
     assert assessor.calls == 1
     assert report.mechanical_status is MechanicalEvidenceStatus.DISCRIMINATING
     assert report.claim_outcome is ClaimOutcome.CLAIM_SUPPORTED_FOR_SCENARIO
     assert report.base_execution.status == "ASSERTION_FAILED"
     assert report.head_execution.status == "PASSED"
     assert report.candidate_attempts[1].parent_candidate_id == "candidate-initial"
-    assert len(report.candidate_evaluations) == 2
+    assert report.candidate_attempts[2].parent_candidate_id == "candidate-repair-1"
+    assert len(report.candidate_evaluations) == 3
     assert (
         report.candidate_evaluations[0].mechanical_status
         is MechanicalEvidenceStatus.NON_DISCRIMINATING
     )
     assert store.get_evidence(run.run_id).sha256 == report.sha256
+    legacy_document = report.model_dump(mode="json")
+    legacy_document.pop("environment_readiness")
+    legacy_json = json.dumps(legacy_document, separators=(",", ":"))
+    assert EvidenceReport.model_validate_json(legacy_json).canonical_json == legacy_json
     with pytest.raises(StoredEvidenceConflictError):
         replacement = '{"replacement":true}'
         store.save_evidence(
@@ -400,8 +437,8 @@ def test_non_discriminating_candidate_repairs_then_persists_and_publication_retr
     assert replay == report
     assert (claim_model.calls, candidate_model.calls, challenge.calls, assessor.calls) == (
         1,
-        2,
-        2,
+        3,
+        3,
         1,
     )
 
@@ -431,8 +468,8 @@ def test_non_discriminating_candidate_repairs_then_persists_and_publication_retr
     assert store.get_run(run.run_id).publication_state is PublicationState.RETRYABLE_FAILURE
     assert (claim_model.calls, candidate_model.calls, challenge.calls, assessor.calls) == (
         1,
-        2,
-        2,
+        3,
+        3,
         1,
     )
 
@@ -449,8 +486,8 @@ def test_non_discriminating_candidate_repairs_then_persists_and_publication_retr
     assert requests[3].url.path == "/repos/owner/repository/check-runs/77"
     assert (claim_model.calls, candidate_model.calls, challenge.calls, assessor.calls) == (
         1,
-        2,
-        2,
+        3,
+        3,
         1,
     )
 
@@ -521,6 +558,7 @@ def test_claim_abstention_is_terminal_without_candidate_model_or_pytest(
     assert report.candidate_attempts == ()
     assert report.candidate_evaluations == ()
     assert report.base_execution is report.head_execution is None
+    assert challenge.readiness_calls == 0
     assert (claim_model.calls, candidate_model.calls, challenge.calls, assessor.calls) == (
         1,
         0,
@@ -528,6 +566,61 @@ def test_claim_abstention_is_terminal_without_candidate_model_or_pytest(
         0,
     )
     assert store.get_run(run.run_id).publication_state is PublicationState.PENDING
+
+
+def test_environment_failure_abstains_without_candidate_or_repair_calls(
+    context_repository_history: ContextRepositoryHistory,
+    writable_test_directory: Path,
+) -> None:
+    history = context_repository_history
+    retriever = DeterministicContextRetriever(source_repository=history.path)
+    claim_model = FakeClaimModel(_claim_selection(retriever, history))
+    candidate_model = FakeCandidateModel()
+    assessor = FakeAssessor()
+    contract = ExecutionContractLoader().load(history.path)
+    challenge = FixedReadinessChallenge(
+        contract=contract,
+        readiness=EnvironmentReadiness(
+            status=EnvironmentReadinessStatus.BASE_SETUP_FAILED,
+            reason="BASE repository environment setup failed: dependency installation failed",
+        ),
+    )
+    store = SqliteVerificationRunStore(writable_test_directory / "environment-failure.db")
+    run = store.accept_pull_request(
+        PullRequestEvent(
+            delivery_id="phase-5-environment-failure",
+            action="opened",
+            repository="owner/repository",
+            pr_number=19,
+            base_sha=history.base_sha,
+            head_sha=history.head_sha,
+            head_updated_at=datetime(2026, 8, 24, 10, 0, tzinfo=UTC),
+        )
+    ).run
+    workflow = EvidenceWorkflow(
+        store=store,
+        context_retriever=retriever,
+        claim_agent=BehavioralClaimAgent(model=claim_model),
+        candidate_model=candidate_model,
+        challenge=challenge,
+        assessor=assessor,
+    )
+
+    report = asyncio.run(workflow.execute(run_id=run.run_id))
+
+    assert report.mechanical_status is MechanicalEvidenceStatus.ENVIRONMENTAL
+    assert report.claim_outcome is ClaimOutcome.INSUFFICIENT_EVIDENCE
+    assert report.environment_readiness is not None
+    assert report.environment_readiness.status is EnvironmentReadinessStatus.BASE_SETUP_FAILED
+    assert report.candidate_attempts == ()
+    assert report.candidate_evaluations == ()
+    assert (claim_model.calls, candidate_model.calls, challenge.calls, assessor.calls) == (
+        1,
+        0,
+        0,
+        0,
+    )
+    assert challenge.readiness_calls == 1
 
 
 def test_github_app_provider_mints_and_caches_short_lived_installation_token(

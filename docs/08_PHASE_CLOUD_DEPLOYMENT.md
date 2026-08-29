@@ -83,15 +83,18 @@ validates token signature, audience, issuer, verified email, and exact service-a
 
 ### Private executor
 
-The strict executor request contains an allowlisted GitHub repository and PR number, full BASE and
-HEAD SHAs, validated `ExecutionContract`, test path/node/source, and artifact SHA-256. The executor:
+The control plane first sends a candidate-free environment-readiness request containing an
+allowlisted GitHub repository and PR number, full BASE and HEAD SHAs, and validated
+`ExecutionContract`. Candidate challenge requests add only the test path/node/source and artifact
+SHA-256. The executor:
 
 1. derives the public GitHub URL rather than accepting one;
 2. fetches the official PR ref and BASE commit;
 3. requires the fetched PR HEAD to equal the webhook SHA;
 4. loads `.patchproof.yaml` from both trees and compares both with the request;
-5. runs the existing bounded challenge in disposable worktrees; and
-6. returns bounded facts and mechanical classification.
+5. validates repository-declared setup on both revisions before candidate generation;
+6. runs each bounded challenge in disposable worktrees; and
+7. returns bounded readiness or execution facts and mechanical classification.
 
 Artifact hashes are checked on both sides. Cloud Run IAM keeps the service private; control calls
 it with a short-lived audience-bound Google identity token. Executor deployment has no Secret

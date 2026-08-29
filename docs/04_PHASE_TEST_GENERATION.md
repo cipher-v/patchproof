@@ -179,12 +179,12 @@ the artifact before and after each execution and rejects drift.
 
 ```text
 initial calls <= 1
-repair calls  <= 1
-total calls   <= 2
+repair calls  <= 2
+total calls   <= 3
 ```
 
 The initial slot is consumed before awaiting the provider. A second initial call, repair before a
-completed initial attempt, concurrent invocation, third total call, or second repair is rejected
+completed initial attempt, concurrent invocation, fourth total call, or third repair is rejected
 before another model call. Provider failure also consumes its call slot; reliability retries are
 not silently introduced here.
 
@@ -234,7 +234,7 @@ validated .patchproof.yaml + committed path set
          +-------------+-------------+
                        v
           CandidateGenerationSnapshot
-          at most two total attempts
+          at most three total attempts
 ```
 
 Nothing in this flow runs installation commands, repository code, or generated code. The existing
@@ -256,7 +256,7 @@ runner is contract-bound, but Phase 5 owns the end-to-end execution decision.
 | Response/input exceeds character budget | Response rejected or call prevented respectively. |
 | Duplicate candidate ID during repair | Rejected with a structured issue. |
 | Repair before initial, duplicate initial, concurrent call | State error before Gemini. |
-| Third call or second repair | `CandidateBudgetExceeded` before Gemini. |
+| Fourth call or third repair | `CandidateBudgetExceeded` before Gemini. |
 | ADK/provider/session failure | Normalized invocation error; no fabricated candidate. |
 | Runner receives artifact outside contract | `INVALID_ARTIFACT` on each revision. |
 

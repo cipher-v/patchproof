@@ -24,6 +24,7 @@ _ENVIRONMENTAL_STATUSES = {
     TestExecutionStatus.COLLECTION_ERROR,
     TestExecutionStatus.TEST_ERROR,
     TestExecutionStatus.TIMED_OUT,
+    TestExecutionStatus.ENVIRONMENT_SETUP_FAILED,
     TestExecutionStatus.PROCESS_ERROR,
 }
 

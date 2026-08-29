@@ -13,11 +13,14 @@ weak evidence, and publish a conservative claim-scoped report.
 PatchProof reads
 immutable BASE/HEAD Git objects, derives changed Python symbols with the AST, and ranks bounded
 diff, source, test, import, and reference evidence. One logical stateless, tool-free Google ADK
-agent using Gemini 3.6 Flash may select one grounded claim and propose one structured pytest
-candidate. Deterministic validation enforces the repository's `.patchproof.yaml`, target path,
+agent using Gemini 3.6 Flash may select one grounded claim and propose up to three structured
+pytest candidates (one initial plus two repairs). Deterministic validation enforces the
+repository's `.patchproof.yaml`, target path,
 syntax, collection shape, imports, selected unsafe calls, immutable bytes, and artifact hash. It
-installs from validated argument arrays, challenges identical bytes on BASE and HEAD, self-rejects
-weak evidence, permits one repair, persists content-addressed provenance, and can publish one
+establishes repository-declared setup readiness on both immutable revisions before candidate
+generation, installs only from validated argument arrays, challenges identical bytes on BASE and
+HEAD, self-rejects weak evidence, permits two repairs, persists content-addressed provenance, and
+can publish one
 retry-safe GitHub Check through a GitHub App installation token. Repository child processes now
 receive a credential-minimized environment, bounded output capture, and process-tree timeouts;
 semantic calls have one explicit transient retry; and worker failures terminate durably with
@@ -68,9 +71,14 @@ screenshots remain pending because the available capture tool requires a newer N
 
 ## Supported scope
 
-The frozen hackathon scope is GitHub, explicitly allowlisted public repositories, pure Python,
-pytest, and deterministic unit or small integration tests. PatchProof is not intended to prove
-whole-PR correctness, replace review, or safely execute arbitrary malicious repositories.
+The supported product scope is GitHub, explicitly allowlisted public repositories, Python 3.12,
+pytest, and deterministic unit or small integration tests. A repository must be deliberately
+onboarded with a committed `.patchproof.yaml` that is valid and identical on BASE and HEAD. Its
+declared package manager resolves locked dependencies; PatchProof validates and executes only the
+allowlisted argument arrays and never guesses installation commands. Missing, mismatched, or
+failed environment setup produces a conservative abstention before candidate generation.
+PatchProof is not intended to prove whole-PR correctness, replace review, or safely execute
+arbitrary malicious repositories.
 
 ## Local setup
 

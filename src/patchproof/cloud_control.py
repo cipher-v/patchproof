@@ -25,6 +25,8 @@ from patchproof.claim_agent import BehavioralClaimAgent
 from patchproof.cloud_executor import (
     ExecutorChallengeRequest,
     ExecutorChallengeResponse,
+    ExecutorEnvironmentRequest,
+    ExecutorEnvironmentResponse,
 )
 from patchproof.cloud_tasks import CloudTasksDispatcherSettings, CloudTasksRunDispatcher
 from patchproof.context_retrieval import DeterministicContextRetriever
@@ -45,7 +47,7 @@ from patchproof.github_checks import (
     GitHubChecksClient,
     GitHubCheckTerminalError,
 )
-from patchproof.models import ChallengeResult, ExecutionResult, TestArtifact
+from patchproof.models import ChallengeResult, EnvironmentReadiness, ExecutionResult, TestArtifact
 from patchproof.reliable_worker import EvidenceWorkerError, ReliableEvidenceWorker
 from patchproof.storage import VerificationRunStore
 from patchproof.workflow import normalize_repository_name
@@ -137,6 +139,30 @@ class RemoteBaseHeadChallenge:
         self.tokens = tokens
         self.client = client or httpx.Client(timeout=950.0)
         self.runner = _RemoteRunnerContract(contract=contract)
+
+    def prepare_environment(self, *, base_ref: str, head_ref: str) -> EnvironmentReadiness:
+        request = ExecutorEnvironmentRequest(
+            repository=self.repository,
+            pull_request_number=self.pull_request_number,
+            base_sha=base_ref,
+            head_sha=head_ref,
+            contract=self.runner.contract,
+        )
+        token = self.tokens.token(self.executor_url)
+        try:
+            response = self.client.post(
+                f"{self.executor_url}/internal/environment-readiness",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                content=request.model_dump_json(),
+            )
+        except (httpx.TimeoutException, httpx.NetworkError) as error:
+            raise RuntimeError("private executor is temporarily unavailable") from error
+        if not 200 <= response.status_code < 300:
+            raise RuntimeError(f"private executor returned HTTP {response.status_code}")
+        return ExecutorEnvironmentResponse.model_validate_json(response.content).to_domain()
 
     def run(
         self,

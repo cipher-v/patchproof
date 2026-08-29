@@ -8,12 +8,15 @@ from patchproof.cloud_executor import (
     ExecutionResultDocument,
     ExecutorChallengeRequest,
     ExecutorChallengeResponse,
+    ExecutorEnvironmentRequest,
+    ExecutorEnvironmentResponse,
     artifact_digest,
     create_executor_app,
 )
 from patchproof.execution_contract import ExecutionContract
 from patchproof.models import (
     DifferentialPattern,
+    EnvironmentReadinessStatus,
     MechanicalEvidenceStatus,
     RevisionRole,
     TestExecutionStatus,
@@ -87,6 +90,15 @@ class StubExecutor:
         self.error = error
         self.requests = []
 
+    def prepare_environment(self, request):
+        self.requests.append(request)
+        if self.error:
+            raise self.error
+        return ExecutorEnvironmentResponse(
+            status=EnvironmentReadinessStatus.READY,
+            reason="repository-declared setup completed on BASE and HEAD",
+        )
+
     def execute(self, request):
         self.requests.append(request)
         if self.error:
@@ -117,6 +129,26 @@ def test_executor_api_validates_and_delegates_bounded_request() -> None:
     assert response.status_code == 200
     assert len(executor.requests) == 1
     assert executor.requests[0].repository == "owner/repo"
+
+
+def test_executor_api_prepares_environment_without_candidate_data() -> None:
+    executor = StubExecutor(result=response_document())
+    request = ExecutorEnvironmentRequest(
+        repository="Owner/Repo",
+        pull_request_number=4,
+        base_sha="a" * 40,
+        head_sha="b" * 40,
+        contract=contract(),
+    )
+
+    response = TestClient(create_executor_app(executor=executor)).post(
+        "/internal/environment-readiness", json=request.model_dump(mode="json")
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "READY"
+    assert len(executor.requests) == 1
+    assert not hasattr(executor.requests[0], "artifact_source")
 
 
 def test_executor_api_fails_closed_without_leaking_internal_error() -> None:

@@ -99,8 +99,8 @@ PR title/body + optional linked-issue excerpts
  TestArtifact    bounded feedback
  SHA-256             |
        |             v
-       |       optional one repair
-       |       second/final model call
+       |       up to two repairs
+       |       second/third model calls
        +-------------+
              |
              v
@@ -108,11 +108,15 @@ PR title/body + optional linked-issue excerpts
  parent ID/hash + model usage + response hash
              |
              v
- credential-minimized bounded process runner
- validated install + identical BASE/HEAD replay
+ repository environment readiness
+ identical validated setup on BASE and HEAD
              |
              v
- mechanical self-rejection -> optional one repair
+ credential-minimized bounded process runner
+ identical candidate bytes on BASE/HEAD
+             |
+             v
+ mechanical self-rejection -> next bounded repair
              |
              v
  constrained semantic relevance assessment
@@ -131,8 +135,10 @@ test is opt-in and successfully returned a real structured Gemini response.
 
 Candidate proposals contain source and audit rationale, never commands. The workflow reads the
 same contract from both immutable trees, derives committed paths from HEAD, and requires the
-executor to hold that contract. Validated install arrays and pytest commands execute without a
-shell. Every candidate execution and semantic/model provenance record is content-addressed.
+executor to hold that contract. Before candidate generation, the executor establishes BASE/HEAD
+readiness using only validated install arrays. Setup failure abstains and cannot trigger repair.
+Validated install arrays and pytest commands execute without a shell. Every candidate execution
+and semantic/model provenance record is content-addressed.
 
 Installation and pytest child processes receive an explicit environment allowlist with isolated
 home/cache/temp paths, never a copy of the control-plane environment. Output is drained into

@@ -406,7 +406,7 @@ def test_candidate_schema_rejects_extra_dot_that_breaks_pytest_module_import() -
         CandidateTestProposal.model_validate(document)
 
 
-def test_one_repair_records_parent_lineage_and_exhausts_two_call_budget(
+def test_two_repairs_record_immediate_parent_lineage_and_exhaust_three_call_budget(
     context_repository_history: ContextRepositoryHistory,
 ) -> None:
     initial_draft = _draft()
@@ -417,9 +417,17 @@ def test_one_repair_records_parent_lineage_and_exhausts_two_call_budget(
         ),
         rationale="Repairs the prior assertion while preserving the same observable behavior.",
     )
+    second_repair_draft = _draft(
+        source=initial_draft.source.replace(
+            "['org', 'org/team', 'org/team/project']",
+            "['org/team', 'org', 'org/team/project']",
+        ),
+        rationale="Uses a third ordering to address the immediately preceding result.",
+    )
     model = FakeCandidateModel(
         initial_draft.model_dump_json(),
         repaired_draft.model_dump_json(),
+        second_repair_draft.model_dump_json(),
     )
     generator = _generator(model=model, context=_context(context_repository_history))
     initial = asyncio.run(generator.generate_initial())
@@ -430,20 +438,35 @@ def test_one_repair_records_parent_lineage_and_exhausts_two_call_budget(
     )
 
     repaired = asyncio.run(generator.repair(feedback=feedback))
+    second_feedback = CandidateFeedback(
+        category="EXECUTION",
+        summary="The first repair still did not distinguish the revisions.",
+        observations=("Repair one passed on both revisions.",),
+    )
+    second_repair = asyncio.run(generator.repair(feedback=second_feedback))
 
     assert initial.validated is not None
     assert repaired.status is CandidateAttemptStatus.VALIDATED
     assert repaired.origin is CandidateOrigin.REPAIR
     assert repaired.parent_candidate_id == "candidate-initial"
     assert repaired.parent_artifact_sha256 == initial.validated.artifact.sha256
-    assert generator.snapshot.model_calls == 2
+    assert generator.snapshot.model_calls == 3
     assert generator.snapshot.repair_used
-    assert len(generator.snapshot.attempts) == 2
+    assert generator.snapshot.repair_count == 2
+    assert len(generator.snapshot.attempts) == 3
     assert model.requests[1].previous_candidate == initial.proposal
     assert repaired.proposal is not None
-    assert repaired.proposal.candidate_id == "candidate-repair"
-    assert repaired.proposal.target_path.endswith("test_patchproof_generated_repair.py")
+    assert repaired.proposal.candidate_id == "candidate-repair-1"
+    assert repaired.proposal.target_path.endswith("test_patchproof_generated_repair_1.py")
     assert model.requests[1].feedback == feedback
+    assert second_repair.sequence == 3
+    assert second_repair.parent_candidate_id == "candidate-repair-1"
+    assert second_repair.parent_artifact_sha256 == repaired.validated.artifact.sha256
+    assert second_repair.proposal is not None
+    assert second_repair.proposal.candidate_id == "candidate-repair-2"
+    assert second_repair.proposal.target_path.endswith("test_patchproof_generated_repair_2.py")
+    assert model.requests[2].previous_candidate == repaired.proposal
+    assert model.requests[2].feedback == second_feedback
     with pytest.raises(CandidateBudgetExceeded):
         asyncio.run(generator.repair(feedback=feedback))
 
@@ -459,6 +482,13 @@ def test_byte_identical_repair_source_is_rejected_without_an_executable_artifact
     model = FakeCandidateModel(
         initial_draft.model_dump_json(),
         duplicate_repair.model_dump_json(),
+        _draft(
+            source=initial_draft.source.replace(
+                "['org', 'org/team', 'org/team/project']",
+                "['org/team', 'org', 'org/team/project']",
+            ),
+            rationale="Changes behavior after the rejected byte-identical repair.",
+        ).model_dump_json(),
     )
     generator = _generator(model=model, context=_context(context_repository_history))
     initial = asyncio.run(generator.generate_initial())
@@ -477,6 +507,13 @@ def test_byte_identical_repair_source_is_rejected_without_an_executable_artifact
     assert repaired.issues[0].code is CandidateIssueCode.DUPLICATE_CANDIDATE_SOURCE
     assert generator.snapshot.model_calls == 2
     assert generator.snapshot.repair_used is True
+    second_repair = asyncio.run(generator.repair(feedback=feedback))
+    assert second_repair.sequence == 3
+    assert second_repair.parent_candidate_id == "candidate-repair-1"
+    assert second_repair.parent_artifact_sha256 is None
+    assert second_repair.status is CandidateAttemptStatus.VALIDATED
+    assert generator.snapshot.model_calls == 3
+    assert generator.snapshot.repair_count == 2
     with pytest.raises(CandidateBudgetExceeded):
         asyncio.run(generator.repair(feedback=feedback))
 

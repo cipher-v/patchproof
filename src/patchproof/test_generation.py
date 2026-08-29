@@ -28,6 +28,8 @@ _TEST_FILENAME_PATTERN = re.compile(r"test_[a-zA-Z0-9_]+\.py")
 _DIAGNOSTIC_FIELD_PATTERN = re.compile(r"[^A-Za-z0-9_.\-\[\]$]")
 _CANDIDATE_DRAFT_FIELDS = frozenset({"source", "rationale"})
 _GENERATED_TEST_FUNCTION = "test_patchproof_generated_behavior"
+_MAX_CANDIDATE_MODEL_CALLS = 3
+_MAX_REPAIRS = 2
 _BLOCKED_IMPORT_ROOTS = {
     "asyncio.subprocess",
     "ctypes",
@@ -591,7 +593,12 @@ class CandidateGenerationSnapshot:
 
     attempts: tuple[CandidateAttempt, ...]
     model_calls: int
-    repair_used: bool
+    repair_count: int
+
+    @property
+    def repair_used(self) -> bool:
+        """Backward-compatible indication that at least one repair was consumed."""
+        return self.repair_count > 0
 
     @property
     def latest_validated(self) -> ValidatedCandidate | None:
@@ -602,7 +609,7 @@ class CandidateGenerationSnapshot:
 
 
 class CandidateBudgetExceeded(RuntimeError):
-    """Raised before a third candidate or second repair model call can occur."""
+    """Raised before a fourth candidate or third repair model call can occur."""
 
 
 class CandidateGenerationStateError(RuntimeError):
@@ -775,7 +782,7 @@ class CandidateTestValidator:
 
 
 class BoundedCandidateTestGenerator:
-    """Consume at most two model calls: one initial candidate and one repair."""
+    """Consume at most three model calls: one initial candidate and two repairs."""
 
     def __init__(
         self,
@@ -804,7 +811,7 @@ class BoundedCandidateTestGenerator:
         self._attempts: list[CandidateAttempt] = []
         self._model_calls = 0
         self._initial_started = False
-        self._repair_used = False
+        self._repair_count = 0
         self._invoking = False
 
     @property
@@ -812,7 +819,7 @@ class BoundedCandidateTestGenerator:
         return CandidateGenerationSnapshot(
             attempts=tuple(self._attempts),
             model_calls=self._model_calls,
-            repair_used=self._repair_used,
+            repair_count=self._repair_count,
         )
 
     async def generate_initial(self) -> CandidateAttempt:
@@ -823,12 +830,12 @@ class BoundedCandidateTestGenerator:
         return await self._invoke(origin=CandidateOrigin.INITIAL, feedback=None)
 
     async def repair(self, *, feedback: CandidateFeedback) -> CandidateAttempt:
-        """Use the single repair slot with bounded feedback from the prior attempt."""
+        """Use one of two repair slots with bounded feedback from the prior attempt."""
         if not self._attempts:
             raise CandidateGenerationStateError("repair requires a completed initial attempt")
-        if self._repair_used or self._model_calls >= 2:
+        if self._repair_count >= _MAX_REPAIRS or self._model_calls >= _MAX_CANDIDATE_MODEL_CALLS:
             raise CandidateBudgetExceeded("candidate repair budget is exhausted")
-        self._repair_used = True
+        self._repair_count += 1
         return await self._invoke(origin=CandidateOrigin.REPAIR, feedback=feedback)
 
     async def _invoke(
@@ -836,7 +843,7 @@ class BoundedCandidateTestGenerator:
     ) -> CandidateAttempt:
         if self._invoking:
             raise CandidateGenerationStateError("candidate model invocation already in progress")
-        if self._model_calls >= 2:
+        if self._model_calls >= _MAX_CANDIDATE_MODEL_CALLS:
             raise CandidateBudgetExceeded("candidate model-call budget is exhausted")
         previous = self._attempts[-1] if self._attempts else None
         request = CandidateModelRequest(
@@ -892,13 +899,17 @@ class BoundedCandidateTestGenerator:
                     validation_error=error,
                 )
             else:
-                suffix = "initial" if origin is CandidateOrigin.INITIAL else "repair"
+                if origin is CandidateOrigin.INITIAL:
+                    candidate_suffix = path_suffix = "initial"
+                else:
+                    candidate_suffix = f"repair-{self._repair_count}"
+                    path_suffix = f"repair_{self._repair_count}"
                 try:
                     proposal = CandidateTestProposal(
-                        candidate_id=f"candidate-{suffix}",
+                        candidate_id=f"candidate-{candidate_suffix}",
                         target_path=(
                             f"{self.contract.allowed_test_paths[0]}"
-                            f"test_patchproof_generated_{suffix}.py"
+                            f"test_patchproof_generated_{path_suffix}.py"
                         ),
                         test_function=_GENERATED_TEST_FUNCTION,
                         source=draft.source,
@@ -954,9 +965,8 @@ class BoundedCandidateTestGenerator:
                         if (
                             origin is CandidateOrigin.REPAIR
                             and previous is not None
-                            and previous.validated is not None
-                            and validated.behavior_fingerprint
-                            == previous.validated.behavior_fingerprint
+                            and previous.behavior_fingerprint is not None
+                            and validated.behavior_fingerprint == previous.behavior_fingerprint
                         ):
                             issue = CandidateValidationIssue(
                                 code=CandidateIssueCode.NO_BEHAVIORAL_REPAIR_CHANGE,

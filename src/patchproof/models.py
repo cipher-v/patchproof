@@ -95,7 +95,28 @@ class TestExecutionStatus(StrEnum):
     XPASSED = "XPASSED"
     INVALID_ARTIFACT = "INVALID_ARTIFACT"
     TIMED_OUT = "TIMED_OUT"
+    ENVIRONMENT_SETUP_FAILED = "ENVIRONMENT_SETUP_FAILED"
     PROCESS_ERROR = "PROCESS_ERROR"
+
+
+class EnvironmentReadinessStatus(StrEnum):
+    """Deterministic readiness of the immutable BASE/HEAD repository environments."""
+
+    READY = "READY"
+    BASE_SETUP_FAILED = "BASE_SETUP_FAILED"
+    HEAD_SETUP_FAILED = "HEAD_SETUP_FAILED"
+
+
+@dataclass(frozen=True, slots=True)
+class EnvironmentReadiness:
+    """Result of validating repository-declared setup before candidate generation."""
+
+    status: EnvironmentReadinessStatus
+    reason: str
+
+    @property
+    def ready(self) -> bool:
+        return self.status is EnvironmentReadinessStatus.READY
 
 
 @dataclass(frozen=True, slots=True)

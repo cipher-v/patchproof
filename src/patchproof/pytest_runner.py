@@ -253,7 +253,7 @@ class PytestRunner:
                 return self._early_result(
                     revision=revision,
                     artifact=artifact,
-                    status=TestExecutionStatus.PROCESS_ERROR,
+                    status=TestExecutionStatus.ENVIRONMENT_SETUP_FAILED,
                     started_at=started_at,
                     detail=detail,
                     stdout=stdout,
@@ -373,6 +373,19 @@ class PytestRunner:
             )
         finally:
             shutil.rmtree(result_directory, ignore_errors=True)
+
+    def prepare_environment(self, *, workspace: Path) -> str | None:
+        """Run only the repository-declared setup and return a bounded failure reason."""
+        workspace = workspace.resolve()
+        if not workspace.is_dir():
+            return "revision workspace does not exist"
+        if not self.install_dependencies:
+            return "validated dependency installation is disabled"
+        installation_error = self._install(workspace)
+        if installation_error is None:
+            return None
+        detail, _stdout, _stderr, _exit_code = installation_error
+        return detail[:2_000]
 
     def _test_command(self, workspace: Path) -> tuple[str, ...]:
         """Use the repository environment after installation for `python -m pytest`."""

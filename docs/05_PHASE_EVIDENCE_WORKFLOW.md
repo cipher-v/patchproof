@@ -2,7 +2,7 @@
 
 **Status: COMPLETE.** Phase 5 connects an authenticated pull-request occurrence to immutable Git
 context, one grounded claim or abstention, bounded candidate generation, validated dependency
-installation, identical BASE/HEAD replay, self-rejection and one repair, constrained semantic
+installation readiness, identical BASE/HEAD replay, self-rejection and two repairs, constrained semantic
 assessment, append-only evidence persistence, and one claim-scoped GitHub Check.
 
 It does not deploy Cloud Tasks/Run/Firestore, clone arbitrary remote repositories, or claim a
@@ -16,10 +16,11 @@ authenticated PR webhook
   -> idempotent dispatcher(run_id)
   -> immutable BASE/HEAD context and matching .patchproof.yaml
   -> claim selection or typed abstention
+  -> BASE/HEAD repository setup readiness from the immutable contract
   -> candidate validation -> frozen install -> identical BASE/HEAD replay
   -> mechanical classification
        | discriminating -> bounded semantic relevance assessment
-       | otherwise      -> one repair, then abstain if still weak
+       | otherwise      -> at most two repairs, then abstain if still weak
   -> immutable evidence JSON + SHA-256
   -> terminal workflow result with publication=PENDING
   -> GitHub Check built only from stored evidence
@@ -30,14 +31,14 @@ pytest inline. Cloud Tasks will implement that boundary in Phase 8.
 
 ## Self-rejection, repair, and abstention
 
-The workflow permits one initial candidate and at most one repair. A validated candidate is
+The workflow permits one initial candidate and at most two repairs. A validated candidate is
 replayed on BASE and HEAD. `NON_DISCRIMINATING`, `INVALID_TEST`, and `ENVIRONMENTAL` evidence cannot
 become claim support. Only bounded status, pattern, and BASE/HEAD observations reach the repair
 call; raw logs do not.
 
-Every executed candidate remains in `candidate_evaluations`, including a first candidate rejected
-because both revisions passed. If the second candidate also fails to distinguish the revisions,
-the result is `INSUFFICIENT_EVIDENCE`; there is no third call or retry-until-green loop. A claim
+Every executed candidate remains in `candidate_evaluations`, including candidates rejected because
+both revisions passed. If the third candidate also fails to distinguish the revisions, the result
+is `INSUFFICIENT_EVIDENCE`; there is no fourth call or retry-until-green loop. A claim
 abstention terminates before generation, installation, or pytest.
 
 ## Mechanical and semantic boundary
@@ -57,7 +58,7 @@ Deterministic validation restricts the response:
 ## Immutable evidence provenance
 
 One content-addressed document stores run/revision identity; claim, citations, usage and response
-hash; both candidate attempts and parent lineage; source, validation issues, feedback and artifact
+hash; up to three candidate attempts and immediate-parent lineage; source, validation issues, feedback and artifact
 hashes; every executed candidate's BASE/HEAD facts, before/after hashes, bounded logs and mechanical
 classification; final semantic usage/response hash; and the claim-scoped conclusion.
 
@@ -69,13 +70,18 @@ without invoking Gemini or pytest.
 ## Validated installation and execution
 
 The workflow reads `.patchproof.yaml` from both immutable Git trees, requires exact equality, and
-requires the executor to hold that same parsed contract. It derives the complete bounded HEAD path
-set so generated source cannot overwrite a tracked file.
+requires the executor to hold that same parsed contract. Before any candidate-generation call, the
+executor materializes BASE and HEAD and runs only their repository-declared, allowlisted setup argv.
+BASE and HEAD setup failures have distinct stable readiness statuses and terminate as
+`INSUFFICIENT_EVIDENCE`; they are never sent to the model as repair feedback. It derives the
+complete bounded HEAD path set so generated source cannot overwrite a tracked file.
 
 For each detached revision, the runner executes only the validated installation argument arrays,
-without a shell, before candidate injection. Timeout, startup failure, or nonzero exit becomes an
-environmental `PROCESS_ERROR`, never assertion evidence. Phase 6 still owns resource isolation and
-child-environment minimization.
+without a shell, before candidate injection. Timeout, startup failure, or nonzero exit becomes
+`ENVIRONMENT_SETUP_FAILED`, never assertion evidence or candidate-repair feedback. The stateless
+remote executor revalidates setup for isolated challenge requests; cross-request environment
+caching is intentionally not trusted. Phase 6 owns resource isolation and child-environment
+minimization.
 
 ## GitHub App and Checks API
 
@@ -105,14 +111,16 @@ retry therefore cannot recompute evidence.
 
 ## Tests and observed result
 
-The real integration test performs frozen installation on both revisions, self-rejects an initial
-both-pass candidate, repairs once, observes BASE assertion failure / HEAD pass, retains both
-evaluations, persists evidence, and proves execution replay changes no model/pytest counters. It
+The real integration test establishes BASE/HEAD setup readiness, self-rejects two both-pass
+candidates, uses both repairs, observes BASE assertion failure / HEAD pass on the third candidate,
+retains all three evaluations, persists evidence, and proves execution replay changes no
+model/pytest counters. It
 then simulates GitHub 503, recovers the ambiguous Check by `external_id`, PATCHes it, and proves an
 already-published call makes no request. Separate coverage proves claim abstention and GitHub App
 installation-token caching.
 
-Full suite: **167 passed, 1 credential-gated live Gemini test skipped, 2 upstream warnings**.
+Current full suite: **302 passed, 1 credential-gated live Gemini test skipped, 2 upstream
+warnings**.
 
 Commands run from the repository root (with `UV_CACHE_DIR` directed to the ignored local cache):
 
