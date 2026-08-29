@@ -163,6 +163,19 @@ class MechanicalEvidenceStatus(StrEnum):
     NON_DISCRIMINATING = "NON_DISCRIMINATING"
     INVALID_TEST = "INVALID_TEST"
     ENVIRONMENTAL = "ENVIRONMENTAL"
+    #: Exactly one revision let an exception escape the generated test while the other
+    #: produced an ordinary outcome. This is NOT support and can never be upgraded to
+    #: support: an escaping exception is not an assertion, so the pair is not comparable
+    #: evidence. It is distinguished from ENVIRONMENTAL because the two mean opposite
+    #: things to a repair. ENVIRONMENTAL says the environment is broken and the
+    #: experiment never happened. This says the experiment reached the code and observed
+    #: a real difference, but expressed it in a shape PatchProof cannot admit -- the test
+    #: must convert the exception into an explicit observed value and assert on it.
+    #:
+    #: In the sealed unseen holdout, Starlette #3317 and Rich #3938 both ended here while
+    #: being reported as ENVIRONMENTAL, which both understated the agent's performance and
+    #: sent the repair a misleading instruction.
+    UNCAUGHT_EXCEPTION_ON_ONE_REVISION = "UNCAUGHT_EXCEPTION_ON_ONE_REVISION"
     COUNTERFACTUAL_NOT_APPLICABLE = "COUNTERFACTUAL_NOT_APPLICABLE"
 
 

@@ -73,6 +73,31 @@ _UNIX_PATH_PATTERN = re.compile(r"(?<![\w.])/(?:[^/\s]+/)+[^:\s]+")
 _OPAQUE_VALUE_PATTERN = re.compile(r"(?<![A-Za-z0-9])[A-Za-z0-9_-]{32,}(?![A-Za-z0-9])")
 _CONTROL_PATTERN = re.compile(r"[\x00-\x1f\x7f]+")
 _TRUNCATION_MARKER = "...[truncated]"
+#: A pytest short-traceback frame line, e.g. `src/pkg/mod.py:42: in helper`.
+_TRACEBACK_FRAME_PATTERN = re.compile(r"^.+\.py:\d+: in \S+")
+
+#: General repair guidance for a one-sided escaping exception.
+#:
+#: This is a transformation, not a rule about any particular exception, repository, or
+#: claim. An escaping exception is not assertion evidence, so PatchProof cannot admit
+#: the pair -- but the same behavioral difference becomes admissible when the test
+#: converts the outcome into an explicit observed value and asserts on it. In the sealed
+#: unseen holdout the Starlette candidate had already found the discriminating trigger
+#: and was discarded purely because of the shape of its observation.
+#:
+#: The guardrails are enforced mechanically in `CandidateTestValidator`, not merely
+#: requested here: a handler must name a specific exception type grounded in the
+#: supplied context, and must bind the outcome to a value that is asserted on.
+_EXCEPTION_TO_OBSERVABLE_GUIDANCE = (
+    "Exactly one revision let an exception escape. That is a real behavioral difference, "
+    "but an escaping exception is not assertion evidence, so it cannot support a claim. "
+    "Rewrite the same scenario so both outcomes become one observed value and assert on "
+    "it, for example: observed = ('ok', repr(operation())) inside try, and "
+    "observed = ('error', type(error).__name__) in an except clause naming that specific "
+    "exception type; then assert observed == <expected HEAD observation>. Keep the same "
+    "selected claim and the same trigger. Never catch Exception or BaseException, never "
+    "use a bare except, and never swallow an outcome without asserting on it."
+)
 
 
 class AssertionRelation(StrEnum):
@@ -656,15 +681,24 @@ class EvidenceWorkflow:
                 and base_exception == head_exception
             )
             observations.append(f"same_exception_on_base_and_head={str(same_exception).lower()}")
-        elif {
-            challenge.base.status,
-            challenge.head.status,
-        } == {TestExecutionStatus.TEST_ERROR, TestExecutionStatus.PASSED}:
+        elif (
+            challenge.assessment.mechanical_status
+            is MechanicalEvidenceStatus.UNCAUGHT_EXCEPTION_ON_ONE_REVISION
+        ):
+            observations.append(_EXCEPTION_TO_OBSERVABLE_GUIDANCE)
+        elif challenge.assessment.pattern is DifferentialPattern.BOTH_PASSED:
             observations.append(
-                "An exception escaping on one revision is mechanically TEST_ERROR. If it "
-                "represents expected claim behavior and its exception import is grounded in "
-                "the supplied context, convert it into an explicit deterministic pytest "
-                "assertion/failure; do not catch unrelated exceptions."
+                "The same observation occurred on both revisions, so this input does not "
+                "reach the changed behavior or does not depend on it. Change the input or "
+                "the observed property so the two revisions must differ; do not restate "
+                "the same scenario. If repository_frame is absent, the call never entered "
+                "the changed code at all."
+            )
+        elif challenge.assessment.pattern is DifferentialPattern.BOTH_ASSERTION_FAILED:
+            observations.append(
+                "Both revisions failed the same assertion, so the expected value is wrong "
+                "rather than the trigger. Use the observed values above to correct the "
+                "expectation for HEAD while keeping the same selected claim."
             )
         return CandidateFeedback(
             category="EXECUTION_EVIDENCE",
@@ -674,6 +708,59 @@ class EvidenceWorkflow:
             ),
             observations=tuple(observations),
         )
+
+    @staticmethod
+    def _assertion_observation(result: ExecutionResult) -> str | None:
+        """Extract what the assertion actually observed, for the repair to reason about.
+
+        This is the single most important thing a repair can be told and it was
+        previously never sent. `_execution_exception` returns None unless the status is
+        TEST_ERROR, so a repair following BOTH_PASSED or BOTH_ASSERTION_FAILED -- the two
+        situations where repair is the whole point -- received only status names and the
+        text of its own failing line. It was asked to find a discriminating input while
+        being told nothing except that its input was not discriminating.
+
+        pytest's assertion rewriting puts the comparison and its operand values on the
+        `E   ` continuation lines, which is exactly the differential signal needed.
+        """
+        if result.status is not TestExecutionStatus.ASSERTION_FAILED or not result.detail:
+            return None
+        explanation = [
+            line.strip()[1:].strip()
+            for line in result.detail.splitlines()
+            if line.strip().startswith("E ")
+        ]
+        if not explanation:
+            return None
+        joined = " | ".join(part for part in explanation if part)
+        return EvidenceWorkflow._sanitize_observed_value(joined, limit=400) or None
+
+    @staticmethod
+    def _production_frame(result: ExecutionResult, attempt: CandidateAttempt) -> str | None:
+        """Return the deepest traceback frame that is not the generated test itself.
+
+        For BOTH_PASSED this answers the question a repair most needs and cannot
+        otherwise ask: did my trigger actually reach the changed code, or did it never
+        get there at all? For an escaping exception it names where the failure arose in
+        the repository rather than where the test called it.
+        """
+        if not result.detail or attempt.validated is None:
+            return None
+        relative_path = attempt.validated.artifact.relative_path
+        generated_markers = {
+            relative_path,
+            relative_path.replace("/", "\\"),
+            relative_path.rsplit("/", maxsplit=1)[-1],
+        }
+        frames = [
+            line.strip()
+            for line in result.detail.splitlines()
+            if _TRACEBACK_FRAME_PATTERN.match(line.strip())
+            and not any(marker in line for marker in generated_markers)
+        ]
+        if not frames:
+            return None
+        return EvidenceWorkflow._sanitize_feedback_text(frames[-1], limit=200) or None
 
     @staticmethod
     def _execution_exception(result: ExecutionResult) -> tuple[str, str] | None:
@@ -701,11 +788,19 @@ class EvidenceWorkflow:
             exception_type, message = exception
             parts.append(f"exception_type={exception_type}")
             parts.append(f"message={message or '<empty>'}")
+        observation = EvidenceWorkflow._assertion_observation(result)
+        if observation is not None:
+            parts.append(f"observed={observation}")
         generated_line = EvidenceWorkflow._generated_failing_line(result, attempt)
         if generated_line is not None:
             line_number, source = generated_line
             parts.append(f"generated_line={line_number}:{source}")
-        return EvidenceWorkflow._sanitize_feedback_text("; ".join(parts), limit=500)
+        frame = EvidenceWorkflow._production_frame(result, attempt)
+        if frame is not None:
+            parts.append(f"repository_frame={frame}")
+        # Sanitization is applied per part rather than to the joined string so that an
+        # observed value keeps its content: redacting it would defeat the purpose.
+        return "; ".join(parts)[:900]
 
     @staticmethod
     def _generated_failing_line(
@@ -735,6 +830,27 @@ class EvidenceWorkflow:
                 )
                 return line_number, source or "<blank>"
         return None
+
+    @staticmethod
+    def _sanitize_observed_value(value: str, *, limit: int) -> str:
+        """Redact credentials while preserving the observed value itself.
+
+        `_sanitize_feedback_text` additionally rewrites anything path-shaped and any long
+        opaque token. That is right for a traceback frame and wrong for an assertion
+        diff: for a repository like platformdirs the observed value *is* a path, and for
+        many others it is a long string or hash, so the generic rules would erase exactly
+        the differential signal the repair needs. Credential, bearer-token, and known
+        provider-token redaction and control-character stripping still apply.
+        """
+        text = _CREDENTIAL_PATTERN.sub("credential=<redacted>", value)
+        text = _BEARER_PATTERN.sub("Bearer <redacted>", text)
+        text = _KNOWN_TOKEN_PATTERN.sub("<redacted-token>", text)
+        text = _CONTROL_PATTERN.sub(" ", text)
+        text = " ".join(text.split())
+        if len(text) <= limit:
+            return text
+        keep = max(0, limit - len(_TRUNCATION_MARKER))
+        return f"{text[:keep].rstrip()}{_TRUNCATION_MARKER}"
 
     @staticmethod
     def _sanitize_feedback_text(value: str, *, limit: int) -> str:

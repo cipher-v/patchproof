@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import builtins
 import copy
 import hashlib
 import json
@@ -45,6 +46,13 @@ _BLOCKED_IMPORT_ROOTS = {
     "urllib",
 }
 _FORBIDDEN_CALL_NAMES = {"__import__", "compile", "eval", "exec"}
+#: Exception types too broad to express a specific behavioral expectation. Catching one
+#: of these -- or asserting that one is raised -- turns any failure anywhere into an
+#: apparent result, which is precisely the fishing behavior the exception-to-observable
+#: repair strategy must not be allowed to degrade into.
+_OVERBROAD_EXCEPTION_NAMES = {"BaseException", "Exception"}
+#: Statements that discard an outcome instead of recording it for an assertion.
+_OUTCOME_DISCARDING_BODIES = (ast.Pass, ast.Continue, ast.Break)
 _FORBIDDEN_ATTRIBUTE_CALLS = {
     ("os", "popen"),
     ("os", "system"),
@@ -111,6 +119,9 @@ class CandidateIssueCode(StrEnum):
     DUPLICATE_CANDIDATE_ID = "DUPLICATE_CANDIDATE_ID"
     DUPLICATE_CANDIDATE_SOURCE = "DUPLICATE_CANDIDATE_SOURCE"
     NO_BEHAVIORAL_REPAIR_CHANGE = "NO_BEHAVIORAL_REPAIR_CHANGE"
+    BROAD_EXCEPTION_HANDLER = "BROAD_EXCEPTION_HANDLER"
+    UNGROUNDED_EXCEPTION_TYPE = "UNGROUNDED_EXCEPTION_TYPE"
+    SWALLOWED_OUTCOME = "SWALLOWED_OUTCOME"
 
 
 class CandidateTestProposal(StrictGeminiOutputModel):
@@ -167,12 +178,15 @@ class CandidateFeedback(BaseModel):
 
     category: str = Field(min_length=1, max_length=80)
     summary: str = Field(min_length=1, max_length=1_500)
-    observations: tuple[str, ...] = Field(default_factory=tuple, max_length=4)
+    # Five observations of up to 900 characters. The previous budget of four at 500 was
+    # too small to carry a pytest assertion diff, which is why repairs after BOTH_PASSED
+    # and BOTH_ASSERTION_FAILED were effectively blind.
+    observations: tuple[str, ...] = Field(default_factory=tuple, max_length=5)
 
     @field_validator("observations")
     @classmethod
     def validate_observations(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        if any(not item.strip() or len(item) > 500 for item in value):
+        if any(not item.strip() or len(item) > 900 for item in value):
             raise ValueError("repair observations must contain bounded non-empty text")
         return value
 
@@ -685,6 +699,7 @@ class CandidateTestValidator:
 
         imported_roots = self._validate_imports(tree=tree, context=context)
         self._validate_calls(tree)
+        self._validate_exception_handling(tree)
         artifact = TestArtifact.from_text(
             relative_path=proposal.target_path,
             node_id=f"{proposal.target_path}::{proposal.test_function}",
@@ -755,6 +770,92 @@ class CandidateTestValidator:
                     "generated candidate calls forbidden API "
                     f"{node.func.value.id}.{node.func.attr}",
                 )
+
+    @staticmethod
+    def _validate_exception_handling(tree: ast.Module) -> None:
+        """Keep exception handling narrow, grounded, and observable.
+
+        The repair agent is deliberately taught to convert a one-sided escaping
+        exception into an explicit observed value (see
+        `evidence_workflow._EXCEPTION_TO_OBSERVABLE_GUIDANCE`), because that turns a real
+        behavioral difference into admissible assertion evidence. That instruction is
+        only safe if the degenerate forms of it are mechanically impossible: catching
+        everything, catching something the test never imported, or catching an outcome
+        and discarding it would let a candidate manufacture a difference rather than
+        observe one.
+        """
+        bound_names = set(_import_bindings(tree))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ExceptHandler):
+                CandidateTestValidator._validate_handler(node, bound_names)
+            elif isinstance(node, ast.Call):
+                CandidateTestValidator._validate_raises_call(node)
+
+    @staticmethod
+    def _validate_handler(handler: ast.ExceptHandler, bound_names: set[str]) -> None:
+        if handler.type is None:
+            CandidateTestValidator._reject(
+                CandidateIssueCode.BROAD_EXCEPTION_HANDLER,
+                "a bare except clause cannot express a specific behavioral expectation",
+            )
+        for name in CandidateTestValidator._exception_names(handler.type):
+            if name in _OVERBROAD_EXCEPTION_NAMES:
+                CandidateTestValidator._reject(
+                    CandidateIssueCode.BROAD_EXCEPTION_HANDLER,
+                    f"catching {name!r} is too broad to be claim-scoped evidence",
+                )
+            if not CandidateTestValidator._is_grounded_exception(name, bound_names):
+                CandidateTestValidator._reject(
+                    CandidateIssueCode.UNGROUNDED_EXCEPTION_TYPE,
+                    f"exception type {name!r} is neither a builtin nor imported by the test",
+                )
+        if all(isinstance(statement, _OUTCOME_DISCARDING_BODIES) for statement in handler.body):
+            CandidateTestValidator._reject(
+                CandidateIssueCode.SWALLOWED_OUTCOME,
+                "an except clause must record the outcome for an assertion, not discard it",
+            )
+
+    @staticmethod
+    def _validate_raises_call(node: ast.Call) -> None:
+        """`pytest.raises(Exception)` is the same fishing pattern in another shape."""
+        is_raises = (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "raises"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "pytest"
+        )
+        if not is_raises or not node.args:
+            return
+        for name in CandidateTestValidator._exception_names(node.args[0]):
+            if name in _OVERBROAD_EXCEPTION_NAMES:
+                CandidateTestValidator._reject(
+                    CandidateIssueCode.BROAD_EXCEPTION_HANDLER,
+                    f"pytest.raises({name}) is too broad to be claim-scoped evidence",
+                )
+
+    @staticmethod
+    def _exception_names(node: ast.expr | None) -> tuple[str, ...]:
+        """Return the identifiers named by an exception expression."""
+        if node is None:
+            return ()
+        if isinstance(node, ast.Tuple):
+            names: list[str] = []
+            for element in node.elts:
+                names.extend(CandidateTestValidator._exception_names(element))
+            return tuple(names)
+        if isinstance(node, ast.Name):
+            return (node.id,)
+        if isinstance(node, ast.Attribute):
+            return (node.attr,)
+        return ()
+
+    @staticmethod
+    def _is_grounded_exception(name: str, bound_names: set[str]) -> bool:
+        """Accept builtin exceptions and anything the candidate actually imported."""
+        if name in bound_names:
+            return True
+        builtin = getattr(builtins, name, None)
+        return isinstance(builtin, type) and issubclass(builtin, BaseException)
 
     @staticmethod
     def _allowed_import_roots(context: PullRequestContext) -> set[str]:

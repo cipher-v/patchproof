@@ -110,7 +110,6 @@ def test_classifier_rejects_invalid_or_nonexecuted_candidates(status: TestExecut
     "status",
     [
         TestExecutionStatus.COLLECTION_ERROR,
-        TestExecutionStatus.TEST_ERROR,
         TestExecutionStatus.TIMED_OUT,
         TestExecutionStatus.PROCESS_ERROR,
     ],
@@ -126,6 +125,45 @@ def test_classifier_rejects_noncomparable_environmental_results(
 
     assert assessment.mechanical_status is MechanicalEvidenceStatus.ENVIRONMENTAL
     assert assessment.pattern is DifferentialPattern.NOT_COMPARABLE
+
+
+@pytest.mark.parametrize(
+    "ordinary_status",
+    [TestExecutionStatus.PASSED, TestExecutionStatus.ASSERTION_FAILED],
+)
+@pytest.mark.parametrize("erroring_role", [RevisionRole.BASE, RevisionRole.HEAD])
+def test_one_sided_escaping_exception_is_reported_separately_from_environmental(
+    ordinary_status: TestExecutionStatus, erroring_role: RevisionRole
+) -> None:
+    """An exception escaping on one side is agent behavior, not broken infrastructure."""
+    base_status = (
+        TestExecutionStatus.TEST_ERROR if erroring_role is RevisionRole.BASE else ordinary_status
+    )
+    head_status = (
+        TestExecutionStatus.TEST_ERROR if erroring_role is RevisionRole.HEAD else ordinary_status
+    )
+
+    assessment = MechanicalEvidenceClassifier().classify(
+        artifact=_ARTIFACT,
+        base=_result(RevisionRole.BASE, base_status),
+        head=_result(RevisionRole.HEAD, head_status),
+    )
+
+    assert (
+        assessment.mechanical_status is MechanicalEvidenceStatus.UNCAUGHT_EXCEPTION_ON_ONE_REVISION
+    )
+    # Critically: still not comparable, so it can never become support.
+    assert assessment.pattern is DifferentialPattern.NOT_COMPARABLE
+
+
+def test_escaping_exception_on_both_revisions_remains_environmental() -> None:
+    assessment = MechanicalEvidenceClassifier().classify(
+        artifact=_ARTIFACT,
+        base=_result(RevisionRole.BASE, TestExecutionStatus.TEST_ERROR),
+        head=_result(RevisionRole.HEAD, TestExecutionStatus.TEST_ERROR),
+    )
+
+    assert assessment.mechanical_status is MechanicalEvidenceStatus.ENVIRONMENTAL
 
 
 def test_classifier_rejects_an_artifact_modified_during_execution() -> None:
