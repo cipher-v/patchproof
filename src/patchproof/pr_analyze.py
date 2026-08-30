@@ -8,7 +8,6 @@ import json
 import os
 import re
 import subprocess
-import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -402,9 +401,9 @@ def analyze_known_pr(
     _write_json(run_dir / "metadata.json", metadata)
     _append_event(journal, "RUN_DECLARED", **metadata)
 
-    temp_root = Path(tempfile.gettempdir()).resolve() / "patchproof-pr-analyze"
+    temp_root = (root.parent / ".pp").resolve()
     repositories = HardModeRepositoryCache(temp_root / "repositories", known.manifest_path.parent)
-    workspace_root = temp_root / "runs" / run_id / "workspaces"
+    workspace_root = temp_root / "w"
 
     print(f"[PatchProof] PR: {parsed.url}", flush=True)
     print(f"[PatchProof] case: {case.case_id}", flush=True)
