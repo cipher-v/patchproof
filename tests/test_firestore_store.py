@@ -40,22 +40,69 @@ class FakeDocument:
 
 
 class FakeQuery:
-    def __init__(self, client, collection: str, field_filter=None) -> None:
+    def __init__(
+        self,
+        client,
+        collection: str,
+        field_filter=None,
+        order_field=None,
+        descending=False,
+        maximum=None,
+    ) -> None:
         self.client = client
         self.collection = collection
         self.field_filter = field_filter
+        self.order_field = order_field
+        self.descending = descending
+        self.maximum = maximum
 
     def where(self, *, filter):
-        return FakeQuery(self.client, self.collection, filter)
+        return FakeQuery(
+            self.client,
+            self.collection,
+            filter,
+            self.order_field,
+            self.descending,
+            self.maximum,
+        )
+
+    def order_by(self, field: str, *, direction):
+        return FakeQuery(
+            self.client,
+            self.collection,
+            self.field_filter,
+            field,
+            "DESCENDING" in str(direction),
+            self.maximum,
+        )
+
+    def limit(self, maximum: int):
+        return FakeQuery(
+            self.client,
+            self.collection,
+            self.field_filter,
+            self.order_field,
+            self.descending,
+            maximum,
+        )
 
     def stream(self):
+        documents = []
         for (collection, _), document in self.client.documents.items():
             if collection != self.collection:
                 continue
             if self.field_filter is None or document.get(self.field_filter.field_path) == (
                 self.field_filter.value
             ):
-                yield FakeSnapshot(document)
+                documents.append(document)
+        if self.order_field is not None:
+            documents.sort(
+                key=lambda document: document[self.order_field],
+                reverse=self.descending,
+            )
+        if self.maximum is not None:
+            documents = documents[: self.maximum]
+        yield from (FakeSnapshot(document) for document in documents)
 
     def document(self, document_id: str):
         return FakeDocument(self.client, self.collection, document_id)
@@ -173,3 +220,21 @@ def test_firestore_optimistic_transition_and_terminal_failure() -> None:
     assert failure.raw_response_sha256 == "2" * 64
     assert store.get_failure(run.run_id) == failure
     assert store.get_run(run.run_id).terminal_reason is TerminalReason.FAILED
+
+
+def test_firestore_recent_runs_are_bounded_and_newest_first() -> None:
+    now = datetime(2026, 8, 24, 12, 0, tzinfo=UTC)
+    store, _ = build_store(now)
+    first = store.accept_pull_request(event(delivery="one", head="b", updated_at=now)).run
+    store.clock = lambda: now + timedelta(minutes=1)
+    second = store.accept_pull_request(
+        event(delivery="two", head="c", updated_at=now + timedelta(minutes=1))
+    ).run
+
+    assert [run.run_id for run in store.list_recent_runs(limit=1)] == [second.run_id]
+    assert [run.run_id for run in store.list_recent_runs(limit=2)] == [
+        second.run_id,
+        first.run_id,
+    ]
+    with pytest.raises(ValueError, match="between one and eight"):
+        store.list_recent_runs(limit=9)

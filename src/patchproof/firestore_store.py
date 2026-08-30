@@ -195,6 +195,18 @@ class FirestoreVerificationRunStore:
         runs = [VerificationRun.model_validate(snapshot.to_dict()) for snapshot in snapshots]
         return sorted(runs, key=lambda run: (run.created_at, str(run.run_id)))
 
+    def list_recent_runs(self, *, limit: int) -> list[VerificationRun]:
+        """Use one indexed, bounded newest-first Firestore query."""
+        if not 1 <= limit <= 8:
+            raise ValueError("recent run limit must be between one and eight")
+        snapshots = (
+            self._collection("runs")
+            .order_by("created_at", direction=firestore.Query.DESCENDING)
+            .limit(limit)
+            .stream()
+        )
+        return [VerificationRun.model_validate(snapshot.to_dict()) for snapshot in snapshots]
+
     def transition_run(
         self, *, run_id: UUID, expected_version: int, transition: RunTransition
     ) -> VerificationRun:

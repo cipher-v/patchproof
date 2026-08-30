@@ -120,6 +120,7 @@ class DashboardRun(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     run_id: UUID
+    status: str = "COMPLETE"
     repository: str
     pr_number: int
     pr_url: str
@@ -189,21 +190,33 @@ class StaticDashboardSnapshotProvider:
 
 @dataclass(frozen=True, slots=True)
 class StoreDashboardSnapshotProvider:
-    """Project only explicitly configured run UUIDs from the durable store."""
+    """Project optional featured IDs followed by bounded recent durable runs."""
 
     store: VerificationRunStore
-    run_ids: tuple[UUID, ...]
+    run_ids: tuple[UUID, ...] = ()
+    max_runs: int = 8
 
     def __post_init__(self) -> None:
         if len(self.run_ids) > 8:
             raise ValueError("dashboard can feature at most eight run IDs")
         if len(set(self.run_ids)) != len(self.run_ids):
             raise ValueError("dashboard run IDs must be unique")
+        if not 1 <= self.max_runs <= 8:
+            raise ValueError("dashboard run limit must be between one and eight")
+        if len(self.run_ids) > self.max_runs:
+            raise ValueError("featured dashboard runs cannot exceed the recent-run limit")
 
     def snapshot(self) -> DashboardSnapshot:
-        return DashboardSnapshot(runs=tuple(self._run(run_id) for run_id in self.run_ids))
+        run_ids = list(self.run_ids)
+        for run in self.store.list_recent_runs(limit=self.max_runs):
+            if run.run_id not in run_ids:
+                run_ids.append(run.run_id)
+            if len(run_ids) >= self.max_runs:
+                break
+        return DashboardSnapshot(runs=tuple(self.project_run(run_id) for run_id in run_ids))
 
-    def _run(self, run_id: UUID) -> DashboardRun:
+    def project_run(self, run_id: UUID) -> DashboardRun:
+        """Return one sanitized run projection shared by dashboard and status API."""
         run = self.store.get_run(run_id)
         stored = self.store.get_evidence(run_id)
         publication = self.store.get_publication(run_id)
@@ -228,6 +241,7 @@ class StoreDashboardSnapshotProvider:
         check_run_id = publication.check_run_id if publication else None
         return DashboardRun(
             run_id=run.run_id,
+            status=_progress_status(run=run, report=report, failure=failure),
             repository=run.repository,
             pr_number=run.pr_number,
             pr_url=f"https://github.com/{run.repository}/pull/{run.pr_number}",
@@ -286,6 +300,25 @@ class StoreDashboardSnapshotProvider:
                 else None
             ),
         )
+
+
+def _progress_status(*, run, report: EvidenceReport | None, failure) -> str:
+    """Translate only durable lifecycle/phase facts into a public progress label."""
+    if failure is not None:
+        return "FAILED"
+    if run.lifecycle == "TERMINAL":
+        return "ABSTAINED" if report is not None and report.claim is None else "COMPLETE"
+    if run.lifecycle in {"ACCEPTED", "QUEUED"}:
+        return str(run.lifecycle)
+    return {
+        "CONTEXT": "PREPARING_CONTEXT",
+        "CLAIM": "SELECTING_CLAIM",
+        "TEST_GENERATION": "GENERATING_CANDIDATE",
+        "BASE_EXECUTION": "RUNNING_BASE_HEAD",
+        "HEAD_EXECUTION": "RUNNING_BASE_HEAD",
+        "ASSESSMENT": "ASSESSING_SEMANTICS",
+        "PUBLICATION": "FINALIZING",
+    }[str(run.phase)]
 
 
 def load_demo_snapshot() -> DashboardSnapshot:

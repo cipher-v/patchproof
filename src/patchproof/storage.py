@@ -102,6 +102,8 @@ class VerificationRunStore(Protocol):
 
     def list_runs(self, *, repository: str, pr_number: int) -> list[VerificationRun]: ...
 
+    def list_recent_runs(self, *, limit: int) -> list[VerificationRun]: ...
+
     def transition_run(
         self, *, run_id: UUID, expected_version: int, transition: RunTransition
     ) -> VerificationRun: ...
@@ -289,6 +291,17 @@ class SqliteVerificationRunStore:
                 ORDER BY created_at, run_id
                 """,
                 (repository.lower(), pr_number),
+            ).fetchall()
+        return [self._row_to_run(row) for row in rows]
+
+    def list_recent_runs(self, *, limit: int) -> list[VerificationRun]:
+        """Return a bounded newest-first projection for product discovery."""
+        if not 1 <= limit <= 8:
+            raise ValueError("recent run limit must be between one and eight")
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                "SELECT * FROM runs ORDER BY created_at DESC, run_id DESC LIMIT ?",
+                (limit,),
             ).fetchall()
         return [self._row_to_run(row) for row in rows]
 
