@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -38,10 +40,12 @@ _RESULTS_ROOT = _MANIFEST_PATH.parent / "results"
 def _manifest_with_available_calls(available: int):
     manifest, _ = load_hard_mode_manifest(_MANIFEST_PATH)
     payload = manifest.model_dump(mode="json")
-    logical_required = manifest.protocol.derive_maximum_possible_logical_model_calls(
+    payload["protocol"]["candidate_calls_per_case"] = 3
+    updated_protocol = HardModeProtocol.model_validate(payload["protocol"])
+    logical_required = updated_protocol.derive_maximum_possible_logical_model_calls(
         case_count=len(manifest.cases)
     )
-    provider_required = manifest.protocol.derive_maximum_possible_provider_calls(
+    provider_required = updated_protocol.derive_maximum_possible_provider_calls(
         case_count=len(manifest.cases)
     )
     payload["protocol"].update(
@@ -54,6 +58,124 @@ def _manifest_with_available_calls(available: int):
         }
     )
     return hard_mode_module.HardModeManifest.model_validate(payload)
+
+
+class _FakeCandidateGenerator:
+    def __init__(self) -> None:
+        self.attempts = [
+            SimpleNamespace(
+                sequence=sequence,
+                validated=SimpleNamespace(artifact=f"artifact-{sequence}"),
+            )
+            for sequence in range(1, 5)
+        ]
+        self.model_calls = 0
+        self.repair_feedback: list[object] = []
+
+    async def generate_initial(self):
+        self.model_calls += 1
+        return self.attempts[0]
+
+    async def repair(self, *, feedback):
+        self.repair_feedback.append(feedback)
+        self.model_calls += 1
+        return self.attempts[self.model_calls - 1]
+
+
+class _FakeChallengeSession:
+    def __init__(self, statuses: list[hard_mode_module.MechanicalEvidenceStatus]) -> None:
+        self.statuses = iter(statuses)
+        self.artifacts: list[str] = []
+
+    def run(self, *, artifact):
+        self.artifacts.append(artifact)
+        return SimpleNamespace(assessment=SimpleNamespace(mechanical_status=next(self.statuses)))
+
+
+def _candidate_sequences(
+    statuses: list[hard_mode_module.MechanicalEvidenceStatus],
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[list[int], _FakeCandidateGenerator, _FakeChallengeSession]:
+    generator = _FakeCandidateGenerator()
+    session = _FakeChallengeSession(statuses)
+    monkeypatch.setattr(
+        hard_mode_module.EvidenceWorkflow,
+        "_repair_feedback",
+        staticmethod(
+            lambda *, attempt, challenge: (
+                attempt.sequence,
+                challenge.assessment.mechanical_status,
+            )
+        ),
+    )
+
+    async def collect() -> list[int]:
+        return [
+            attempt.sequence
+            async for attempt, _challenge in hard_mode_module._bounded_candidate_challenges(
+                generator=generator,
+                session=session,
+            )
+        ]
+
+    return asyncio.run(collect()), generator, session
+
+
+def test_historical_candidate_budget_matches_production() -> None:
+    from patchproof.test_generation import _MAX_CANDIDATE_MODEL_CALLS, _MAX_REPAIRS
+
+    assert hard_mode_module._MAX_CANDIDATE_MODEL_CALLS == _MAX_CANDIDATE_MODEL_CALLS == 3
+    assert hard_mode_module._MAX_REPAIRS == _MAX_REPAIRS == 2
+
+
+def test_initial_discrimination_stops_before_any_repair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sequences, generator, session = _candidate_sequences(
+        [hard_mode_module.MechanicalEvidenceStatus.DISCRIMINATING],
+        monkeypatch,
+    )
+
+    assert sequences == [1]
+    assert generator.model_calls == 1
+    assert generator.repair_feedback == []
+    assert session.artifacts == ["artifact-1"]
+
+
+def test_first_repair_discrimination_prevents_second_repair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sequences, generator, session = _candidate_sequences(
+        [
+            hard_mode_module.MechanicalEvidenceStatus.NON_DISCRIMINATING,
+            hard_mode_module.MechanicalEvidenceStatus.DISCRIMINATING,
+        ],
+        monkeypatch,
+    )
+
+    assert sequences == [1, 2]
+    assert generator.model_calls == 2
+    assert generator.repair_feedback == [
+        (1, hard_mode_module.MechanicalEvidenceStatus.NON_DISCRIMINATING)
+    ]
+    assert session.artifacts == ["artifact-1", "artifact-2"]
+
+
+def test_non_discrimination_reaches_second_repair_but_never_a_fourth_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sequences, generator, session = _candidate_sequences(
+        [hard_mode_module.MechanicalEvidenceStatus.NON_DISCRIMINATING] * 3,
+        monkeypatch,
+    )
+
+    assert sequences == [1, 2, 3]
+    assert generator.model_calls == 3
+    assert generator.repair_feedback == [
+        (1, hard_mode_module.MechanicalEvidenceStatus.NON_DISCRIMINATING),
+        (2, hard_mode_module.MechanicalEvidenceStatus.NON_DISCRIMINATING),
+    ]
+    assert session.artifacts == ["artifact-1", "artifact-2", "artifact-3"]
 
 
 def test_hard_mode_manifest_freezes_four_historical_repositories_and_one_synthetic() -> None:
@@ -255,7 +377,7 @@ def test_predeclared_inter_case_pacing_is_uniform_and_journaled(
 
 
 def test_model_call_budget_is_derived_from_protocol_and_case_count() -> None:
-    manifest = _manifest_with_available_calls(40)
+    manifest = _manifest_with_available_calls(50)
 
     logical_required = manifest.protocol.derive_maximum_possible_logical_model_calls(
         case_count=len(manifest.cases)
@@ -265,16 +387,16 @@ def test_model_call_budget_is_derived_from_protocol_and_case_count() -> None:
     )
     preflight = _model_call_budget_preflight(manifest)
 
-    assert logical_required == 5 * (1 + 2 + 1) == 20
+    assert logical_required == 5 * (1 + 3 + 1) == 25
     assert manifest.protocol.maximum_provider_attempts_per_logical_call() == 1 + 1 == 2
-    assert provider_required == logical_required * (1 + 1) == 40
-    assert manifest.protocol.maximum_possible_logical_model_calls == 20
-    assert manifest.protocol.maximum_possible_provider_calls == 40
-    assert manifest.protocol.declared_available_provider_calls == 40
+    assert provider_required == logical_required * (1 + 1) == 50
+    assert manifest.protocol.maximum_possible_logical_model_calls == 25
+    assert manifest.protocol.maximum_possible_provider_calls == 50
+    assert manifest.protocol.declared_available_provider_calls == 50
     assert manifest.protocol.model_call_budget_preflight_passed is True
     assert preflight.maximum_possible_logical_model_calls == logical_required
     assert preflight.maximum_possible_provider_calls == provider_required
-    assert preflight.declared_available_provider_calls == 40
+    assert preflight.declared_available_provider_calls == 50
     assert preflight.passed is True
 
 
@@ -283,6 +405,7 @@ def test_zero_transient_retries_make_provider_calls_equal_logical_calls() -> Non
     protocol = HardModeProtocol.model_validate(
         {
             **manifest.protocol.model_dump(mode="json"),
+            "candidate_calls_per_case": 3,
             "transient_provider_retries_per_logical_call": 0,
         }
     )
@@ -291,14 +414,14 @@ def test_zero_transient_retries_make_provider_calls_equal_logical_calls() -> Non
     provider = protocol.derive_maximum_possible_provider_calls(case_count=len(manifest.cases))
 
     assert protocol.maximum_provider_attempts_per_logical_call() == 1
-    assert provider == logical == 20
+    assert provider == logical == 25
 
 
 def test_live_run_refuses_insufficient_declared_calls_before_creating_journal(
     writable_test_directory: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manifest = _manifest_with_available_calls(39)
+    manifest = _manifest_with_available_calls(49)
     monkeypatch.setattr(
         hard_mode_module,
         "load_hard_mode_manifest",
@@ -307,7 +430,7 @@ def test_live_run_refuses_insufficient_declared_calls_before_creating_journal(
     journal = writable_test_directory / "insufficient.jsonl"
     raw = writable_test_directory / "insufficient.json"
 
-    with pytest.raises(HardModeConfigurationError, match=r"39.*below.*40"):
+    with pytest.raises(HardModeConfigurationError, match=r"49.*below.*50"):
         run_live(
             manifest_path=writable_test_directory / "manifest.json",
             cache_root=writable_test_directory / "cache",
@@ -322,7 +445,7 @@ def test_live_run_refuses_insufficient_declared_calls_before_creating_journal(
     assert not (writable_test_directory / "cache").exists()
 
 
-def test_old_manifest_requires_explicit_call_budget_for_a_new_live_run(
+def test_old_manifest_requires_current_candidate_budget_for_a_new_live_run(
     writable_test_directory: Path,
 ) -> None:
     manifest, _ = load_hard_mode_manifest(_MANIFEST_PATH)
@@ -330,9 +453,7 @@ def test_old_manifest_requires_explicit_call_budget_for_a_new_live_run(
     assert manifest.protocol.provider_surface is None
     journal = writable_test_directory / "old-manifest.jsonl"
 
-    with pytest.raises(
-        HardModeConfigurationError, match="must record maximum possible logical model calls"
-    ):
+    with pytest.raises(HardModeConfigurationError, match="candidate-call budget of 3"):
         run_live(
             manifest_path=_MANIFEST_PATH,
             cache_root=writable_test_directory / "cache",
@@ -349,7 +470,7 @@ def test_live_run_records_passing_call_budget_before_fake_case_execution(
     writable_test_directory: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manifest = _manifest_with_available_calls(40)
+    manifest = _manifest_with_available_calls(50)
     manifest_sha256 = "a" * 64
     monkeypatch.setattr(
         hard_mode_module,
@@ -410,19 +531,19 @@ def test_live_run_records_passing_call_budget_before_fake_case_execution(
     started = json.loads(journal.read_text(encoding="utf-8").splitlines()[0])
     assert started["event"] == "RUN_STARTED"
     assert started["provider_surface"] == "GEMINI_DEVELOPER_API"
-    assert started["maximum_possible_logical_model_calls"] == 20
-    assert started["maximum_possible_provider_calls"] == 40
-    assert started["declared_available_provider_calls"] == 40
+    assert started["maximum_possible_logical_model_calls"] == 25
+    assert started["maximum_possible_provider_calls"] == 50
+    assert started["declared_available_provider_calls"] == 50
     assert started["model_call_budget_preflight_passed"] is True
-    assert raw["maximum_possible_logical_model_calls"] == 20
-    assert raw["maximum_possible_provider_calls"] == 40
-    assert raw["declared_available_provider_calls"] == 40
+    assert raw["maximum_possible_logical_model_calls"] == 25
+    assert raw["maximum_possible_provider_calls"] == 50
+    assert raw["declared_available_provider_calls"] == 50
     assert raw["model_call_budget_preflight_passed"] is True
     assert raw["provider_surface"] == "GEMINI_DEVELOPER_API"
     summary = summarize_live(raw)
-    assert summary["maximum_possible_logical_model_calls"] == 20
-    assert summary["maximum_possible_provider_calls"] == 40
-    assert summary["declared_available_provider_calls"] == 40
+    assert summary["maximum_possible_logical_model_calls"] == 25
+    assert summary["maximum_possible_provider_calls"] == 50
+    assert summary["declared_available_provider_calls"] == 50
     assert summary["model_call_budget_preflight_passed"] is True
     assert summary["provider_surface"] == "GEMINI_DEVELOPER_API"
     rendered = render_summary_markdown(summary)

@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import time
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -26,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from patchproof.adk_claim_agent import AdkGeminiClaimModel
 from patchproof.adk_evidence_assessor import AdkGeminiEvidenceAssessor
 from patchproof.adk_test_agent import AdkGeminiCandidateModel
-from patchproof.challenge import BaseHeadChallenge
+from patchproof.challenge import BaseHeadChallenge, ChallengeSession
 from patchproof.claim_agent import (
     BehavioralClaimAgent,
     InvalidClaimAgentOutput,
@@ -53,6 +54,7 @@ from patchproof.model_reliability import (
     ModelInvocationFailure,
 )
 from patchproof.models import (
+    ChallengeResult,
     ClaimOutcome,
     DifferentialPattern,
     MechanicalEvidenceStatus,
@@ -61,6 +63,8 @@ from patchproof.models import (
 )
 from patchproof.pytest_runner import PytestRunner
 from patchproof.test_generation import (
+    _MAX_CANDIDATE_MODEL_CALLS,
+    _MAX_REPAIRS,
     BoundedCandidateTestGenerator,
     CandidateAttempt,
     CandidateTestValidator,
@@ -102,7 +106,7 @@ class HardModeProtocol(BaseModel):
     temperature: float
     thinking_level: Literal["LOW"]
     claim_calls_per_case: Literal[1]
-    candidate_calls_per_case: Literal[2]
+    candidate_calls_per_case: Literal[2, 3]
     assessment_calls_per_discriminating_case: Literal[1]
     transient_provider_retries_per_logical_call: Literal[0, 1]
     maximum_possible_logical_model_calls: int | None = Field(default=None, ge=1, le=1_000_000)
@@ -289,6 +293,11 @@ class HardModeCallBudgetPreflight(BaseModel):
 
 def _model_call_budget_preflight(manifest: HardModeManifest) -> HardModeCallBudgetPreflight:
     """Refuse an underfunded run without claiming knowledge of live provider quota."""
+    if manifest.protocol.candidate_calls_per_case != _MAX_CANDIDATE_MODEL_CALLS:
+        raise HardModeConfigurationError(
+            "new hard-mode live runs must declare the production candidate-call budget "
+            f"of {_MAX_CANDIDATE_MODEL_CALLS}"
+        )
     logical_required = manifest.protocol.derive_maximum_possible_logical_model_calls(
         case_count=len(manifest.cases)
     )
@@ -848,6 +857,33 @@ def _attempt_document(attempt: CandidateAttempt) -> dict[str, Any]:
     return document
 
 
+async def _bounded_candidate_challenges(
+    *,
+    generator: BoundedCandidateTestGenerator,
+    session: ChallengeSession,
+) -> AsyncIterator[tuple[CandidateAttempt, ChallengeResult | None]]:
+    """Run the production-sized initial-plus-two-repair candidate policy."""
+    attempt = await generator.generate_initial()
+    challenge = None
+    for attempt_number in range(_MAX_CANDIDATE_MODEL_CALLS):
+        if attempt.validated is not None:
+            challenge = session.run(artifact=attempt.validated.artifact)
+        yield attempt, challenge
+        if (
+            challenge is not None
+            and challenge.assessment.mechanical_status is MechanicalEvidenceStatus.DISCRIMINATING
+        ):
+            return
+        if attempt_number >= _MAX_REPAIRS:
+            return
+        feedback = EvidenceWorkflow._repair_feedback(
+            attempt=attempt,
+            challenge=challenge,
+        )
+        attempt = await generator.repair(feedback=feedback)
+        challenge = None
+
+
 def _append_journal(path: Path, document: dict[str, Any]) -> None:
     with path.open("a", encoding="utf-8", newline="\n") as journal:
         journal.write(json.dumps(document, sort_keys=True, ensure_ascii=False) + "\n")
@@ -1019,11 +1055,12 @@ async def _run_live_case(
             repository_signatures=signature_context,
         )
         try:
-            attempt = await generator.generate_initial()
-            result["candidate_attempts"].append(_attempt_document(attempt))
-            for attempt_number in range(2):
-                if attempt.validated is not None:
-                    challenge = session.run(artifact=attempt.validated.artifact)
+            async for attempt, challenge in _bounded_candidate_challenges(
+                generator=generator,
+                session=session,
+            ):
+                result["candidate_attempts"].append(_attempt_document(attempt))
+                if challenge is not None:
                     evaluation = EvidenceWorkflow._evaluation_evidence(
                         attempt.sequence, challenge
                     ).model_dump(mode="json")
@@ -1055,15 +1092,6 @@ async def _run_live_case(
                         result["final_outcome"] = str(semantic.decision.outcome)
                         result["terminal_status"] = str(semantic.decision.outcome)
                         return _finish_case(result, started)
-                if attempt_number == 1:
-                    break
-                feedback = EvidenceWorkflow._repair_feedback(
-                    attempt=attempt,
-                    challenge=challenge,
-                )
-                attempt = await generator.repair(feedback=feedback)
-                result["candidate_attempts"].append(_attempt_document(attempt))
-                challenge = None
         except ModelInvocationFailure as error:
             result["terminal_status"] = "MODEL_INVOCATION_ERROR"
             result["error"] = {
@@ -1266,7 +1294,7 @@ def summarize_live(raw: dict[str, Any]) -> dict[str, Any]:
         evaluation
         for case in cases
         for evaluation in case.get("candidate_evaluations", [])
-        if evaluation.get("attempt_sequence") == 2
+        if evaluation.get("attempt_sequence") in {2, 3}
     ]
     environmental_evaluations = [
         evaluation
