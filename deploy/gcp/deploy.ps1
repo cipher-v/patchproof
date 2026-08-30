@@ -122,7 +122,7 @@ foreach ($Secret in $SecretFiles.Keys) {
 
 Invoke-Gcloud builds submit --config=deploy/cloudbuild.yaml --substitutions="_IMAGE=$Image" .
 
-Invoke-Gcloud run deploy $ExecutorService --image=$Image --region=$Region --platform=managed --service-account=$ExecutorAccount --no-allow-unauthenticated --set-env-vars="GOOGLE_CLOUD_PROJECT=${ProjectId},PATCHPROOF_SERVICE_ROLE=executor,PATCHPROOF_ALLOWED_REPOSITORIES=${AllowedRepositories}" --startup-probe="httpGet.path=/healthz,httpGet.port=8080,timeoutSeconds=5,periodSeconds=5,failureThreshold=12" --min-instances=0 --max-instances=1 --concurrency=1 --cpu=2 --memory=2Gi --timeout=900
+Invoke-Gcloud run deploy $ExecutorService --image=$Image --region=$Region --platform=managed --service-account=$ExecutorAccount --no-allow-unauthenticated --set-env-vars="^#^GOOGLE_CLOUD_PROJECT=${ProjectId}#PATCHPROOF_SERVICE_ROLE=executor#PATCHPROOF_ALLOWED_REPOSITORIES=${AllowedRepositories}" --startup-probe="httpGet.path=/healthz,httpGet.port=8080,timeoutSeconds=5,periodSeconds=5,failureThreshold=12" --min-instances=0 --max-instances=1 --concurrency=1 --cpu=2 --memory=2Gi --timeout=900
 $ExecutorUrl = Invoke-Gcloud run services describe $ExecutorService --region=$Region --format="value(status.url)"
 Invoke-Gcloud run services add-iam-policy-binding $ExecutorService --region=$Region --member="serviceAccount:$ControlAccount" --role="roles/run.invoker"
 
