@@ -6,6 +6,7 @@ import hashlib
 import subprocess
 import sys
 import tempfile
+from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
@@ -32,6 +33,13 @@ from patchproof.pytest_runner import PytestRunner
 from patchproof.workflow import normalize_repository_name
 
 
+class ExecutionContractOrigin(StrEnum):
+    """Why the private executor may trust the supplied validated contract."""
+
+    REPOSITORY = "REPOSITORY"
+    PATCHPROOF_MANIFEST = "PATCHPROOF_MANIFEST"
+
+
 class ExecutorEnvironmentRequest(BaseModel):
     """Immutable repository and setup contract crossing into the executor."""
 
@@ -42,11 +50,24 @@ class ExecutorEnvironmentRequest(BaseModel):
     base_sha: str = Field(pattern=r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
     head_sha: str = Field(pattern=r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
     contract: ExecutionContract
+    contract_origin: ExecutionContractOrigin = ExecutionContractOrigin.REPOSITORY
+    repository_python_paths: tuple[str, ...] = Field(default=(), max_length=4)
 
     @field_validator("repository")
     @classmethod
     def normalize_repository(cls, value: str) -> str:
         return normalize_repository_name(value)
+
+    @field_validator("repository_python_paths")
+    @classmethod
+    def validate_repository_python_paths(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        for item in value:
+            path = Path(item)
+            if not item or path.is_absolute() or ".." in path.parts:
+                raise ValueError("repository Python paths must be relative and normalized")
+        if len(set(value)) != len(value):
+            raise ValueError("repository Python paths must be unique")
+        return value
 
 
 class ExecutorChallengeRequest(ExecutorEnvironmentRequest):
@@ -252,24 +273,29 @@ class EphemeralChallengeExecutor:
     ) -> BaseHeadChallenge:
         repository = root / "repository.git"
         self._prepare_repository(request=request, destination=repository)
-        loader = ExecutionContractLoader()
-        base_contract = loader.load_bytes(
-            self._git_output(repository, ("show", f"{request.base_sha}:{loader.filename}"))
-        )
-        head_contract = loader.load_bytes(
-            self._git_output(repository, ("show", f"{request.head_sha}:{loader.filename}"))
-        )
-        if base_contract != head_contract or head_contract != request.contract:
-            raise ValueError("immutable BASE/HEAD execution contracts do not match")
+        contract = request.contract
+        if request.contract_origin is ExecutionContractOrigin.REPOSITORY:
+            loader = ExecutionContractLoader()
+            base_contract = loader.load_bytes(
+                self._git_output(repository, ("show", f"{request.base_sha}:{loader.filename}"))
+            )
+            head_contract = loader.load_bytes(
+                self._git_output(repository, ("show", f"{request.head_sha}:{loader.filename}"))
+            )
+            if base_contract != head_contract or head_contract != contract:
+                raise ValueError("immutable BASE/HEAD execution contracts do not match")
+        elif not contract.synthesized:
+            raise ValueError("manifest execution requires a synthesized validated contract")
         return BaseHeadChallenge(
             workspaces=GitWorkspaceManager(
                 source_repository=repository,
                 workspace_root=root / "worktrees",
             ),
             runner=PytestRunner(
-                contract=head_contract,
+                contract=contract,
                 python_executable=Path(sys.executable),
                 install_dependencies=True,
+                repository_python_paths=request.repository_python_paths,
             ),
         )
 

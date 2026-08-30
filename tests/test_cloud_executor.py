@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
 from fastapi.testclient import TestClient
 
+import patchproof.cloud_executor as executor_module
 from patchproof.cloud_executor import (
+    EphemeralChallengeExecutor,
+    ExecutionContractOrigin,
     ExecutionResultDocument,
     ExecutorChallengeRequest,
     ExecutorChallengeResponse,
@@ -32,6 +38,24 @@ def contract() -> ExecutionContract:
             "test": {"command": ["uv", "run", "pytest"]},
             "allowed_test_paths": ["tests/"],
             "timeout_seconds": 120,
+        }
+    )
+
+
+def synthesized_contract() -> ExecutionContract:
+    return ExecutionContract.model_validate(
+        {
+            "version": 1,
+            "python": "3.12",
+            "install": [
+                ["uv", "venv"],
+                ["uv", "pip", "install", "-e", "."],
+                ["uv", "pip", "install", "pytest"],
+            ],
+            "test": {"command": ["python", "-m", "pytest"]},
+            "allowed_test_paths": ["patchproof_generated_tests/"],
+            "timeout_seconds": 300,
+            "synthesized": True,
         }
     )
 
@@ -167,3 +191,73 @@ def test_request_rejects_artifact_hash_mismatch() -> None:
         assert "hash" in str(error)
     else:
         raise AssertionError("mismatched candidate bytes were accepted")
+
+
+def test_manifest_contract_uses_trusted_wire_plan_without_upstream_contract(
+    monkeypatch, writable_test_directory: Path
+) -> None:
+    captured = {}
+
+    class StubWorkspaceManager:
+        def __init__(self, **kwargs) -> None:
+            captured["workspace"] = kwargs
+
+    class StubRunner:
+        def __init__(self, **kwargs) -> None:
+            captured["runner"] = kwargs
+            self.contract = kwargs["contract"]
+
+    executor = EphemeralChallengeExecutor(allowed_repositories=frozenset({"owner/repo"}))
+
+    def prepare_repository(*, request, destination) -> None:
+        del request
+        destination.mkdir()
+
+    monkeypatch.setattr(executor, "_prepare_repository", prepare_repository)
+    monkeypatch.setattr(
+        executor,
+        "_git_output",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("manifest execution must not read upstream .patchproof.yaml")
+        ),
+    )
+    monkeypatch.setattr(executor_module, "GitWorkspaceManager", StubWorkspaceManager)
+    monkeypatch.setattr(executor_module, "PytestRunner", StubRunner)
+    request = ExecutorEnvironmentRequest(
+        repository="owner/repo",
+        pull_request_number=4,
+        base_sha="a" * 40,
+        head_sha="b" * 40,
+        contract=synthesized_contract(),
+        contract_origin=ExecutionContractOrigin.PATCHPROOF_MANIFEST,
+        repository_python_paths=("src",),
+    )
+
+    challenge = executor._prepare_challenge(request=request, root=writable_test_directory)
+
+    assert challenge.runner.contract == request.contract
+    assert captured["runner"]["install_dependencies"] is True
+    assert captured["runner"]["repository_python_paths"] == ("src",)
+
+
+def test_manifest_origin_rejects_non_synthesized_contract(
+    monkeypatch, writable_test_directory: Path
+) -> None:
+    executor = EphemeralChallengeExecutor(allowed_repositories=frozenset({"owner/repo"}))
+
+    def prepare_repository(*, request, destination) -> None:
+        del request
+        destination.mkdir()
+
+    monkeypatch.setattr(executor, "_prepare_repository", prepare_repository)
+    request = ExecutorEnvironmentRequest(
+        repository="owner/repo",
+        pull_request_number=4,
+        base_sha="a" * 40,
+        head_sha="b" * 40,
+        contract=contract(),
+        contract_origin=ExecutionContractOrigin.PATCHPROOF_MANIFEST,
+    )
+
+    with pytest.raises(ValueError, match="requires a synthesized"):
+        executor._prepare_challenge(request=request, root=writable_test_directory)
