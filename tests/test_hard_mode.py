@@ -23,6 +23,12 @@ from patchproof.hard_mode import (
     run_live,
     summarize_live,
 )
+from patchproof.install_strategy import (
+    ContractSynthesisError,
+    InstallPlan,
+    InstallStrategy,
+    synthesize_contract,
+)
 
 _PROJECT_ROOT = Path(__file__).parents[1]
 _MANIFEST_PATH = _PROJECT_ROOT / "benchmarks" / "hard_mode" / "manifest.json"
@@ -76,6 +82,75 @@ def test_synthetic_fixture_bootstraps_to_the_frozen_commits(
 
     assert repository.is_dir()
     assert (repository / ".git").is_dir()
+
+
+def test_historical_challenge_uses_the_symmetric_probed_install_plan(
+    writable_test_directory: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest, _ = load_hard_mode_manifest(_MANIFEST_PATH)
+    case = next(item for item in manifest.cases if item.kind is HardModeCaseKind.HISTORICAL_PR)
+    install = InstallPlan(
+        strategy=InstallStrategy.UV_PIP_EDITABLE,
+        commands=(
+            ("uv", "venv"),
+            ("uv", "pip", "install", "-e", "."),
+            ("uv", "pip", "install", "pytest"),
+        ),
+        rationale="installable project with no separately declared test requirements",
+    )
+    contract = synthesize_contract(install)
+    reader = object()
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        hard_mode_module,
+        "DeterministicContextRetriever",
+        lambda **_kwargs: reader,
+    )
+
+    def resolve(**kwargs):
+        captured.update(kwargs)
+        return contract, install, install
+
+    monkeypatch.setattr(hard_mode_module, "resolve_contract_for_pair", resolve)
+
+    plan = hard_mode_module._execution_plan(Path.cwd(), case)
+    challenge = hard_mode_module._challenge(
+        Path.cwd(),
+        writable_test_directory,
+        case,
+        plan=plan,
+    )
+
+    assert captured["base_sha"] == case.base_sha
+    assert captured["head_sha"] == case.head_sha
+    assert captured["prober"].reader is reader
+    assert plan.base_install == plan.head_install == install
+    assert challenge.runner.contract == contract
+    assert challenge.runner.install_dependencies is True
+
+
+def test_historical_execution_plan_fails_closed_when_pair_cannot_be_synthesized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest, _ = load_hard_mode_manifest(_MANIFEST_PATH)
+    case = next(item for item in manifest.cases if item.kind is HardModeCaseKind.HISTORICAL_PR)
+    monkeypatch.setattr(
+        hard_mode_module,
+        "DeterministicContextRetriever",
+        lambda **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        hard_mode_module,
+        "resolve_contract_for_pair",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            ContractSynthesisError("BASE and HEAD imply different install strategies")
+        ),
+    )
+
+    with pytest.raises(HardModeConfigurationError, match="no safe symmetric install plan"):
+        hard_mode_module._execution_plan(Path.cwd(), case)
 
 
 def test_summary_uses_raw_denominators_and_handles_failed_model_calls() -> None:

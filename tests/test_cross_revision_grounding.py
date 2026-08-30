@@ -319,3 +319,20 @@ def test_claim_must_name_an_interface_present_on_both_revisions(
     )
     assert result.selection.claim is not None
     assert result.selection.claim.expected_base_hypothesis
+
+    # Regression: an empty shared partition must not disable the HEAD-only check.
+    head_only_context = context.model_copy(
+        update={
+            "interfaces": CrossRevisionInterfaces(
+                present_on_both=(),
+                new_on_head=("Renderer.split_terminated",),
+            )
+        }
+    )
+    with pytest.raises(InvalidClaimAgentOutput, match="only on HEAD"):
+        asyncio.run(
+            BehavioralClaimAgent(model=FixedModel(_draft("split_terminated"))).select_claim(
+                context=head_only_context,
+                narrative=narrative,
+            )
+        )

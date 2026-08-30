@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -40,6 +41,12 @@ from patchproof.gemini_provider import (
     preflight_vertex_authentication,
 )
 from patchproof.git_workspace import GitWorkspaceManager
+from patchproof.install_strategy import (
+    ContractSynthesisError,
+    DependencyInstallProber,
+    InstallPlan,
+    resolve_contract_for_pair,
+)
 from patchproof.model_reliability import (
     BoundedRetryingEvidenceAssessor,
     BoundedRetryingModel,
@@ -577,16 +584,87 @@ def _contract() -> ExecutionContract:
     )
 
 
-def _challenge(repository: Path, workspace_root: Path, case: HardModeCase) -> BaseHeadChallenge:
+@dataclass(frozen=True, slots=True)
+class _EvaluationExecutionPlan:
+    """One deterministic BASE/HEAD environment plan for an evaluation case."""
+
+    contract: ExecutionContract
+    install_dependencies: bool
+    base_install: InstallPlan | None = None
+    head_install: InstallPlan | None = None
+
+
+def _execution_plan(repository: Path, case: HardModeCase) -> _EvaluationExecutionPlan:
+    """Resolve a symmetric install plan before any historical-case execution."""
+    if case.kind is HardModeCaseKind.LOCAL_SYNTHETIC:
+        return _EvaluationExecutionPlan(
+            contract=_contract(),
+            install_dependencies=False,
+        )
+
+    reader = DeterministicContextRetriever(source_repository=repository)
+    try:
+        contract, base_plan, head_plan = resolve_contract_for_pair(
+            prober=DependencyInstallProber(reader=reader),
+            base_sha=case.base_sha,
+            head_sha=case.head_sha,
+        )
+    except ContractSynthesisError as error:
+        raise HardModeConfigurationError(
+            f"historical case {case.case_id} has no safe symmetric install plan: {error}"
+        ) from error
+    return _EvaluationExecutionPlan(
+        contract=contract,
+        install_dependencies=True,
+        base_install=base_plan,
+        head_install=head_plan,
+    )
+
+
+def _execution_plan_document(plan: _EvaluationExecutionPlan) -> dict[str, Any]:
+    """Return bounded deterministic install provenance for evaluation output."""
+    if plan.base_install is None or plan.head_install is None:
+        return {
+            "source": "LOCAL_SYNTHETIC",
+            "install_dependencies": False,
+            "base": None,
+            "head": None,
+            "equivalent": True,
+        }
+
+    def document(value: InstallPlan) -> dict[str, Any]:
+        return {
+            "strategy": value.strategy.value,
+            "commands": [list(command) for command in value.commands],
+            "rationale": value.rationale,
+        }
+
+    return {
+        "source": "COMMITTED_METADATA_PROBE",
+        "install_dependencies": True,
+        "base": document(plan.base_install),
+        "head": document(plan.head_install),
+        "equivalent": plan.base_install.commands == plan.head_install.commands,
+    }
+
+
+def _challenge(
+    repository: Path,
+    workspace_root: Path,
+    case: HardModeCase,
+    *,
+    plan: _EvaluationExecutionPlan | None = None,
+) -> BaseHeadChallenge:
+    resolved_plan = plan or _execution_plan(repository, case)
     return BaseHeadChallenge(
         workspaces=GitWorkspaceManager(
             source_repository=repository,
             workspace_root=workspace_root / case.case_id,
         ),
         runner=PytestRunner(
-            contract=_contract(),
+            contract=resolved_plan.contract,
             python_executable=Path(sys.executable),
-            install_dependencies=False,
+            install_dependencies=resolved_plan.install_dependencies,
             repository_python_paths=case.repository_python_paths,
         ),
     )
@@ -666,11 +744,25 @@ def verify_oracles(
             node_id=f"{_ORACLE_TARGET}::{case.oracle_test_function}",
             content=oracle_content,
         )
-        challenge = _challenge(repository, workspace_root / "oracles", case).run(
+        execution_plan = _execution_plan(repository, case)
+        challenge_runner = _challenge(
+            repository,
+            workspace_root / "oracles",
+            case,
+            plan=execution_plan,
+        )
+        with challenge_runner.session(
             base_ref=case.base_sha,
             head_ref=case.head_sha,
-            artifact=artifact,
-        )
+        ) as session:
+            readiness = (
+                session.prepare_environment() if execution_plan.install_dependencies else None
+            )
+            if readiness is not None and not readiness.ready:
+                raise HardModeConfigurationError(
+                    f"oracle environment is not ready for {case.case_id}: {readiness.reason}"
+                )
+            challenge = session.run(artifact=artifact)
         context = DeterministicContextRetriever(
             source_repository=repository,
             excluded_paths=frozenset(case.excluded_paths),
@@ -696,6 +788,15 @@ def verify_oracles(
                 "changed_python_test_paths": list(changed_test_paths),
                 "oracle_file": case.oracle_file,
                 "oracle_sha256": case.oracle_sha256,
+                "execution_plan": _execution_plan_document(execution_plan),
+                "environment_readiness": (
+                    {
+                        "status": readiness.status.value,
+                        "reason": readiness.reason,
+                    }
+                    if readiness is not None
+                    else None
+                ),
                 "base": _execution_document(challenge.base),
                 "head": _execution_document(challenge.head),
                 "mechanical_status": str(challenge.assessment.mechanical_status),
@@ -824,6 +925,8 @@ async def _run_live_case(
         "context": context.model_dump(mode="json"),
         "narrative": narrative.model_dump(mode="json"),
         "oracle_loaded_during_live_run": bool(oracle_source),
+        "execution_plan": None,
+        "environment_readiness": None,
         "claim_result": None,
         "candidate_attempts": [],
         "candidate_evaluations": [],
@@ -833,6 +936,14 @@ async def _run_live_case(
         "terminal_status": None,
         "error": None,
     }
+    execution_plan = _execution_plan(repository, case)
+    result["execution_plan"] = _execution_plan_document(execution_plan)
+    challenge_runner = _challenge(
+        repository,
+        workspace_root / "live",
+        case,
+        plan=execution_plan,
+    )
     claim_agent = BehavioralClaimAgent(
         model=BoundedRetryingModel(
             AdkGeminiClaimModel(model_name=model_name, provider_config=provider_config)
@@ -875,85 +986,100 @@ async def _run_live_case(
         ),
     )
 
-    generator = BoundedCandidateTestGenerator(
-        model=BoundedRetryingModel(
-            AdkGeminiCandidateModel(model_name=model_name, provider_config=provider_config)
-        ),
-        validator=CandidateTestValidator(),
-        claim=claim,
-        context=context,
-        contract=_contract(),
-        existing_paths=context_retriever.committed_paths(case.head_sha),
-        repository_signatures=signature_context,
-    )
-    challenge_runner = _challenge(repository, workspace_root / "live", case)
     challenge = None
-    try:
-        attempt = await generator.generate_initial()
-        result["candidate_attempts"].append(_attempt_document(attempt))
-        for attempt_number in range(2):
-            if attempt.validated is not None:
-                challenge = challenge_runner.run(
-                    base_ref=case.base_sha,
-                    head_ref=case.head_sha,
-                    artifact=attempt.validated.artifact,
-                )
-                evaluation = EvidenceWorkflow._evaluation_evidence(
-                    attempt.sequence, challenge
-                ).model_dump(mode="json")
-                evaluation["hidden_oracle_pattern"] = str(
-                    DifferentialPattern.BASE_ASSERTION_FAILED_HEAD_PASSED
-                )
-                evaluation["matches_hidden_oracle_direction"] = (
-                    challenge.assessment.pattern
-                    is DifferentialPattern.BASE_ASSERTION_FAILED_HEAD_PASSED
-                )
-                result["candidate_evaluations"].append(evaluation)
-                if (
-                    challenge.assessment.mechanical_status
-                    is MechanicalEvidenceStatus.DISCRIMINATING
-                ):
-                    semantic = await BoundedRetryingEvidenceAssessor(
-                        AdkGeminiEvidenceAssessor(
-                            model_name=model_name,
-                            provider_config=provider_config,
-                        )
-                    ).assess(
-                        claim=claim,
-                        candidate_source=attempt.validated.proposal.source,
-                        challenge=challenge,
-                    )
-                    EvidenceWorkflow._validate_semantic_decision(challenge, semantic.decision)
-                    result["semantic_assessment"] = semantic.model_dump(mode="json")
-                    result["final_mechanical"] = str(challenge.assessment.mechanical_status)
-                    result["final_outcome"] = str(semantic.decision.outcome)
-                    result["terminal_status"] = str(semantic.decision.outcome)
-                    return _finish_case(result, started)
-            if attempt_number == 1:
-                break
-            feedback = EvidenceWorkflow._repair_feedback(
-                attempt=attempt,
-                challenge=challenge,
-            )
-            attempt = await generator.repair(feedback=feedback)
-            result["candidate_attempts"].append(_attempt_document(attempt))
-            challenge = None
-    except ModelInvocationFailure as error:
-        result["terminal_status"] = "MODEL_INVOCATION_ERROR"
-        result["error"] = {
-            "type": type(error).__name__,
-            "message": str(error),
-            "retryable": error.retryable,
-            "stage": (
-                "ASSESSMENT"
-                if challenge is not None
-                and challenge.assessment.mechanical_status
-                is MechanicalEvidenceStatus.DISCRIMINATING
-                else "CANDIDATE"
+    with challenge_runner.session(
+        base_ref=case.base_sha,
+        head_ref=case.head_sha,
+    ) as session:
+        if execution_plan.install_dependencies:
+            readiness = session.prepare_environment()
+            result["environment_readiness"] = {
+                "status": readiness.status.value,
+                "reason": readiness.reason,
+            }
+            if not readiness.ready:
+                result["terminal_status"] = "ENVIRONMENT_NOT_READY"
+                result["final_mechanical"] = str(MechanicalEvidenceStatus.ENVIRONMENTAL)
+                result["final_outcome"] = str(ClaimOutcome.INSUFFICIENT_EVIDENCE)
+                return _finish_case(result, started)
+
+        generator = BoundedCandidateTestGenerator(
+            model=BoundedRetryingModel(
+                AdkGeminiCandidateModel(model_name=model_name, provider_config=provider_config)
             ),
-            "logical_candidate_calls_started": generator.snapshot.model_calls,
-        }
-        return _finish_case(result, started)
+            validator=CandidateTestValidator(
+                installed_import_roots=session.installed_import_roots()
+                if execution_plan.install_dependencies
+                else frozenset()
+            ),
+            claim=claim,
+            context=context,
+            contract=execution_plan.contract,
+            existing_paths=context_retriever.committed_paths(case.head_sha),
+            repository_signatures=signature_context,
+        )
+        try:
+            attempt = await generator.generate_initial()
+            result["candidate_attempts"].append(_attempt_document(attempt))
+            for attempt_number in range(2):
+                if attempt.validated is not None:
+                    challenge = session.run(artifact=attempt.validated.artifact)
+                    evaluation = EvidenceWorkflow._evaluation_evidence(
+                        attempt.sequence, challenge
+                    ).model_dump(mode="json")
+                    evaluation["hidden_oracle_pattern"] = str(
+                        DifferentialPattern.BASE_ASSERTION_FAILED_HEAD_PASSED
+                    )
+                    evaluation["matches_hidden_oracle_direction"] = (
+                        challenge.assessment.pattern
+                        is DifferentialPattern.BASE_ASSERTION_FAILED_HEAD_PASSED
+                    )
+                    result["candidate_evaluations"].append(evaluation)
+                    if (
+                        challenge.assessment.mechanical_status
+                        is MechanicalEvidenceStatus.DISCRIMINATING
+                    ):
+                        semantic = await BoundedRetryingEvidenceAssessor(
+                            AdkGeminiEvidenceAssessor(
+                                model_name=model_name,
+                                provider_config=provider_config,
+                            )
+                        ).assess(
+                            claim=claim,
+                            candidate_source=attempt.validated.proposal.source,
+                            challenge=challenge,
+                        )
+                        EvidenceWorkflow._validate_semantic_decision(challenge, semantic.decision)
+                        result["semantic_assessment"] = semantic.model_dump(mode="json")
+                        result["final_mechanical"] = str(challenge.assessment.mechanical_status)
+                        result["final_outcome"] = str(semantic.decision.outcome)
+                        result["terminal_status"] = str(semantic.decision.outcome)
+                        return _finish_case(result, started)
+                if attempt_number == 1:
+                    break
+                feedback = EvidenceWorkflow._repair_feedback(
+                    attempt=attempt,
+                    challenge=challenge,
+                )
+                attempt = await generator.repair(feedback=feedback)
+                result["candidate_attempts"].append(_attempt_document(attempt))
+                challenge = None
+        except ModelInvocationFailure as error:
+            result["terminal_status"] = "MODEL_INVOCATION_ERROR"
+            result["error"] = {
+                "type": type(error).__name__,
+                "message": str(error),
+                "retryable": error.retryable,
+                "stage": (
+                    "ASSESSMENT"
+                    if challenge is not None
+                    and challenge.assessment.mechanical_status
+                    is MechanicalEvidenceStatus.DISCRIMINATING
+                    else "CANDIDATE"
+                ),
+                "logical_candidate_calls_started": generator.snapshot.model_calls,
+            }
+            return _finish_case(result, started)
     result["terminal_status"] = (
         str(challenge.assessment.mechanical_status) if challenge is not None else "INVALID_TEST"
     )

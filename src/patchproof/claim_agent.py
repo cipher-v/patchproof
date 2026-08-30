@@ -582,7 +582,7 @@ class BehavioralClaimAgent:
                 )
         interfaces = context.interfaces
         shared = selection.claim.shared_interface
-        if shared and interfaces.present_on_both:
+        if shared:
             leaf = shared.rsplit(".", maxsplit=1)[-1]
             shared_leaves = {
                 name.rsplit(".", maxsplit=1)[-1] for name in interfaces.present_on_both
