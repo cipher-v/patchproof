@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
@@ -15,7 +16,8 @@ from patchproof.dashboard import (
     install_dashboard,
     load_demo_snapshot,
 )
-from patchproof.storage import SqliteVerificationRunStore
+from patchproof.storage import SqliteVerificationRunStore, StoredEvidence
+from patchproof.workflow import PullRequestEvent
 
 _SUCCESS_RUN_ID = UUID("695eaa20-7db3-492f-a57e-9819ebb54087")
 _ABSTENTION_RUN_ID = UUID("2386649f-56b9-44c8-833e-ddf440a05483")
@@ -61,8 +63,25 @@ def test_dashboard_page_has_strict_headers_and_external_assets() -> None:
     assert '<script src="/dashboard/assets/dashboard.js" defer></script>' in page.text
     assert "script-src 'self'" in page.headers["content-security-policy"]
     assert page.headers["x-frame-options"] == "DENY"
+    assert 'id="analyze-form"' in page.text
+    assert 'id="pr-url"' in page.text
     assert client.get("/dashboard/assets/styles.css").status_code == 200
-    assert client.get("/dashboard/assets/dashboard.js").status_code == 200
+    script = client.get("/dashboard/assets/dashboard.js")
+    assert script.status_code == 200
+    assert 'fetch("/api/analyze"' in script.text
+    assert "fetch(`/api/runs/${encodeURIComponent(runId)}`" in script.text
+    assert 'candidate.source || "Candidate source unavailable."' in script.text
+    for durable_status in (
+        "QUEUED",
+        "SELECTING_CLAIM",
+        "GENERATING_CANDIDATE",
+        "RUNNING_BASE_HEAD",
+        "ASSESSING_SEMANTICS",
+        "COMPLETE",
+        "FAILED",
+        "ABSTAINED",
+    ):
+        assert durable_status in script.text
 
 
 def test_dashboard_api_exposes_only_the_sanitized_projection() -> None:
@@ -97,6 +116,12 @@ def test_store_provider_requires_a_small_unique_explicit_run_list(
             store=store,
             run_ids=tuple(UUID(int=value) for value in range(1, 10)),
         )
+    with pytest.raises(ValueError, match="cannot exceed"):
+        StoreDashboardSnapshotProvider(
+            store=store,
+            run_ids=(_SUCCESS_RUN_ID, _ABSTENTION_RUN_ID),
+            max_runs=1,
+        )
 
 
 def test_missing_featured_run_fails_closed_without_leaking_identity(
@@ -114,6 +139,89 @@ def test_missing_featured_run_fails_closed_without_leaking_identity(
     assert response.status_code == 503
     assert response.json() == {"detail": "featured evidence is temporarily unavailable"}
     assert str(_SUCCESS_RUN_ID) not in response.text
+
+
+def test_store_provider_auto_discovers_bounded_recent_runs_newest_first(
+    writable_test_directory,
+) -> None:
+    clock_values = iter(
+        (
+            datetime(2026, 8, 30, 10, 0, tzinfo=UTC),
+            datetime(2026, 8, 30, 10, 1, tzinfo=UTC),
+        )
+    )
+    store = SqliteVerificationRunStore(
+        writable_test_directory / "recent.db",
+        clock=lambda: next(clock_values),
+    )
+
+    def accept(delivery: str, pr_number: int, head: str, updated: datetime):
+        return store.accept_pull_request(
+            PullRequestEvent(
+                delivery_id=delivery,
+                action="product_analyze",
+                repository="owner/repo",
+                pr_number=pr_number,
+                base_sha="a" * 40,
+                head_sha=head * 40,
+                head_updated_at=updated,
+                title=f"PR {pr_number}",
+            )
+        ).run
+
+    older = accept("one", 1, "b", datetime(2026, 8, 29, tzinfo=UTC))
+    newer = accept("two", 2, "c", datetime(2026, 8, 30, tzinfo=UTC))
+
+    snapshot = StoreDashboardSnapshotProvider(store=store, max_runs=1).snapshot()
+
+    assert [run.run_id for run in snapshot.runs] == [newer.run_id]
+    assert snapshot.runs[0].status == "ACCEPTED"
+    assert older.run_id != newer.run_id
+
+
+def test_store_projection_rejects_corrupted_evidence_hash(writable_test_directory) -> None:
+    store = SqliteVerificationRunStore(writable_test_directory / "corrupt.db")
+    run = store.accept_pull_request(
+        PullRequestEvent(
+            delivery_id="corrupt",
+            action="patchproof_analyze",
+            repository="owner/repo",
+            pr_number=3,
+            base_sha="a" * 40,
+            head_sha="b" * 40,
+            head_updated_at=datetime(2026, 8, 30, tzinfo=UTC),
+            title="Corrupt fixture",
+        )
+    ).run
+
+    class CorruptingStore:
+        def get_run(self, run_id):
+            return store.get_run(run_id)
+
+        def get_evidence(self, run_id):
+            return StoredEvidence(
+                run_id=run_id,
+                document_json='{"not":"the declared hash"}',
+                sha256="0" * 64,
+                created_at=datetime(2026, 8, 30, tzinfo=UTC),
+            )
+
+        def get_publication(self, run_id):
+            del run_id
+            return None
+
+        def get_failure(self, run_id):
+            del run_id
+            return None
+
+        def list_recent_runs(self, *, limit):
+            del limit
+            return [run]
+
+    provider = StoreDashboardSnapshotProvider(store=CorruptingStore())
+
+    with pytest.raises(RuntimeError, match="hash does not match"):
+        provider.snapshot()
 
 
 def test_cloud_settings_parse_only_explicit_dashboard_run_ids(monkeypatch) -> None:
