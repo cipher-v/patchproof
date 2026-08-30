@@ -104,11 +104,11 @@ gcloud config get-value project
 .\deploy\gcp\deploy.ps1 `
   -ProjectId "patchproof-506606" `
   -ImageTag "cloud-analyze-integration" `
-  -GitHubAppId 4711074 `
-  -WebhookSecretFile "C:\secure\patchproof-webhook-secret.txt" `
-  -GitHubPrivateKeyFile "C:\secure\patchproof-github-private-key.pem"
+  -GitHubAppId 4711074
 ```
 
-The secret file paths are examples of local operator-controlled files; never commit their contents.
+Existing enabled secret versions are reused. For an initial deployment, or an intentional rotation,
+also pass `-UpdateSecretVersions`, `-WebhookSecretFile`, and `-GitHubPrivateKeyFile` with local
+operator-controlled files. Never commit their contents.
 After deployment, verify `/livez`, `/dashboard`, `/dashboard/api/runs`, malformed and unknown
 `/api/analyze` rejection, and then make at most the separately authorized live known-PR request.

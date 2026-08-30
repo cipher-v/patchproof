@@ -6,8 +6,9 @@ param(
     [string]$ImageTag = "phase9",
     [string]$DashboardRunIds = "",
     [Parameter(Mandatory = $true)][int]$GitHubAppId,
-    [Parameter(Mandatory = $true)][string]$WebhookSecretFile,
-    [Parameter(Mandatory = $true)][string]$GitHubPrivateKeyFile
+    [string]$WebhookSecretFile = "",
+    [string]$GitHubPrivateKeyFile = "",
+    [switch]$UpdateSecretVersions
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,12 +49,6 @@ function Test-GcloudResource {
     }
     finally {
         $ErrorActionPreference = $PreviousErrorActionPreference
-    }
-}
-
-foreach ($RequiredFile in @($WebhookSecretFile, $GitHubPrivateKeyFile)) {
-    if (-not (Test-Path -LiteralPath $RequiredFile -PathType Leaf)) {
-        throw "Required secret file does not exist: $RequiredFile"
     }
 }
 
@@ -106,14 +101,24 @@ if (-not (Test-GcloudResource -Arguments @(
 }
 Invoke-Gcloud tasks queues update $Queue --location=$Region --max-dispatches-per-second=1 --max-concurrent-dispatches=1 --max-attempts=3 --max-retry-duration=3600s
 
-foreach ($Secret in @("patchproof-webhook-secret", "patchproof-github-private-key")) {
+$SecretFiles = @{
+    "patchproof-webhook-secret" = $WebhookSecretFile
+    "patchproof-github-private-key" = $GitHubPrivateKeyFile
+}
+foreach ($Secret in $SecretFiles.Keys) {
     if (-not (Test-GcloudResource -Arguments @("secrets", "describe", $Secret))) {
         Invoke-Gcloud secrets create $Secret --replication-policy=automatic
     }
     Invoke-Gcloud secrets add-iam-policy-binding $Secret --member="serviceAccount:$ControlAccount" --role="roles/secretmanager.secretAccessor"
+    $EnabledVersion = Invoke-Gcloud secrets versions list $Secret --filter="state=ENABLED" --limit=1 --format="value(name)"
+    if ($UpdateSecretVersions -or -not $EnabledVersion) {
+        $SecretFile = $SecretFiles[$Secret]
+        if (-not $SecretFile -or -not (Test-Path -LiteralPath $SecretFile -PathType Leaf)) {
+            throw "A local secret file is required to create or update $Secret."
+        }
+        Invoke-Gcloud secrets versions add $Secret --data-file=$SecretFile
+    }
 }
-Invoke-Gcloud secrets versions add patchproof-webhook-secret --data-file=$WebhookSecretFile
-Invoke-Gcloud secrets versions add patchproof-github-private-key --data-file=$GitHubPrivateKeyFile
 
 Invoke-Gcloud builds submit --config=deploy/cloudbuild.yaml --substitutions="_IMAGE=$Image" .
 
