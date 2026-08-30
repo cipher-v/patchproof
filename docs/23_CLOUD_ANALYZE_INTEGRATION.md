@@ -123,3 +123,28 @@ also pass `-UpdateSecretVersions`, `-WebhookSecretFile`, and `-GitHubPrivateKeyF
 operator-controlled files. Never commit their contents.
 After deployment, verify `/livez`, `/dashboard`, `/dashboard/api/runs`, malformed and unknown
 `/api/analyze` rejection, and then make at most the separately authorized live known-PR request.
+
+## Superseding the two legacy successful Checks
+
+GitHub does not expose an API for deleting Check Runs. The checked-in helper is deliberately pinned
+to legacy Check Runs `97764451438` and `99159359877`, their immutable heads and durable external
+IDs, GitHub App `cipherv-patchproof`, and installation `156402136`. It is a dry run unless `--apply`
+is supplied and never prints the PEM or minted installation token.
+
+Review the plan without credentials or network mutation:
+
+```powershell
+uv run python scripts/supersede_legacy_checks.py
+```
+
+After explicit operator approval, use the existing local App key:
+
+```powershell
+uv run python scripts/supersede_legacy_checks.py `
+  --private-key-file "C:\secure\patchproof-github-app.pem" `
+  --apply
+```
+
+The guarded update changes only the two completed Checks to `neutral` with a title beginning
+`Legacy PatchProof evidence — superseded` and a summary that they predate the current hardened
+evidence policy. Historical Firestore records remain unchanged.
