@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory = $true)][string]$ProjectId,
     [string]$Region = "asia-south1",
     [string]$VertexLocation = "global",
-    [string]$AllowedRepositories = "cipher-v/patchproof",
+    [string]$AllowedRepositories = "cipher-v/patchproof,agronholm/anyio,dateutil/dateutil,kludex/starlette,more-itertools/more-itertools,pallets/jinja,pypa/packaging,python-attrs/cattrs,python-jsonschema/jsonschema,textualize/rich,tox-dev/platformdirs,marshmallow-code/marshmallow,pallets/click,pylint-dev/astroid,python-attrs/attrs",
     [string]$ImageTag = "phase9",
     [string]$DashboardRunIds = "",
     [Parameter(Mandatory = $true)][int]$GitHubAppId,
@@ -129,5 +129,8 @@ Write-Output "Control URL: $ControlUrl"
 Write-Output "Executor URL: $ExecutorUrl"
 Write-Output "GitHub webhook URL: $ControlUrl/webhooks/github"
 Write-Output "Evidence dashboard: $ControlUrl/dashboard"
+Write-Output "Cloud analyze API: $ControlUrl/api/analyze"
+Write-Output "CLI: `$env:PATCHPROOF_CONTROL_URL='$ControlUrl'; uv run patchproof analyze <KNOWN_PR_URL>"
+Write-Output "Dashboard CLI: `$env:PATCHPROOF_CONTROL_URL='$ControlUrl'; uv run patchproof dashboard"
 Write-Output "Public health proof: Invoke-RestMethod $ControlUrl/livez"
 Write-Output "Private executor proof: gcloud run services proxy $ExecutorService --region=$Region --port=8081"

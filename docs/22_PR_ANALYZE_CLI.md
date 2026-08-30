@@ -36,10 +36,10 @@ $env:GOOGLE_CLOUD_LOCATION="global"
 $env:PATCHPROOF_GEMINI_MODEL="gemini-3.6-flash"
 ```
 
-Run the known jsonschema demonstration:
+Run the known jsonschema demonstration locally:
 
 ```powershell
-uv run patchproof analyze https://github.com/python-jsonschema/jsonschema/pull/1208
+uv run patchproof analyze --local https://github.com/python-jsonschema/jsonschema/pull/1208
 ```
 
 The command may use billable Vertex AI calls. It uses the hardened production policy of one initial
@@ -61,3 +61,6 @@ does not manufacture an evidence outcome.
 
 The short sibling paths `.pp/repositories` and `.pp/w` are intentionally used for cached
 repositories and temporary worktrees to avoid Windows path-length failures.
+
+For the normal cloud-backed flow and first-class Evidence Console command, see
+[`23_CLOUD_ANALYZE_INTEGRATION.md`](23_CLOUD_ANALYZE_INTEGRATION.md).
