@@ -16,6 +16,9 @@ dependencies = [
     "uvicorn>=0.35,<1",
 ]
 
+[project.scripts]
+patchproof = "patchproof.cli:main"
+
 [dependency-groups]
 dev = [
     "pytest>=8.3,<10",

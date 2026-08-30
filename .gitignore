@@ -28,6 +28,9 @@ dist/
 # Local control-plane state
 data/
 
+# Human-facing local analysis runs
+.patchproof/
+
 # Reproducible benchmark checkout/workspace cache
 .patchproof-bench/
 .patchproof-hard-mode/
