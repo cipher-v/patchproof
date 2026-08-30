@@ -41,6 +41,8 @@ from patchproof.models import (
 from patchproof.storage import StoredEvidence, VerificationRunStore
 from patchproof.structured_output import StrictGeminiOutputModel
 from patchproof.test_generation import (
+    _MAX_CANDIDATE_MODEL_CALLS,
+    _MAX_REPAIRS,
     BoundedCandidateTestGenerator,
     CandidateAttempt,
     CandidateAttemptStatus,
@@ -415,7 +417,7 @@ class EvidenceWorkflow:
             attempt = await generator.generate_initial()
             attempts.append(attempt)
 
-            for attempt_number in range(3):
+            for attempt_number in range(_MAX_CANDIDATE_MODEL_CALLS):
                 if attempt.validated is not None:
                     self._require_current(self.store.get_run(run_id))
                     run = self._advance_for_execution(run)
@@ -472,7 +474,7 @@ class EvidenceWorkflow:
                         self._persist_terminal(run, report)
                         return report
 
-                if attempt_number == 2:
+                if attempt_number >= _MAX_REPAIRS:
                     break
                 feedback = self._repair_feedback(attempt=attempt, challenge=challenge)
                 attempt = await generator.repair(feedback=feedback)

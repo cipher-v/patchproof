@@ -166,6 +166,7 @@ class NormalizedGeminiUsage:
     output_tokens: int | None = None
     total_tokens: int | None = None
     cached_tokens: int | None = None
+    reasoning_tokens: int | None = None
 
     def merge(self, metadata: object) -> NormalizedGeminiUsage:
         return NormalizedGeminiUsage(
@@ -199,6 +200,16 @@ class NormalizedGeminiUsage:
                     metadata,
                     "cached_content_token_count",
                     "cachedContentTokenCount",
+                ),
+            ),
+            reasoning_tokens=_maximum(
+                self.reasoning_tokens,
+                _usage_value(
+                    metadata,
+                    "thoughts_token_count",
+                    "thoughtsTokenCount",
+                    "reasoning_token_count",
+                    "reasoningTokenCount",
                 ),
             ),
         )

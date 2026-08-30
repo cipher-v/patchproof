@@ -19,8 +19,15 @@ from patchproof.execution_runtime import (
     BoundedSubprocessRunner,
     ChildProcessEnvironmentPolicy,
     remove_runtime_directory,
+    sanitize_process_output,
 )
-from patchproof.models import ExecutionResult, Revision, TestArtifact, TestExecutionStatus
+from patchproof.models import (
+    EnvironmentSetupDiagnostic,
+    ExecutionResult,
+    Revision,
+    TestArtifact,
+    TestExecutionStatus,
+)
 
 #: Plugins that would make one selected node non-comparable across BASE and HEAD, or
 #: that rewrite the report PatchProof parses. These are disabled by name rather than by
@@ -296,16 +303,15 @@ class PytestRunner:
             if installation_error is None:
                 self._installed_workspaces.add(workspace)
             if installation_error is not None:
-                detail, stdout, stderr, exit_code = installation_error
                 return self._early_result(
                     revision=revision,
                     artifact=artifact,
                     status=TestExecutionStatus.ENVIRONMENT_SETUP_FAILED,
                     started_at=started_at,
-                    detail=detail,
-                    stdout=stdout,
-                    stderr=stderr,
-                    exit_code=exit_code,
+                    detail=self._installation_failure_reason(installation_error),
+                    stdout=installation_error.stdout,
+                    stderr=installation_error.stderr,
+                    exit_code=installation_error.exit_code,
                 )
 
         try:
@@ -420,21 +426,26 @@ class PytestRunner:
             with suppress(OSError):
                 artifact_path.unlink()
 
-    def prepare_environment(self, *, workspace: Path) -> str | None:
-        """Run only the repository-declared setup and return a bounded failure reason."""
+    def prepare_environment(self, *, workspace: Path) -> EnvironmentSetupDiagnostic | None:
+        """Run repository setup and retain bounded, sanitized failure diagnostics."""
         workspace = workspace.resolve()
         if not workspace.is_dir():
-            return "revision workspace does not exist"
+            return self._nonprocess_installation_failure(
+                workspace=workspace,
+                reason="revision workspace does not exist",
+            )
         if not self.install_dependencies:
-            return "validated dependency installation is disabled"
+            return self._nonprocess_installation_failure(
+                workspace=workspace,
+                reason="validated dependency installation is disabled",
+            )
         if workspace in self._installed_workspaces:
             return None
         installation_error = self._install(workspace)
         if installation_error is None:
             self._installed_workspaces.add(workspace)
             return None
-        detail, _stdout, _stderr, _exit_code = installation_error
-        return detail[:2_000]
+        return installation_error
 
     def _test_command(self, workspace: Path) -> tuple[str, ...]:
         """Use the repository environment after installation for `python -m pytest`."""
@@ -476,10 +487,8 @@ class PytestRunner:
             raise ValueError("repository Python path resolves outside the revision workspace")
         return resolved
 
-    def _install(self, workspace: Path) -> tuple[str, str, str, int | None] | None:
+    def _install(self, workspace: Path) -> EnvironmentSetupDiagnostic | None:
         """Run only validated contract argument arrays, without a command shell."""
-        captured_stdout: list[str] = []
-        captured_stderr: list[str] = []
         runtime_root = workspace.parent / f".patchproof-install-{uuid.uuid4().hex}"
         try:
             environment = self.environment_policy.build(runtime_root=runtime_root)
@@ -490,28 +499,61 @@ class PytestRunner:
                     environment=environment,
                     timeout_seconds=self.install_timeout_seconds,
                 )
-                captured_stdout.append(completed.stdout)
-                captured_stderr.append(completed.stderr)
-                if completed.timed_out:
-                    return (
-                        "dependency installation exceeded the "
-                        f"{self.install_timeout_seconds:g}-second timeout",
-                        "".join(captured_stdout)[:12_000],
-                        "".join(captured_stderr)[:12_000],
-                        None,
-                    )
-                if completed.start_error is not None:
-                    return ("dependency installation could not start", "", "", None)
-                if completed.returncode != 0:
-                    return (
-                        f"dependency installation failed with exit code {completed.returncode}",
-                        "".join(captured_stdout)[:12_000],
-                        "".join(captured_stderr)[:12_000],
-                        completed.returncode,
+                if (
+                    completed.timed_out
+                    or completed.start_error is not None
+                    or completed.returncode != 0
+                ):
+                    if completed.timed_out:
+                        reason = (
+                            "dependency installation exceeded the "
+                            f"{self.install_timeout_seconds:g}-second timeout"
+                        )
+                    elif completed.start_error is not None:
+                        reason = f"dependency installation could not start: {completed.start_error}"
+                    else:
+                        reason = (
+                            f"dependency installation failed with exit code {completed.returncode}"
+                        )
+                    return EnvironmentSetupDiagnostic(
+                        reason=reason,
+                        argv=tuple(command),
+                        cwd=str(workspace),
+                        exit_code=completed.returncode,
+                        duration_seconds=completed.duration_seconds,
+                        stdout=sanitize_process_output(completed.stdout),
+                        stderr=sanitize_process_output(completed.stderr),
+                        timed_out=completed.timed_out,
+                        start_error=completed.start_error,
+                        environment=tuple(
+                            (name, environment[name])
+                            for name in (
+                                "UV_NO_CACHE",
+                                "UV_NO_PROGRESS",
+                                "UV_PYTHON_DOWNLOADS",
+                            )
+                            if name in environment
+                        ),
                     )
             return None
         finally:
             remove_runtime_directory(runtime_root)
+
+    def _nonprocess_installation_failure(
+        self, *, workspace: Path, reason: str
+    ) -> EnvironmentSetupDiagnostic:
+        command = self.contract.install[0]
+        return EnvironmentSetupDiagnostic(
+            reason=reason,
+            argv=command,
+            cwd=str(workspace),
+            exit_code=None,
+            duration_seconds=0.0,
+            start_error=reason,
+        )
+
+    def _installation_failure_reason(self, failure: EnvironmentSetupDiagnostic) -> str:
+        return failure.reason
 
     @staticmethod
     def _syntax_error(artifact: TestArtifact) -> str | None:

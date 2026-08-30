@@ -238,6 +238,41 @@ def test_remote_challenge_checks_environment_before_candidate_execution() -> Non
     assert b"artifact_source" not in captured["payload"]
 
 
+def test_remote_challenge_session_binds_revisions_for_workflow_interface() -> None:
+    request = request_document()
+    expected = response_document()
+    paths = []
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        paths.append(http_request.url.path)
+        if http_request.url.path.endswith("environment-readiness"):
+            return httpx.Response(
+                200,
+                content=ExecutorEnvironmentResponse(
+                    status=EnvironmentReadinessStatus.READY,
+                    reason="repository-declared setup completed on BASE and HEAD",
+                ).model_dump_json(),
+            )
+        return httpx.Response(200, content=expected.model_dump_json())
+
+    challenge = RemoteBaseHeadChallenge(
+        repository=request.repository,
+        pull_request_number=request.pull_request_number,
+        contract=contract(),
+        executor_url="https://executor.example",
+        tokens=StubTokenProvider(),
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    with challenge.session(base_ref=request.base_sha, head_ref=request.head_sha) as session:
+        assert session.prepare_environment().ready
+        assert session.installed_import_roots() == frozenset()
+        result = session.run(artifact=request.artifact())
+
+    assert result.artifact.sha256 == request.artifact_sha256
+    assert paths == ["/internal/environment-readiness", "/internal/challenge"]
+
+
 def test_google_task_verifier_pins_audience_issuer_and_email(monkeypatch) -> None:
     captured = {}
 

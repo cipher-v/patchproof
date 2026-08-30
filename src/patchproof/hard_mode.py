@@ -15,7 +15,7 @@ import subprocess
 import sys
 import time
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -62,6 +62,7 @@ from patchproof.models import (
     TestExecutionStatus,
 )
 from patchproof.pytest_runner import PytestRunner
+from patchproof.reasoning_budget import AgentTask, budget_for
 from patchproof.test_generation import (
     _MAX_CANDIDATE_MODEL_CALLS,
     _MAX_REPAIRS,
@@ -697,6 +698,16 @@ def _execution_document(result: Any) -> dict[str, Any]:
     }
 
 
+def _readiness_document(readiness: Any) -> dict[str, Any]:
+    document = {
+        "status": readiness.status.value,
+        "reason": readiness.reason,
+    }
+    if readiness.setup_diagnostic is not None:
+        document["setup_diagnostic"] = asdict(readiness.setup_diagnostic)
+    return document
+
+
 def _context_leak_audit(
     *,
     case: HardModeCase,
@@ -799,12 +810,7 @@ def verify_oracles(
                 "oracle_sha256": case.oracle_sha256,
                 "execution_plan": _execution_plan_document(execution_plan),
                 "environment_readiness": (
-                    {
-                        "status": readiness.status.value,
-                        "reason": readiness.reason,
-                    }
-                    if readiness is not None
-                    else None
+                    _readiness_document(readiness) if readiness is not None else None
                 ),
                 "base": _execution_document(challenge.base),
                 "head": _execution_document(challenge.head),
@@ -942,10 +948,6 @@ async def _run_live_case(
         source_repository=repository,
         excluded_paths=frozenset(case.excluded_paths),
     )
-    context = context_retriever.retrieve(base_sha=case.base_sha, head_sha=case.head_sha)
-    context_sha256 = _sha256(context.model_dump_json().encode("utf-8"))
-    if context_sha256 != expected_context_sha256:
-        raise HardModeConfigurationError("live context differs from the preflight-gated context")
     narrative = PullRequestNarrative.from_untrusted(title=case.title, body=case.body)
     result: dict[str, Any] = {
         "case_id": case.case_id,
@@ -957,12 +959,13 @@ async def _run_live_case(
         "category": case.category,
         "difficulty_rationale": case.difficulty_rationale,
         "started_at": started.isoformat(),
-        "context_sha256": context_sha256,
-        "context": context.model_dump(mode="json"),
+        "context_sha256": None,
+        "context": None,
         "narrative": narrative.model_dump(mode="json"),
         "oracle_loaded_during_live_run": bool(oracle_source),
         "execution_plan": None,
         "environment_readiness": None,
+        "environment_setup_duration_seconds": None,
         "claim_result": None,
         "candidate_attempts": [],
         "candidate_evaluations": [],
@@ -980,6 +983,56 @@ async def _run_live_case(
         case,
         plan=execution_plan,
     )
+    with challenge_runner.session(
+        base_ref=case.base_sha,
+        head_ref=case.head_sha,
+    ) as session:
+        if execution_plan.install_dependencies:
+            setup_started = time.perf_counter()
+            readiness = session.prepare_environment()
+            result["environment_setup_duration_seconds"] = time.perf_counter() - setup_started
+            result["environment_readiness"] = _readiness_document(readiness)
+            if not readiness.ready:
+                result["terminal_status"] = "ENVIRONMENT_NOT_READY"
+                result["final_mechanical"] = str(MechanicalEvidenceStatus.ENVIRONMENTAL)
+                result["final_outcome"] = str(ClaimOutcome.INSUFFICIENT_EVIDENCE)
+                return _finish_case(result, started)
+        context = context_retriever.retrieve(base_sha=case.base_sha, head_sha=case.head_sha)
+        context_sha256 = _sha256(context.model_dump_json().encode("utf-8"))
+        if context_sha256 != expected_context_sha256:
+            raise HardModeConfigurationError(
+                "live context differs from the preflight-gated context"
+            )
+        result["context_sha256"] = context_sha256
+        result["context"] = context.model_dump(mode="json")
+        return await _run_ready_live_case(
+            case=case,
+            context_retriever=context_retriever,
+            context=context,
+            narrative=narrative,
+            execution_plan=execution_plan,
+            session=session,
+            model_name=model_name,
+            provider_config=provider_config,
+            result=result,
+            started=started,
+        )
+
+
+async def _run_ready_live_case(
+    *,
+    case: HardModeCase,
+    context_retriever: DeterministicContextRetriever,
+    context: PullRequestContext,
+    narrative: PullRequestNarrative,
+    execution_plan: _EvaluationExecutionPlan,
+    session: ChallengeSession,
+    model_name: str,
+    provider_config: GeminiProviderConfig,
+    result: dict[str, Any],
+    started: datetime,
+) -> dict[str, Any]:
+    """Run inference only after the persistent BASE/HEAD session is ready."""
     claim_agent = BehavioralClaimAgent(
         model=BoundedRetryingModel(
             AdkGeminiClaimModel(model_name=model_name, provider_config=provider_config)
@@ -1023,91 +1076,75 @@ async def _run_live_case(
     )
 
     challenge = None
-    with challenge_runner.session(
-        base_ref=case.base_sha,
-        head_ref=case.head_sha,
-    ) as session:
-        if execution_plan.install_dependencies:
-            readiness = session.prepare_environment()
-            result["environment_readiness"] = {
-                "status": readiness.status.value,
-                "reason": readiness.reason,
-            }
-            if not readiness.ready:
-                result["terminal_status"] = "ENVIRONMENT_NOT_READY"
-                result["final_mechanical"] = str(MechanicalEvidenceStatus.ENVIRONMENTAL)
-                result["final_outcome"] = str(ClaimOutcome.INSUFFICIENT_EVIDENCE)
-                return _finish_case(result, started)
-
-        generator = BoundedCandidateTestGenerator(
-            model=BoundedRetryingModel(
-                AdkGeminiCandidateModel(model_name=model_name, provider_config=provider_config)
-            ),
-            validator=CandidateTestValidator(
-                installed_import_roots=session.installed_import_roots()
-                if execution_plan.install_dependencies
-                else frozenset()
-            ),
-            claim=claim,
-            context=context,
-            contract=execution_plan.contract,
-            existing_paths=context_retriever.committed_paths(case.head_sha),
-            repository_signatures=signature_context,
-        )
-        try:
-            async for attempt, challenge in _bounded_candidate_challenges(
-                generator=generator,
-                session=session,
-            ):
-                result["candidate_attempts"].append(_attempt_document(attempt))
-                if challenge is not None:
-                    evaluation = EvidenceWorkflow._evaluation_evidence(
-                        attempt.sequence, challenge
-                    ).model_dump(mode="json")
-                    evaluation["hidden_oracle_pattern"] = str(
-                        DifferentialPattern.BASE_ASSERTION_FAILED_HEAD_PASSED
-                    )
-                    evaluation["matches_hidden_oracle_direction"] = (
-                        challenge.assessment.pattern
-                        is DifferentialPattern.BASE_ASSERTION_FAILED_HEAD_PASSED
-                    )
-                    result["candidate_evaluations"].append(evaluation)
-                    if (
-                        challenge.assessment.mechanical_status
-                        is MechanicalEvidenceStatus.DISCRIMINATING
-                    ):
-                        semantic = await BoundedRetryingEvidenceAssessor(
-                            AdkGeminiEvidenceAssessor(
-                                model_name=model_name,
-                                provider_config=provider_config,
-                            )
-                        ).assess(
-                            claim=claim,
-                            candidate_source=attempt.validated.proposal.source,
-                            challenge=challenge,
-                        )
-                        EvidenceWorkflow._validate_semantic_decision(challenge, semantic.decision)
-                        result["semantic_assessment"] = semantic.model_dump(mode="json")
-                        result["final_mechanical"] = str(challenge.assessment.mechanical_status)
-                        result["final_outcome"] = str(semantic.decision.outcome)
-                        result["terminal_status"] = str(semantic.decision.outcome)
-                        return _finish_case(result, started)
-        except ModelInvocationFailure as error:
-            result["terminal_status"] = "MODEL_INVOCATION_ERROR"
-            result["error"] = {
-                "type": type(error).__name__,
-                "message": str(error),
-                "retryable": error.retryable,
-                "stage": (
-                    "ASSESSMENT"
-                    if challenge is not None
-                    and challenge.assessment.mechanical_status
+    generator = BoundedCandidateTestGenerator(
+        model=BoundedRetryingModel(
+            AdkGeminiCandidateModel(model_name=model_name, provider_config=provider_config)
+        ),
+        validator=CandidateTestValidator(
+            installed_import_roots=session.installed_import_roots()
+            if execution_plan.install_dependencies
+            else frozenset()
+        ),
+        claim=claim,
+        context=context,
+        contract=execution_plan.contract,
+        existing_paths=context_retriever.committed_paths(case.head_sha),
+        repository_signatures=signature_context,
+    )
+    try:
+        async for attempt, challenge in _bounded_candidate_challenges(
+            generator=generator,
+            session=session,
+        ):
+            result["candidate_attempts"].append(_attempt_document(attempt))
+            if challenge is not None:
+                evaluation = EvidenceWorkflow._evaluation_evidence(
+                    attempt.sequence, challenge
+                ).model_dump(mode="json")
+                evaluation["hidden_oracle_pattern"] = str(
+                    DifferentialPattern.BASE_ASSERTION_FAILED_HEAD_PASSED
+                )
+                evaluation["matches_hidden_oracle_direction"] = (
+                    challenge.assessment.pattern
+                    is DifferentialPattern.BASE_ASSERTION_FAILED_HEAD_PASSED
+                )
+                result["candidate_evaluations"].append(evaluation)
+                if (
+                    challenge.assessment.mechanical_status
                     is MechanicalEvidenceStatus.DISCRIMINATING
-                    else "CANDIDATE"
-                ),
-                "logical_candidate_calls_started": generator.snapshot.model_calls,
-            }
-            return _finish_case(result, started)
+                ):
+                    semantic = await BoundedRetryingEvidenceAssessor(
+                        AdkGeminiEvidenceAssessor(
+                            model_name=model_name,
+                            provider_config=provider_config,
+                        )
+                    ).assess(
+                        claim=claim,
+                        candidate_source=attempt.validated.proposal.source,
+                        challenge=challenge,
+                    )
+                    EvidenceWorkflow._validate_semantic_decision(challenge, semantic.decision)
+                    result["semantic_assessment"] = semantic.model_dump(mode="json")
+                    result["final_mechanical"] = str(challenge.assessment.mechanical_status)
+                    result["final_outcome"] = str(semantic.decision.outcome)
+                    result["terminal_status"] = str(semantic.decision.outcome)
+                    return _finish_case(result, started)
+    except ModelInvocationFailure as error:
+        result["terminal_status"] = "MODEL_INVOCATION_ERROR"
+        result["error"] = {
+            "type": type(error).__name__,
+            "message": str(error),
+            "retryable": error.retryable,
+            "stage": (
+                "ASSESSMENT"
+                if challenge is not None
+                and challenge.assessment.mechanical_status
+                is MechanicalEvidenceStatus.DISCRIMINATING
+                else "CANDIDATE"
+            ),
+            "logical_candidate_calls_started": generator.snapshot.model_calls,
+        }
+        return _finish_case(result, started)
     result["terminal_status"] = (
         str(challenge.assessment.mechanical_status) if challenge is not None else "INVALID_TEST"
     )
@@ -1144,6 +1181,11 @@ def run_live(
             "new hard-mode live runs must declare an explicit Gemini provider surface"
         )
     resolved_provider = provider_config or GeminiProviderConfig.from_environment()
+    configured_model = os.getenv("PATCHPROOF_GEMINI_MODEL")
+    if configured_model and configured_model != manifest.protocol.model_name:
+        raise HardModeConfigurationError(
+            "configured Gemini model does not match the hard-mode manifest"
+        )
     if resolved_provider.provider_surface is not manifest.protocol.provider_surface:
         raise HardModeConfigurationError(
             "configured Gemini provider surface does not match the hard-mode manifest"
@@ -1165,6 +1207,9 @@ def run_live(
             "manifest_sha256": manifest_sha256,
             "model_name": manifest.protocol.model_name,
             "provider_surface": str(resolved_provider.provider_surface),
+            "reasoning_levels": {
+                task.value: budget_for(task).thinking_level.value for task in AgentTask
+            },
             "case_ids": [case.case_id for case in manifest.cases],
             "maximum_possible_logical_model_calls": (
                 call_budget_preflight.maximum_possible_logical_model_calls
@@ -1229,6 +1274,9 @@ def run_live(
         "oracle_gate_sha256": _sha256(gate_path.read_bytes()),
         "model_name": manifest.protocol.model_name,
         "provider_surface": str(resolved_provider.provider_surface),
+        "reasoning_levels": {
+            task.value: budget_for(task).thinking_level.value for task in AgentTask
+        },
         "pacing_policy": str(manifest.protocol.pacing_policy),
         "inter_case_delay_seconds": manifest.protocol.inter_case_delay_seconds,
         "maximum_possible_logical_model_calls": (
@@ -1313,6 +1361,9 @@ def summarize_live(raw: dict[str, Any]) -> dict[str, Any]:
         claim_usage = (case.get("claim_result") or {}).get("usage")
         if claim_usage:
             usage_records.append(claim_usage)
+        failed_claim_usage = (case.get("error") or {}).get("usage")
+        if failed_claim_usage:
+            usage_records.append(failed_claim_usage)
         usage_records.extend(
             attempt["usage"]
             for attempt in case.get("candidate_attempts", [])
@@ -1329,6 +1380,11 @@ def summarize_live(raw: dict[str, Any]) -> dict[str, Any]:
     ]
     output_values = [
         item["output_tokens"] for item in usage_records if item.get("output_tokens") is not None
+    ]
+    reasoning_values = [
+        item["reasoning_tokens"]
+        for item in usage_records
+        if item.get("reasoning_tokens") is not None
     ]
     durations = [item["duration_seconds"] for item in usage_records]
     summary = {
@@ -1417,6 +1473,8 @@ def summarize_live(raw: dict[str, Any]) -> dict[str, Any]:
     }
     if "provider_surface" in raw:
         summary["provider_surface"] = raw["provider_surface"]
+    if any("reasoning_tokens" in item for item in usage_records):
+        summary["reasoning_tokens"] = sum(reasoning_values) if reasoning_values else None
     if "maximum_possible_logical_model_calls" in raw:
         summary.update(
             {
@@ -1494,6 +1552,7 @@ Model: `{summary["model_name"]}`
 - Failed provider attempts: unavailable from the adapter after terminal invocation failure
 - Prompt tokens where reported: {summary["prompt_tokens"]}
 - Output tokens where reported: {summary["output_tokens"]}
+- Reasoning tokens where separately reported: {summary.get("reasoning_tokens")}
 - Total tokens where reported: {summary["total_tokens"]}
 - Total model duration: {summary["total_model_duration_seconds"]:.3f} seconds
 {call_budget}

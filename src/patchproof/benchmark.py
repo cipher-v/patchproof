@@ -20,13 +20,18 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from patchproof.challenge import BaseHeadChallenge
-from patchproof.execution_contract import ExecutionContract, TestCommandContract
+from patchproof.context_retrieval import DeterministicContextRetriever
 from patchproof.execution_runtime import (
     BoundedProcessResult,
     BoundedSubprocessRunner,
     ChildProcessEnvironmentPolicy,
 )
 from patchproof.git_workspace import GitWorkspaceManager
+from patchproof.install_strategy import (
+    ContractSynthesisError,
+    DependencyInstallProber,
+    resolve_contract_for_pair,
+)
 from patchproof.models import (
     ChallengeResult,
     DifferentialPattern,
@@ -554,21 +559,24 @@ def _run_scenario(
     content = _load_artifact(manifest_root, artifact_file, artifact_sha256, function)
     safe_id = case.case_id.replace("-", "_")
     kind = "oracle" if artifact_kind is ArtifactKind.DEVELOPER_ORACLE else "weak"
-    relative_path = f"tests/patchproof_generated/test_{safe_id}_{kind}.py"
+    reader = DeterministicContextRetriever(source_repository=repository)
+    try:
+        contract, _, _ = resolve_contract_for_pair(
+            prober=DependencyInstallProber(reader=reader),
+            base_sha=base_sha,
+            head_sha=head_sha,
+        )
+    except ContractSynthesisError as error:
+        raise BenchmarkInfrastructureError(
+            f"case {case.case_id} has no safe symmetric dependency plan: {error}"
+        ) from error
+    relative_path = f"{contract.allowed_test_paths[0]}test_{safe_id}_{kind}.py"
     artifact = TestArtifact(
         relative_path=relative_path,
         node_id=f"{relative_path}::{function}",
         content=content,
     )
-    contract = ExecutionContract(
-        version=1,
-        python="3.12",
-        install=(("uv", "sync", "--frozen"),),
-        test=TestCommandContract(command=("python", "-m", "pytest")),
-        allowed_test_paths=("tests/patchproof_generated/",),
-        timeout_seconds=30,
-    )
-    challenge = BaseHeadChallenge(
+    runner = BaseHeadChallenge(
         workspaces=GitWorkspaceManager(
             source_repository=repository,
             workspace_root=workspace_root / case.case_id / kind,
@@ -577,9 +585,16 @@ def _run_scenario(
         runner=PytestRunner(
             contract=contract,
             python_executable=executable,
-            install_dependencies=False,
+            install_dependencies=True,
         ),
-    ).run(base_ref=base_sha, head_ref=head_sha, artifact=artifact)
+    )
+    with runner.session(base_ref=base_sha, head_ref=head_sha) as session:
+        readiness = session.prepare_environment()
+        if not readiness.ready:
+            raise BenchmarkInfrastructureError(
+                f"case {case.case_id} environment is not ready: {readiness.reason}"
+            )
+        challenge = session.run(artifact=artifact)
     strategies = tuple(
         _strategy_observation(strategy, truth, challenge) for strategy in EvaluationStrategy
     )

@@ -31,6 +31,7 @@ from patchproof.install_strategy import (
     InstallStrategy,
     synthesize_contract,
 )
+from patchproof.models import EnvironmentReadiness, EnvironmentReadinessStatus
 
 _PROJECT_ROOT = Path(__file__).parents[1]
 _MANIFEST_PATH = _PROJECT_ROOT / "benchmarks" / "hard_mode" / "manifest.json"
@@ -275,6 +276,79 @@ def test_historical_execution_plan_fails_closed_when_pair_cannot_be_synthesized(
         hard_mode_module._execution_plan(Path.cwd(), case)
 
 
+def test_live_case_checks_environment_before_any_model_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest, _ = load_hard_mode_manifest(_MANIFEST_PATH)
+    case = next(item for item in manifest.cases if item.kind is HardModeCaseKind.HISTORICAL_PR)
+    context_json = "{}"
+    context = SimpleNamespace(
+        model_dump_json=lambda: context_json,
+        model_dump=lambda **_kwargs: {},
+    )
+
+    class Retriever:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def retrieve(self, **_kwargs):
+            return context
+
+    class Session:
+        def prepare_environment(self):
+            return EnvironmentReadiness(
+                status=EnvironmentReadinessStatus.BASE_SETUP_FAILED,
+                reason="bounded setup failure",
+            )
+
+    class Challenge:
+        @staticmethod
+        def session(**_kwargs):
+            class Manager:
+                def __enter__(self):
+                    return Session()
+
+                def __exit__(self, *_args):
+                    return False
+
+            return Manager()
+
+    monkeypatch.setattr(hard_mode_module, "DeterministicContextRetriever", Retriever)
+    monkeypatch.setattr(
+        hard_mode_module,
+        "_execution_plan",
+        lambda *_args: SimpleNamespace(
+            contract=None,
+            install_dependencies=True,
+            base_install=None,
+            head_install=None,
+        ),
+    )
+    monkeypatch.setattr(hard_mode_module, "_execution_plan_document", lambda _plan: {})
+    monkeypatch.setattr(hard_mode_module, "_challenge", lambda *_args, **_kwargs: Challenge())
+    monkeypatch.setattr(
+        hard_mode_module,
+        "BehavioralClaimAgent",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("model construction must not occur before readiness")
+        ),
+    )
+
+    result = asyncio.run(
+        hard_mode_module._run_live_case(
+            case=case,
+            repository=Path.cwd(),
+            workspace_root=Path.cwd(),
+            model_name="gemini-3.6-flash",
+            provider_config=SimpleNamespace(),
+            expected_context_sha256=hashlib.sha256(context_json.encode()).hexdigest(),
+        )
+    )
+
+    assert result["terminal_status"] == "ENVIRONMENT_NOT_READY"
+    assert result["candidate_attempts"] == []
+
+
 def test_summary_uses_raw_denominators_and_handles_failed_model_calls() -> None:
     raw = {
         "declared_run_id": "hard-test",
@@ -327,6 +401,14 @@ def test_summary_uses_raw_denominators_and_handles_failed_model_calls() -> None:
                 "semantic_assessment": None,
                 "terminal_status": "CLAIM_INVOCATION_ERROR",
                 "final_outcome": None,
+                "error": {
+                    "usage": {
+                        "total_tokens": 25,
+                        "reasoning_tokens": 9,
+                        "duration_seconds": 0.25,
+                        "provider_attempts": 1,
+                    }
+                },
             },
         ],
     }
@@ -337,8 +419,9 @@ def test_summary_uses_raw_denominators_and_handles_failed_model_calls() -> None:
     assert summary["claim_selected_count"] == 1
     assert summary["discriminating_initial_candidate_count"] == 1
     assert summary["incorrect_support_count"] == 0
-    assert summary["total_tokens"] == 350
-    assert summary["logical_model_result_count"] == 3
+    assert summary["total_tokens"] == 375
+    assert summary["reasoning_tokens"] == 9
+    assert summary["logical_model_result_count"] == 4
 
 
 def test_predeclared_inter_case_pacing_is_uniform_and_journaled(

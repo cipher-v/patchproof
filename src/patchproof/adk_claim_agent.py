@@ -183,6 +183,7 @@ class AdkGeminiClaimModel:
                 output_tokens=usage.output_tokens,
                 total_tokens=usage.total_tokens,
                 cached_tokens=usage.cached_tokens,
+                reasoning_tokens=usage.reasoning_tokens,
                 duration_seconds=duration,
             ),
         )

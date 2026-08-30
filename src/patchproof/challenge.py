@@ -58,9 +58,11 @@ class ChallengeSession:
         ):
             error = self.runner.prepare_environment(workspace=workspace)
             if error is not None:
+                reason = error if isinstance(error, str) else error.reason
                 return EnvironmentReadiness(
                     status=failed_status,
-                    reason=f"{role} repository environment setup failed: {error}",
+                    reason=f"{role} repository environment setup failed: {reason}",
+                    setup_diagnostic=error if not isinstance(error, str) else None,
                 )
 
         probe = self._probe_artifact()

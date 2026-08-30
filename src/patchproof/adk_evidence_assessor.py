@@ -200,6 +200,7 @@ class AdkGeminiEvidenceAssessor:
                 output_tokens=usage.output_tokens,
                 total_tokens=usage.total_tokens,
                 cached_tokens=usage.cached_tokens,
+                reasoning_tokens=usage.reasoning_tokens,
                 duration_seconds=time.perf_counter() - started,
             ),
             raw_response_sha256=hashlib.sha256(final_text.encode("utf-8")).hexdigest(),

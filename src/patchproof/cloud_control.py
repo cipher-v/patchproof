@@ -5,7 +5,8 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -118,6 +119,36 @@ class _RemoteRunnerContract:
     install_dependencies: bool = True
 
 
+@dataclass(frozen=True, slots=True)
+class _RemoteChallengeSession:
+    """Bind immutable revision refs while retaining the remote executor boundary."""
+
+    challenge: RemoteBaseHeadChallenge
+    base_ref: str
+    head_ref: str
+
+    def prepare_environment(self) -> EnvironmentReadiness:
+        return self.challenge.prepare_environment(base_ref=self.base_ref, head_ref=self.head_ref)
+
+    def run(
+        self,
+        *,
+        artifact: TestArtifact,
+        on_base_complete: Callable[[ExecutionResult], None] | None = None,
+    ) -> ChallengeResult:
+        return self.challenge.run(
+            base_ref=self.base_ref,
+            head_ref=self.head_ref,
+            artifact=artifact,
+            on_base_complete=on_base_complete,
+        )
+
+    def installed_import_roots(self) -> frozenset[str]:
+        # The credentialed control plane does not inspect the executor's environment.
+        # Empty preserves the validator's context-derived import grounding.
+        return frozenset()
+
+
 class RemoteBaseHeadChallenge:
     """EvidenceWorkflow-compatible adapter for the credentialless private executor."""
 
@@ -139,6 +170,11 @@ class RemoteBaseHeadChallenge:
         self.tokens = tokens
         self.client = client or httpx.Client(timeout=950.0)
         self.runner = _RemoteRunnerContract(contract=contract)
+
+    @contextmanager
+    def session(self, *, base_ref: str, head_ref: str) -> Iterator[_RemoteChallengeSession]:
+        """Expose the session interface without moving execution into the control plane."""
+        yield _RemoteChallengeSession(self, base_ref, head_ref)
 
     def prepare_environment(self, *, base_ref: str, head_ref: str) -> EnvironmentReadiness:
         request = ExecutorEnvironmentRequest(

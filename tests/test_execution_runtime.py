@@ -9,6 +9,7 @@ from pathlib import Path
 from patchproof.execution_runtime import (
     BoundedSubprocessRunner,
     ChildProcessEnvironmentPolicy,
+    sanitize_process_output,
 )
 
 
@@ -109,3 +110,16 @@ def test_process_start_failure_does_not_persist_os_error_details(
     assert result.returncode is None
     assert result.start_error == "process could not start"
     assert result.stdout == result.stderr == ""
+
+
+def test_setup_output_sanitization_redacts_credentials_and_stays_bounded() -> None:
+    value = "token=super-secret-value\nBearer signed-value\n" + ("x" * 10_000)
+
+    sanitized = sanitize_process_output(value, maximum_chars=500)
+
+    assert "super-secret-value" not in sanitized
+    assert "signed-value" not in sanitized
+    assert "credential=<redacted>" in sanitized
+    assert "Bearer <redacted>" in sanitized
+    assert len(sanitized) <= 500
+    assert sanitized.endswith("... [output truncated by PatchProof]")

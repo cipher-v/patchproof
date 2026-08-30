@@ -147,8 +147,8 @@ def test_install_failure_has_a_distinct_status_and_uses_only_contract_argv(
             return BoundedProcessResult(
                 returncode=2,
                 duration_seconds=0.01,
-                stdout="resolver failed",
-                stderr="",
+                stdout="resolver failed token=do-not-persist",
+                stderr="package could not be installed",
             )
 
     workspace = writable_test_directory / "failed-install-workspace"
@@ -169,8 +169,50 @@ def test_install_failure_has_a_distinct_status_and_uses_only_contract_argv(
     )
 
     assert result.status is TestExecutionStatus.ENVIRONMENT_SETUP_FAILED
+    assert result.exit_code == 2
+    assert result.stdout == "resolver failed credential=<redacted>"
+    assert result.stderr == "package could not be installed"
     assert processes.commands == [("uv", "sync", "--frozen")]
     assert not (workspace / _ARTIFACT_PATH).exists()
+
+
+def test_readiness_retains_bounded_structured_install_diagnostics(
+    writable_test_directory: Path,
+) -> None:
+    class FailingProcesses:
+        def run(self, command, **kwargs):
+            del command, kwargs
+            return BoundedProcessResult(
+                returncode=2,
+                duration_seconds=0.25,
+                stdout="resolver output",
+                stderr="resolver error",
+            )
+
+    workspace = writable_test_directory / "readiness-workspace"
+    workspace.mkdir()
+    runner = PytestRunner(
+        contract=ExecutionContract.model_validate(_CONTRACT_DATA),
+        python_executable=Path(sys.executable),
+        install_dependencies=True,
+        processes=FailingProcesses(),  # type: ignore[arg-type]
+    )
+
+    failure = runner.prepare_environment(workspace=workspace)
+
+    assert failure is not None
+    assert failure.reason == "dependency installation failed with exit code 2"
+    assert failure.argv == ("uv", "sync", "--frozen")
+    assert failure.cwd == str(workspace.resolve())
+    assert failure.exit_code == 2
+    assert failure.duration_seconds == 0.25
+    assert failure.stdout == "resolver output"
+    assert failure.stderr == "resolver error"
+    assert dict(failure.environment) == {
+        "UV_NO_CACHE": "1",
+        "UV_NO_PROGRESS": "1",
+        "UV_PYTHON_DOWNLOADS": "never",
+    }
 
 
 def test_base_assertion_failure_and_head_pass_are_mechanically_discriminating(

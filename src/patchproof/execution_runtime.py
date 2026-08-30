@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -14,6 +15,10 @@ from pathlib import Path
 from typing import BinaryIO
 
 _TRUNCATION_MARKER = "\n... [output truncated by PatchProof]"
+_CREDENTIAL_PATTERN = re.compile(
+    r"(?i)\b(?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|credential)\s*[:=]\s*[^\s]+"
+)
+_BEARER_PATTERN = re.compile(r"(?i)\bBearer\s+[^\s]+")
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +31,19 @@ class BoundedProcessResult:
     stderr: str
     timed_out: bool = False
     start_error: str | None = None
+
+
+def sanitize_process_output(value: str, *, maximum_chars: int = 4_000) -> str:
+    """Retain bounded setup diagnostics without persisting credential-shaped values."""
+    if maximum_chars <= len(_TRUNCATION_MARKER):
+        raise ValueError("sanitized process output budget is too small")
+    text = _CREDENTIAL_PATTERN.sub("credential=<redacted>", value)
+    text = _BEARER_PATTERN.sub("Bearer <redacted>", text)
+    text = text.replace("\x00", "")
+    if len(text) <= maximum_chars:
+        return text
+    retained = maximum_chars - len(_TRUNCATION_MARKER)
+    return text[:retained] + _TRUNCATION_MARKER
 
 
 class ChildProcessEnvironmentPolicy:
