@@ -1,0 +1,20 @@
+{
+  "decision": {
+    "assertion_relation": "RELATED",
+    "confidence": 0.98,
+    "explanation": "The test directly invokes `enum(None, [[False]], [0], {})` which reproduces the trigger condition `instance is [0] and enums list contains [[False]]`, expecting a ValidationError. BASE yields no errors due to Python container equality ([0] == [False]), while HEAD uses type-sensitive equality and correctly yields 1 ValidationError.",
+    "outcome": "CLAIM_SUPPORTED_FOR_SCENARIO"
+  },
+  "raw_response_sha256": "5edcf4f12b34abc3d878455d6cb2ca6cf0c7aed1f2c859cd51fbf53470c8dea1",
+  "usage": {
+    "cached_tokens": null,
+    "duration_seconds": 5.260779900010675,
+    "model_name": "gemini-3.6-flash",
+    "model_version": "gemini-3.6-flash",
+    "output_tokens": 117,
+    "prompt_tokens": 1210,
+    "provider_attempts": 1,
+    "reasoning_tokens": null,
+    "total_tokens": 1327
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "raw_response_sha256": "06b0ba702c624d35bc912dbacc58e07d4b593e09f2a92fb442362875c7d766fe",
+  "selection": {
+    "claim": {
+      "action": "list(enum(validator, [[False]], [0], schema))",
+      "affected_symbols": [
+        {
+          "path": "jsonschema/_keywords.py",
+          "qualified_name": "enum"
+        }
+      ],
+      "claim_id": "claim-selected-behavior",
+      "confidence": 0.95,
+      "expected_base_hypothesis": "yields no ValidationError because Python list equality evaluates [0] == [False] as True",
+      "expected_behavior": "list(enum(...)) returns a list containing one ValidationError",
+      "expected_head_observation": "yields a ValidationError because [0] and [False] are not equal in JSON Schema",
+      "observable_operation": "jsonschema._keywords.enum",
+      "preconditions": [
+        "a validator context and schema with an enum definition"
+      ],
+      "reasoning_summary": "The enum keyword validator was updated from Python's 'in' check to using equal(), ensuring container elements like [0] and [False] are distinguished.",
+      "shared_interface": "enum",
+      "summary": "Validation of enum keyword for complex or nested data structures uses type-sensitive equality rather than Python container equality.",
+      "supporting_context": [
+        {
+          "end_line": 269,
+          "path": "jsonschema/_keywords.py",
+          "relevance": "enum function modified to use equal() helper for type-sensitive equality comparison",
+          "start_line": 263
+        }
+      ],
+      "testability": "TESTABLE",
+      "trigger_condition": "instance is [0] and enums list contains [[False]]"
+    },
+    "disposition": "SELECTED",
+    "explanation": "The enum keyword validator was updated from Python's 'in' check to using equal(), ensuring container elements like [0] and [False] are distinguished."
+  },
+  "usage": {
+    "cached_tokens": null,
+    "duration_seconds": 11.074338299920782,
+    "model_name": "gemini-3.6-flash",
+    "model_version": "gemini-3.6-flash",
+    "output_tokens": 276,
+    "prompt_tokens": 3792,
+    "provider_attempts": 1,
+    "reasoning_tokens": 1373,
+    "total_tokens": 5441
+  }
+}

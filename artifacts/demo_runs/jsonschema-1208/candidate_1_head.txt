@@ -1,0 +1,12 @@
+status: PASSED
+revision: 9a3d4a770813484be066ead99edf2e779b72362a
+exit_code: 0
+duration_seconds: 1.7350000001024455
+
+stdout:
+.                                                                        [100%]
+1 passed in 0.66s
+
+
+stderr:
+

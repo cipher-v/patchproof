@@ -1,0 +1,19 @@
+status: ASSERTION_FAILED
+revision: 256dadd3539861ae696c03805923eb4097b871f9
+exit_code: 1
+duration_seconds: 1.9059999999590218
+
+stdout:
+F
+================================== FAILURES ===================================
+_____________________ test_patchproof_generated_behavior ______________________
+patchproof_generated_tests\test_patchproof_generated_initial.py:5: in test_patchproof_generated_behavior
+    assert len(errors) == 1
+E   assert 0 == 1
+E    +  where 0 = len([])
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!
+1 failed in 0.77s
+
+
+stderr:
+

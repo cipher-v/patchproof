@@ -1,0 +1,31 @@
+{
+  "artifact_sha256": "f35285aa1f6f10e0e15f7244e223d3e2d5e60cd6a4e8002f4277681511ebe98b",
+  "behavior_fingerprint": "71ce867a315b5c3b1e0feab238bfc8a31a9c47aad3eabf55d787bd05a520b28f",
+  "candidate_id": "candidate-initial",
+  "feedback": null,
+  "issues": [],
+  "origin": "INITIAL",
+  "parent_artifact_sha256": null,
+  "parent_candidate_id": null,
+  "rationale": "Verify that validating a nested sequence instance [0] against an enum containing [[False]] correctly yields a ValidationError under type-sensitive JSON Schema equality rather than treating them as equal via Python list comparison.",
+  "raw_response_sha256": "6dfd3f0bd39868da3af53314054b8eb1a33cff1226716c68701856ad887682de",
+  "sequence": 1,
+  "signature_context_count": 7,
+  "signature_context_sha256": "8c6c8b4b87121212e0162e38f5318ec4216344a06df3d9270e9d371eb7356846",
+  "signature_context_truncated": true,
+  "source": "from jsonschema._keywords import enum\n\ndef test_patchproof_generated_behavior():\n    errors = list(enum(None, [[False]], [0], {}))\n    assert len(errors) == 1\n",
+  "status": "VALIDATED",
+  "target_path": "patchproof_generated_tests/test_patchproof_generated_initial.py",
+  "test_function": "test_patchproof_generated_behavior",
+  "usage": {
+    "cached_tokens": null,
+    "duration_seconds": 14.997066200012341,
+    "model_name": "gemini-3.6-flash",
+    "model_version": "gemini-3.6-flash",
+    "output_tokens": 108,
+    "prompt_tokens": 3609,
+    "provider_attempts": 1,
+    "reasoning_tokens": 1343,
+    "total_tokens": 5060
+  }
+}
