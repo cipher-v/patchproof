@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import traceback
 from pathlib import Path
 
 from patchproof.pr_analyze import PrAnalyzeError, analyze_known_pr
@@ -26,6 +27,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="artifact root (default: .patchproof/runs)",
     )
+    analyze.add_argument(
+        "--debug",
+        action="store_true",
+        help="show a traceback for unexpected product-layer failures",
+    )
     return parser
 
 
@@ -37,6 +43,14 @@ def main(arguments: list[str] | None = None) -> int:
             return 0
     except PrAnalyzeError as error:
         print(f"PatchProof: {error}", file=sys.stderr)
+        return 2
+    except Exception as error:
+        print(
+            f"PatchProof: unexpected product failure: {type(error).__name__}: {error}",
+            file=sys.stderr,
+        )
+        if getattr(args, "debug", False):
+            traceback.print_exc()
         return 2
     return 2
 

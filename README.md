@@ -114,6 +114,13 @@ service account and does not need a service-account key file. Local setup, safe 
 Cloud Run IAM, Developer API compatibility, and evaluation provenance are documented in
 [`docs/VERTEX_AI_PROVIDER.md`](docs/VERTEX_AI_PROVIDER.md).
 
+## PR analysis demonstration
+
+The current `patchproof analyze <GitHub PR URL>` command wraps the hardened evaluator for pull
+requests in the committed historical manifests. It does not yet support arbitrary public PRs.
+Setup, the known jsonschema #1208 command, truthful output states, and run artifacts are documented
+in [`docs/22_PR_ANALYZE_CLI.md`](docs/22_PR_ANALYZE_CLI.md).
+
 To preview the evidence console with the checked sanitized live-proof fixture:
 
 ```shell
