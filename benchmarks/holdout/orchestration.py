@@ -16,8 +16,6 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-
 import patchproof.hard_mode as hard_mode
 from patchproof.context_retrieval import DeterministicContextRetriever
 from patchproof.gemini_provider import GeminiProviderSurface
@@ -30,6 +28,7 @@ from patchproof.hard_mode import (
     HardModeProtocol,
     HardModeRepositoryCache,
 )
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 DATASET_ID = "unseen-historical-python-pr-holdout-v1"
 FROZEN_IMPLEMENTATION_SHA = "baf333afc160cd75a90cea1e0568120a9889fb7e"
