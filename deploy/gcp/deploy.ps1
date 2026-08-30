@@ -5,6 +5,7 @@ param(
     [string]$AllowedRepositories = "cipher-v/patchproof,agronholm/anyio,dateutil/dateutil,kludex/starlette,more-itertools/more-itertools,pallets/jinja,pypa/packaging,python-attrs/cattrs,python-jsonschema/jsonschema,textualize/rich,tox-dev/platformdirs,marshmallow-code/marshmallow,pallets/click,pylint-dev/astroid,python-attrs/attrs",
     [string]$ImageTag = "phase9",
     [string]$DashboardRunIds = "",
+    [string]$FirestoreNamespace = "patchproof-final-v1",
     [Parameter(Mandatory = $true)][int]$GitHubAppId,
     [string]$WebhookSecretFile = "",
     [string]$GitHubPrivateKeyFile = "",
@@ -12,6 +13,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+if ($FirestoreNamespace -cnotmatch '^[a-z][a-z0-9_-]{1,39}$') {
+    throw "Firestore namespace must be a bounded lowercase identifier."
+}
 $Queue = "patchproof-verification-runs"
 $Repository = "patchproof"
 $Image = "$Region-docker.pkg.dev/$ProjectId/$Repository/patchproof:$ImageTag"
@@ -126,7 +130,7 @@ Invoke-Gcloud run deploy $ExecutorService --image=$Image --region=$Region --plat
 $ExecutorUrl = Invoke-Gcloud run services describe $ExecutorService --region=$Region --format="value(status.url)"
 Invoke-Gcloud run services add-iam-policy-binding $ExecutorService --region=$Region --member="serviceAccount:$ControlAccount" --role="roles/run.invoker"
 
-Invoke-Gcloud run deploy $ControlService --image=$Image --region=$Region --platform=managed --service-account=$ControlAccount --no-invoker-iam-check --set-env-vars="^#^GOOGLE_CLOUD_PROJECT=${ProjectId}#GOOGLE_CLOUD_LOCATION=${VertexLocation}#PATCHPROOF_GEMINI_PROVIDER=VERTEX_AI#PATCHPROOF_SERVICE_ROLE=control#PATCHPROOF_REGION=${Region}#PATCHPROOF_TASK_QUEUE=${Queue}#PATCHPROOF_CONTROL_URL=https://pending.invalid#PATCHPROOF_EXECUTOR_URL=${ExecutorUrl}#PATCHPROOF_TASK_INVOKER_EMAIL=${TaskAccount}#PATCHPROOF_ALLOWED_REPOSITORIES=${AllowedRepositories}#PATCHPROOF_GITHUB_APP_ID=${GitHubAppId}#PATCHPROOF_GEMINI_MODEL=gemini-3.6-flash#PATCHPROOF_DASHBOARD_RUN_IDS=${DashboardRunIds}" --set-secrets="PATCHPROOF_WEBHOOK_SECRET=patchproof-webhook-secret:latest,PATCHPROOF_GITHUB_PRIVATE_KEY=patchproof-github-private-key:latest" --startup-probe="httpGet.path=/healthz,httpGet.port=8080,timeoutSeconds=5,periodSeconds=5,failureThreshold=12" --min-instances=0 --max-instances=2 --concurrency=4 --cpu=1 --memory=1Gi --timeout=900
+Invoke-Gcloud run deploy $ControlService --image=$Image --region=$Region --platform=managed --service-account=$ControlAccount --no-invoker-iam-check --set-env-vars="^#^GOOGLE_CLOUD_PROJECT=${ProjectId}#GOOGLE_CLOUD_LOCATION=${VertexLocation}#PATCHPROOF_GEMINI_PROVIDER=VERTEX_AI#PATCHPROOF_SERVICE_ROLE=control#PATCHPROOF_REGION=${Region}#PATCHPROOF_TASK_QUEUE=${Queue}#PATCHPROOF_CONTROL_URL=https://pending.invalid#PATCHPROOF_EXECUTOR_URL=${ExecutorUrl}#PATCHPROOF_TASK_INVOKER_EMAIL=${TaskAccount}#PATCHPROOF_ALLOWED_REPOSITORIES=${AllowedRepositories}#PATCHPROOF_GITHUB_APP_ID=${GitHubAppId}#PATCHPROOF_GEMINI_MODEL=gemini-3.6-flash#PATCHPROOF_DASHBOARD_RUN_IDS=${DashboardRunIds}#PATCHPROOF_FIRESTORE_NAMESPACE=${FirestoreNamespace}" --set-secrets="PATCHPROOF_WEBHOOK_SECRET=patchproof-webhook-secret:latest,PATCHPROOF_GITHUB_PRIVATE_KEY=patchproof-github-private-key:latest" --startup-probe="httpGet.path=/healthz,httpGet.port=8080,timeoutSeconds=5,periodSeconds=5,failureThreshold=12" --min-instances=0 --max-instances=2 --concurrency=4 --cpu=1 --memory=1Gi --timeout=900
 $ControlUrl = Invoke-Gcloud run services describe $ControlService --region=$Region --format="value(status.url)"
 Invoke-Gcloud run services update $ControlService --region=$Region --update-env-vars="PATCHPROOF_CONTROL_URL=$ControlUrl"
 
@@ -135,6 +139,7 @@ Write-Output "Executor URL: $ExecutorUrl"
 Write-Output "GitHub webhook URL: $ControlUrl/webhooks/github"
 Write-Output "Evidence dashboard: $ControlUrl/dashboard"
 Write-Output "Cloud analyze API: $ControlUrl/api/analyze"
+Write-Output "Firestore namespace: $FirestoreNamespace"
 Write-Output "CLI: `$env:PATCHPROOF_CONTROL_URL='$ControlUrl'; uv run patchproof analyze <KNOWN_PR_URL>"
 Write-Output "Dashboard CLI: `$env:PATCHPROOF_CONTROL_URL='$ControlUrl'; uv run patchproof dashboard"
 Write-Output "Public health proof: Invoke-RestMethod $ControlUrl/livez"

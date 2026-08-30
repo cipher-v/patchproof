@@ -19,6 +19,11 @@ BASE/HEAD statuses, mechanical and semantic decisions, bounded failure informati
 hashes. It does not receive prompts, credentials, oracle data, raw environment details, or process
 logs.
 
+The final deployment uses the `patchproof-final-v1` Firestore collection namespace. The original
+`patchproof` namespace contains historical and pre-final evidence. Those records are intentionally
+retained for audit history, but the final deployment neither displays nor deduplicates against
+them. No records are migrated or copied between namespaces.
+
 ## Current product boundary
 
 `POST /api/analyze` accepts only canonical GitHub URLs that match the committed reproducible
@@ -104,8 +109,14 @@ gcloud config get-value project
 .\deploy\gcp\deploy.ps1 `
   -ProjectId "patchproof-506606" `
   -ImageTag "cloud-analyze-integration" `
+  -FirestoreNamespace "patchproof-final-v1" `
   -GitHubAppId 4711074
 ```
+
+`patchproof-final-v1` is also the script default, so subsequent deployments preserve the final
+evidence boundary when the parameter is omitted. Namespace values use the same bounded lowercase
+identifier rule as `FirestoreVerificationRunStore`. Do not point the final service back at the
+historical `patchproof` namespace.
 
 Existing enabled secret versions are reused. For an initial deployment, or an intentional rotation,
 also pass `-UpdateSecretVersions`, `-WebhookSecretFile`, and `-GitHubPrivateKeyFile` with local
