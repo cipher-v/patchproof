@@ -33,6 +33,7 @@ from patchproof.claim_agent import (
     InvalidClaimAgentOutput,
     PullRequestNarrative,
 )
+from patchproof.claim_investigator import ClaimInvestigatorFactory
 from patchproof.context_retrieval import DeterministicContextRetriever, PullRequestContext
 from patchproof.evidence_workflow import EvidenceWorkflow
 from patchproof.execution_contract import ExecutionContract, TestCommandContract
@@ -941,6 +942,7 @@ async def _run_live_case(
     model_name: str,
     provider_config: GeminiProviderConfig,
     expected_context_sha256: str,
+    claim_investigator: ClaimInvestigatorFactory | None = None,
 ) -> dict[str, Any]:
     started = datetime.now(UTC)
     oracle_source = ""  # The live path deliberately never loads developer-oracle bytes.
@@ -1016,6 +1018,7 @@ async def _run_live_case(
             provider_config=provider_config,
             result=result,
             started=started,
+            claim_investigator=claim_investigator,
         )
 
 
@@ -1031,15 +1034,23 @@ async def _run_ready_live_case(
     provider_config: GeminiProviderConfig,
     result: dict[str, Any],
     started: datetime,
+    claim_investigator: ClaimInvestigatorFactory | None = None,
 ) -> dict[str, Any]:
     """Run inference only after the persistent BASE/HEAD session is ready."""
-    claim_agent = BehavioralClaimAgent(
-        model=BoundedRetryingModel(
-            AdkGeminiClaimModel(model_name=model_name, provider_config=provider_config)
-        )
-    )
     try:
-        claim_result = await claim_agent.select_claim(context=context, narrative=narrative)
+        if claim_investigator is None:
+            claim_agent = BehavioralClaimAgent(
+                model=BoundedRetryingModel(
+                    AdkGeminiClaimModel(model_name=model_name, provider_config=provider_config)
+                )
+            )
+            claim_result = await claim_agent.select_claim(context=context, narrative=narrative)
+        else:
+            investigation = await claim_investigator.build(
+                base_sha=case.base_sha, head_sha=case.head_sha
+            ).investigate(narrative=narrative, diff=context.diff)
+            claim_result = investigation.agent_result
+            result["investigation_transcript"] = investigation.transcript.model_dump(mode="json")
     except InvalidClaimAgentOutput as error:
         result["terminal_status"] = "CLAIM_INVALID_OUTPUT"
         result["error"] = {

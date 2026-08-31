@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -36,6 +38,37 @@ from patchproof.models import EnvironmentReadiness, EnvironmentReadinessStatus
 _PROJECT_ROOT = Path(__file__).parents[1]
 _MANIFEST_PATH = _PROJECT_ROOT / "benchmarks" / "hard_mode" / "manifest.json"
 _RESULTS_ROOT = _MANIFEST_PATH.parent / "results"
+
+
+def _ready_result() -> dict:
+    return {
+        "claim_result": None,
+        "candidate_attempts": [],
+        "candidate_evaluations": [],
+        "semantic_assessment": None,
+        "final_mechanical": None,
+        "final_outcome": None,
+        "terminal_status": None,
+        "error": None,
+    }
+
+
+def _abstaining_claim_result() -> SimpleNamespace:
+    selection = SimpleNamespace(
+        disposition="INSUFFICIENT_EVIDENCE",
+        claim=None,
+        explanation="bounded abstention",
+    )
+    return SimpleNamespace(
+        selection=selection,
+        model_dump=lambda **_kwargs: {
+            "selection": {
+                "disposition": selection.disposition,
+                "claim": None,
+                "explanation": selection.explanation,
+            }
+        },
+    )
 
 
 def _manifest_with_available_calls(available: int):
@@ -347,6 +380,297 @@ def test_live_case_checks_environment_before_any_model_call(
 
     assert result["terminal_status"] == "ENVIRONMENT_NOT_READY"
     assert result["candidate_attempts"] == []
+
+
+def test_live_case_forwards_an_explicit_phase_two_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest, _ = load_hard_mode_manifest(_MANIFEST_PATH)
+    case = next(item for item in manifest.cases if item.kind is HardModeCaseKind.HISTORICAL_PR)
+    context_json = "{}"
+    context = SimpleNamespace(
+        model_dump_json=lambda: context_json,
+        model_dump=lambda **_kwargs: {},
+    )
+    factory = object()
+    captured: dict[str, object] = {}
+
+    class Retriever:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def retrieve(self, **_kwargs):
+            return context
+
+    class Challenge:
+        @staticmethod
+        def session(**_kwargs):
+            class Manager:
+                def __enter__(self):
+                    return object()
+
+                def __exit__(self, *_args):
+                    return False
+
+            return Manager()
+
+    async def ready_case(**kwargs):
+        captured.update(kwargs)
+        return kwargs["result"]
+
+    monkeypatch.setattr(hard_mode_module, "DeterministicContextRetriever", Retriever)
+    monkeypatch.setattr(
+        hard_mode_module,
+        "_execution_plan",
+        lambda *_args: SimpleNamespace(
+            contract=None,
+            install_dependencies=False,
+            base_install=None,
+            head_install=None,
+        ),
+    )
+    monkeypatch.setattr(hard_mode_module, "_execution_plan_document", lambda _plan: {})
+    monkeypatch.setattr(hard_mode_module, "_challenge", lambda *_args, **_kwargs: Challenge())
+    monkeypatch.setattr(hard_mode_module, "_run_ready_live_case", ready_case)
+
+    asyncio.run(
+        hard_mode_module._run_live_case(
+            case=case,
+            repository=Path.cwd(),
+            workspace_root=Path.cwd(),
+            model_name="gemini-3.6-flash",
+            provider_config=SimpleNamespace(),
+            expected_context_sha256=hashlib.sha256(context_json.encode()).hexdigest(),
+            claim_investigator=factory,
+        )
+    )
+
+    assert captured["claim_investigator"] is factory
+    assert captured["context"] is context
+
+
+def test_ready_live_case_keeps_v1_as_the_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    claim_result = _abstaining_claim_result()
+    calls: list[tuple[object, object]] = []
+
+    class ClaimAgent:
+        async def select_claim(self, *, context, narrative):
+            calls.append((context, narrative))
+            return claim_result
+
+    monkeypatch.setattr(hard_mode_module, "AdkGeminiClaimModel", lambda **_kwargs: object())
+    monkeypatch.setattr(hard_mode_module, "BoundedRetryingModel", lambda model: model)
+    monkeypatch.setattr(hard_mode_module, "BehavioralClaimAgent", lambda **_kwargs: ClaimAgent())
+    context = SimpleNamespace(diff="bounded diff")
+    narrative = SimpleNamespace()
+    result = _ready_result()
+
+    completed = asyncio.run(
+        hard_mode_module._run_ready_live_case(
+            case=SimpleNamespace(base_sha="a" * 40, head_sha="b" * 40),
+            context_retriever=SimpleNamespace(),
+            context=context,
+            narrative=narrative,
+            execution_plan=SimpleNamespace(),
+            session=SimpleNamespace(),
+            model_name="gemini-3.6-flash",
+            provider_config=SimpleNamespace(),
+            result=result,
+            started=datetime.now(UTC),
+        )
+    )
+
+    assert calls == [(context, narrative)]
+    assert completed["claim_result"] == claim_result.model_dump()
+    assert "investigation_transcript" not in completed
+    assert completed["candidate_attempts"] == []
+
+
+def test_ready_live_case_uses_explicit_phase_two_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    claim_result = _abstaining_claim_result()
+    transcript_document = {
+        "turns": 2,
+        "tool_calls": [],
+        "starting_context_sha256": "c" * 64,
+        "response_sha256": ["d" * 64, "e" * 64],
+    }
+    observed: dict[str, object] = {}
+
+    class Investigator:
+        async def investigate(self, *, narrative, diff):
+            observed.update(narrative=narrative, diff=diff)
+            return SimpleNamespace(
+                agent_result=claim_result,
+                transcript=SimpleNamespace(model_dump=lambda **_kwargs: transcript_document),
+            )
+
+    class Factory:
+        def build(self, *, base_sha, head_sha):
+            observed.update(base_sha=base_sha, head_sha=head_sha)
+            return Investigator()
+
+    monkeypatch.setattr(
+        hard_mode_module,
+        "BehavioralClaimAgent",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("v1 must not be constructed")),
+    )
+    context = SimpleNamespace(diff="bounded diff")
+    narrative = SimpleNamespace()
+    result = _ready_result()
+
+    completed = asyncio.run(
+        hard_mode_module._run_ready_live_case(
+            case=SimpleNamespace(base_sha="a" * 40, head_sha="b" * 40),
+            context_retriever=SimpleNamespace(),
+            context=context,
+            narrative=narrative,
+            execution_plan=SimpleNamespace(),
+            session=SimpleNamespace(),
+            model_name="gemini-3.6-flash",
+            provider_config=SimpleNamespace(),
+            result=result,
+            started=datetime.now(UTC),
+            claim_investigator=Factory(),
+        )
+    )
+
+    assert observed == {
+        "base_sha": "a" * 40,
+        "head_sha": "b" * 40,
+        "narrative": narrative,
+        "diff": "bounded diff",
+    }
+    assert completed["claim_result"] == claim_result.model_dump()
+    assert completed["investigation_transcript"] == transcript_document
+
+
+def test_phase_two_selection_enters_the_existing_candidate_and_evidence_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    claim = SimpleNamespace(
+        affected_symbols=(SimpleNamespace(path="pkg/api.py", qualified_name="public_operation"),)
+    )
+    claim_result = SimpleNamespace(
+        selection=SimpleNamespace(claim=claim, disposition="SELECTED"),
+        model_dump=lambda **_kwargs: {"selection": {"disposition": "SELECTED"}},
+    )
+    transcript = SimpleNamespace(model_dump=lambda **_kwargs: {"turns": 1})
+
+    class Investigator:
+        async def investigate(self, **_kwargs):
+            return SimpleNamespace(agent_result=claim_result, transcript=transcript)
+
+    class Factory:
+        @staticmethod
+        def build(**_kwargs):
+            return Investigator()
+
+    captured: dict[str, object] = {}
+
+    class CandidateGenerator:
+        def __init__(self, **kwargs) -> None:
+            captured["generator"] = kwargs
+
+    monkeypatch.setattr(hard_mode_module, "BoundedCandidateTestGenerator", CandidateGenerator)
+    monkeypatch.setattr(hard_mode_module, "AdkGeminiCandidateModel", lambda **_kwargs: object())
+    monkeypatch.setattr(hard_mode_module, "BoundedRetryingModel", lambda model: model)
+    monkeypatch.setattr(hard_mode_module, "_attempt_document", lambda _attempt: {"sequence": 1})
+    challenge = SimpleNamespace(
+        assessment=SimpleNamespace(
+            mechanical_status=hard_mode_module.MechanicalEvidenceStatus.DISCRIMINATING,
+            pattern=hard_mode_module.DifferentialPattern.BASE_ASSERTION_FAILED_HEAD_PASSED,
+        )
+    )
+    attempt = SimpleNamespace(
+        sequence=1,
+        validated=SimpleNamespace(proposal=SimpleNamespace(source="def test_behavior(): pass")),
+    )
+
+    async def candidate_challenges(**_kwargs):
+        yield attempt, challenge
+
+    monkeypatch.setattr(hard_mode_module, "_bounded_candidate_challenges", candidate_challenges)
+    monkeypatch.setattr(
+        hard_mode_module.EvidenceWorkflow,
+        "_evaluation_evidence",
+        staticmethod(
+            lambda _sequence, _challenge: SimpleNamespace(
+                model_dump=lambda **_kwargs: {
+                    "attempt_sequence": 1,
+                    "mechanical_status": "DISCRIMINATING",
+                }
+            )
+        ),
+    )
+    decision = SimpleNamespace(outcome=hard_mode_module.ClaimOutcome.CLAIM_SUPPORTED_FOR_SCENARIO)
+
+    class Assessor:
+        async def assess(self, **kwargs):
+            captured["assessment"] = kwargs
+            return SimpleNamespace(
+                decision=decision,
+                model_dump=lambda **_kwargs: {"decision": {"outcome": str(decision.outcome)}},
+            )
+
+    monkeypatch.setattr(hard_mode_module, "AdkGeminiEvidenceAssessor", lambda **_kwargs: object())
+    monkeypatch.setattr(
+        hard_mode_module, "BoundedRetryingEvidenceAssessor", lambda _model: Assessor()
+    )
+    monkeypatch.setattr(
+        hard_mode_module.EvidenceWorkflow,
+        "_validate_semantic_decision",
+        staticmethod(
+            lambda validated_challenge, validated_decision: captured.update(
+                validated=(validated_challenge, validated_decision)
+            )
+        ),
+    )
+    retriever = SimpleNamespace(
+        retrieve_callable_signatures=lambda **_kwargs: ("signature",),
+        committed_paths=lambda _sha: frozenset({"pkg/api.py"}),
+    )
+    result = _ready_result()
+
+    completed = asyncio.run(
+        hard_mode_module._run_ready_live_case(
+            case=SimpleNamespace(base_sha="a" * 40, head_sha="b" * 40),
+            context_retriever=retriever,
+            context=SimpleNamespace(diff="bounded diff"),
+            narrative=SimpleNamespace(),
+            execution_plan=SimpleNamespace(install_dependencies=False, contract=object()),
+            session=SimpleNamespace(),
+            model_name="gemini-3.6-flash",
+            provider_config=SimpleNamespace(),
+            result=result,
+            started=datetime.now(UTC),
+            claim_investigator=Factory(),
+        )
+    )
+
+    generator_arguments = captured["generator"]
+    assert isinstance(generator_arguments, dict)
+    assert generator_arguments["claim"] is claim
+    assert captured["assessment"] == {
+        "claim": claim,
+        "candidate_source": "def test_behavior(): pass",
+        "challenge": challenge,
+    }
+    assert captured["validated"] == (challenge, decision)
+    assert completed["final_mechanical"] == "DISCRIMINATING"
+    assert completed["final_outcome"] == str(decision.outcome)
+
+
+def test_sealed_hard_mode_budget_remains_on_uninjectable_v1_path() -> None:
+    manifest, _ = load_hard_mode_manifest(_MANIFEST_PATH)
+
+    assert manifest.protocol.claim_calls_per_case == 1
+    assert "claim_investigator" not in inspect.signature(run_live).parameters
+    assert (
+        inspect.signature(hard_mode_module._run_live_case).parameters["claim_investigator"].default
+        is None
+    )
 
 
 def test_summary_uses_raw_denominators_and_handles_failed_model_calls() -> None:

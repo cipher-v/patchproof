@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import hashlib
 import json
@@ -19,6 +20,8 @@ from typing import Any
 from uuid import uuid4
 
 import patchproof.hard_mode as hard_mode
+from patchproof.adk_claim_investigator import AdkGeminiClaimInvestigator
+from patchproof.claim_investigator import GitClaimInvestigatorFactory
 from patchproof.context_retrieval import DeterministicContextRetriever
 from patchproof.gemini_provider import (
     GeminiProviderConfig,
@@ -42,14 +45,28 @@ _PROTECTED_CORE_PATHS = (
     "src/patchproof/challenge.py",
     "src/patchproof/claim_agent.py",
     "src/patchproof/context_retrieval.py",
-    "src/patchproof/evidence_workflow.py",
     "src/patchproof/git_workspace.py",
-    "src/patchproof/hard_mode.py",
     "src/patchproof/models.py",
     "src/patchproof/pytest_runner.py",
     "src/patchproof/reasoning_budget.py",
     "src/patchproof/test_generation.py",
 )
+
+# Phase 2 intentionally changed claim-routing code in these modules. Keep the actual
+# candidate loop and semantic admissibility gate frozen at the definition level.
+_PROTECTED_CORE_DEFINITIONS = {
+    "src/patchproof/evidence_workflow.py": (
+        ("EvidenceReport", "validate_evidence_pair"),
+        ("EvidenceWorkflow", "_validate_semantic_decision"),
+        ("EvidenceWorkflow", "_execution_evidence"),
+        ("EvidenceWorkflow", "_evaluation_evidence"),
+    ),
+    "src/patchproof/hard_mode.py": (
+        (None, "_challenge"),
+        (None, "_execution_document"),
+        (None, "_bounded_candidate_challenges"),
+    ),
+}
 
 _KNOWN_MANIFESTS = (
     Path("benchmarks/holdout/manifest.json"),
@@ -186,6 +203,49 @@ def verify_hardened_core(*, project_root: Path) -> None:
         )
     if completed.returncode != 0:
         raise PrAnalyzeError("Git failed while verifying the hardened PatchProof core")
+    for relative_path, definitions in _PROTECTED_CORE_DEFINITIONS.items():
+        try:
+            baseline = subprocess.run(
+                ["git", "show", f"{HARDENED_BEHAVIOR_BASELINE}:{relative_path}"],
+                cwd=project_root,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=True,
+            ).stdout
+            current = (project_root / relative_path).read_text(encoding="utf-8")
+        except (OSError, UnicodeError, subprocess.SubprocessError) as error:
+            raise PrAnalyzeError("could not verify protected evidence-core definitions") from error
+        for owner, name in definitions:
+            if _definition_fingerprint(current, owner=owner, name=name) != (
+                _definition_fingerprint(baseline, owner=owner, name=name)
+            ):
+                raise PrAnalyzeError(
+                    f"protected evidence-core definition changed: {relative_path}:{name}"
+                )
+
+
+def _definition_fingerprint(source: str, *, owner: str | None, name: str) -> str:
+    """Hash one function AST so intentional surrounding orchestration may evolve."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as error:
+        raise PrAnalyzeError("protected evidence-core source is not valid Python") from error
+    body: list[ast.stmt] = tree.body
+    if owner is not None:
+        classes = [node for node in body if isinstance(node, ast.ClassDef) and node.name == owner]
+        if len(classes) != 1:
+            raise PrAnalyzeError(f"protected evidence-core class is missing: {owner}")
+        body = classes[0].body
+    functions = [
+        node
+        for node in body
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == name
+    ]
+    if len(functions) != 1:
+        raise PrAnalyzeError(f"protected evidence-core definition is missing: {name}")
+    normalized = ast.dump(functions[0], annotate_fields=True, include_attributes=False)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def _source_commit(project_root: Path) -> str:
@@ -386,6 +446,11 @@ def persist_result(*, run_dir: Path, metadata: dict[str, Any], result: dict[str,
     _write_json(run_dir / "raw.json", result)
     if result.get("claim_result") is not None:
         _write_json(run_dir / "claim.json", result["claim_result"])
+    if result.get("investigation_transcript") is not None:
+        _write_json(
+            run_dir / "investigation_transcript.json",
+            result["investigation_transcript"],
+        )
     if result.get("semantic_assessment") is not None:
         _write_json(run_dir / "semantic_assessment.json", result["semantic_assessment"])
 
@@ -642,6 +707,15 @@ def analyze_known_pr(
                 f"changed-test exclusions differ from the committed case: {changed_tests!r}"
             )
 
+        claim_investigator = GitClaimInvestigatorFactory(
+            model=AdkGeminiClaimInvestigator(
+                model_name=MODEL_NAME,
+                provider_config=provider,
+            ),
+            source_repository=repository,
+            excluded_paths=frozenset(case.excluded_paths),
+        )
+
         stage = "context retrieval"
         context = DeterministicContextRetriever(
             source_repository=repository,
@@ -668,6 +742,7 @@ def analyze_known_pr(
                     model_name=MODEL_NAME,
                     provider_config=provider,
                     expected_context_sha256=context_sha,
+                    claim_investigator=claim_investigator,
                 )
             )
         finally:

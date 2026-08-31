@@ -4,13 +4,17 @@ import pytest
 
 import patchproof.cli as cli_module
 from patchproof.pr_analyze import (
+    _PROTECTED_CORE_DEFINITIONS,
+    _PROTECTED_CORE_PATHS,
     PrAnalyzeError,
+    _definition_fingerprint,
     _runtime_paths,
     find_known_pr,
     parse_pr_url,
     persist_infrastructure_failure,
     persist_result,
     print_result,
+    verify_hardened_core,
 )
 
 
@@ -266,6 +270,61 @@ def test_artifact_persistence_tracks_only_completed_stages(tmp_path: Path) -> No
     assert (run_dir / "candidate_2.py").is_file()
     assert not (run_dir / "candidate_3.py").exists()
     assert not (run_dir / "failure.json").exists()
+
+
+def test_phase_two_transcript_is_persisted_as_a_separate_artifact(tmp_path: Path) -> None:
+    run_dir = tmp_path / "investigated"
+    run_dir.mkdir()
+    result = _selected_result()
+    result["investigation_transcript"] = {
+        "turns": 2,
+        "tool_calls": [],
+        "starting_context_sha256": "a" * 64,
+        "response_sha256": ["b" * 64, "c" * 64],
+    }
+
+    persist_result(run_dir=run_dir, metadata=_metadata(), result=result)
+
+    transcript = run_dir / "investigation_transcript.json"
+    assert transcript.is_file()
+    assert '"turns": 2' in transcript.read_text(encoding="utf-8")
+
+
+def test_hardened_guard_accepts_phase_two_routing_but_keeps_proof_core_frozen() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    path_guard = set(_PROTECTED_CORE_PATHS)
+
+    assert {
+        "src/patchproof/adk_evidence_assessor.py",
+        "src/patchproof/challenge.py",
+        "src/patchproof/git_workspace.py",
+        "src/patchproof/models.py",
+        "src/patchproof/pytest_runner.py",
+        "src/patchproof/test_generation.py",
+    } <= path_guard
+    workflow_definitions = set(_PROTECTED_CORE_DEFINITIONS["src/patchproof/evidence_workflow.py"])
+    hard_mode_definitions = set(_PROTECTED_CORE_DEFINITIONS["src/patchproof/hard_mode.py"])
+    assert {
+        ("EvidenceReport", "validate_evidence_pair"),
+        ("EvidenceWorkflow", "_validate_semantic_decision"),
+        ("EvidenceWorkflow", "_execution_evidence"),
+        ("EvidenceWorkflow", "_evaluation_evidence"),
+    } <= workflow_definitions
+    assert {
+        (None, "_challenge"),
+        (None, "_execution_document"),
+        (None, "_bounded_candidate_challenges"),
+    } <= hard_mode_definitions
+    verify_hardened_core(project_root=project_root)
+
+
+def test_hardened_definition_fingerprint_detects_policy_changes() -> None:
+    original = "def policy(value):\n    return value\n"
+    changed = "def policy(value):\n    return not value\n"
+
+    assert _definition_fingerprint(original, owner=None, name="policy") != (
+        _definition_fingerprint(changed, owner=None, name="policy")
+    )
 
 
 def test_environment_failure_persists_no_fake_claim_or_candidate(tmp_path: Path) -> None:
