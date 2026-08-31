@@ -391,6 +391,40 @@ def test_starting_context_respects_its_observable_budget() -> None:
     assert len(context.shared_observables) == 3
 
 
+def test_starting_context_retains_a_changed_observable_after_an_irrelevant_prefix() -> None:
+    unrelated = "".join(f"def a_{index:02d}(value):\n    return value\n\n" for index in range(25))
+    base = {"pkg/mod.py": unrelated + "def z_target():\n    return 'base'\n"}
+    head = {"pkg/mod.py": unrelated + "def z_target():\n    return 'head'\n"}
+
+    context = build_planner(base, head).build()
+
+    assert context.coverage.observables_truncated is True
+    assert [item.identity.qualified_name for item in context.shared_observables] == ["z_target"]
+    assert context.shared_observables[0].reasons == (
+        ObservableSelectionReason.IMPLEMENTATION_CHANGED,
+    )
+
+
+def test_starting_context_retains_a_shared_caller_when_its_changed_callee_is_truncated() -> None:
+    base_helpers = "".join(
+        f"def _changed_{index:02d}():\n    return {index}\n\n" for index in range(25)
+    )
+    head_helpers = "".join(
+        f"def _changed_{index:02d}():\n    return {index + 100}\n\n" for index in range(25)
+    )
+    caller = "def public_api():\n    return _changed_24()\n"
+
+    context = build_planner(
+        {"pkg/mod.py": base_helpers + caller},
+        {"pkg/mod.py": head_helpers + caller},
+    ).build()
+    selected = {item.identity.qualified_name: item for item in context.shared_observables}
+
+    assert "_changed_24" not in selected
+    assert ObservableSelectionReason.REACHES_CHANGED_SYMBOL in selected["public_api"].reasons
+    assert context.coverage.observables_truncated is True
+
+
 def test_invalid_starting_context_budgets_are_rejected() -> None:
     with pytest.raises(ValueError):
         StartingContextBudget(max_shared_observables=0)

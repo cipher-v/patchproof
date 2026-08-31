@@ -371,12 +371,11 @@ class DeterministicInvestigationPlanner:
             if symbol.kind in OBSERVABLE_KINDS
         )[: self.budget.max_removed_symbols]
 
-        changed_names = {
-            comparison.qualified_name.rsplit(".", maxsplit=1)[-1]
-            for comparison in observables.present_on_both
-            if comparison.presence is ObservablePresence.PRESENT_ON_BOTH
-            and comparison.implementation_changed
-        }
+        # Derive relevance from the complete pair of bounded repository indexes, not
+        # only the result-limited observable partition. Otherwise a retained shared
+        # caller can lose its REACHES_CHANGED_SYMBOL reason when its callee is omitted
+        # from that partition.
+        changed_names = set(self.investigator.changed_symbol_names())
         new_names = {symbol.qualified_name.rsplit(".", maxsplit=1)[-1] for symbol in new_head}
         ranked = self._rank_shared(observables.present_on_both, reaches, changed_names | new_names)
         selected = ranked[: self.budget.max_shared_observables]

@@ -316,10 +316,16 @@ class RepositoryInvestigator:
         )
 
     def compare_observables(self, *, maximum: int | None = None) -> CrossRevisionObservables:
-        """Partition all indexed observables without assuming they are callable."""
+        """Return a relevance-first bounded partition of cross-revision observables.
+
+        Direct changes, additions, removals, and shared definitions that reference a
+        changed or added symbol are selected before unrelated shared symbols. The
+        high-signal groups are interleaved deterministically so one large change kind
+        cannot crowd every other kind out of the bounded result.
+        """
         limit = self._maximum(maximum)
         comparisons = self._comparisons(path=None, qualified_name=None)
-        selected = comparisons[:limit]
+        selected = self._prioritized_observable_comparisons(comparisons)[:limit]
         shared = [item for item in selected if item.presence is ObservablePresence.PRESENT_ON_BOTH]
         added = [item.head for item in selected if item.presence is ObservablePresence.NEW_ON_HEAD]
         removed = [
@@ -337,6 +343,15 @@ class RepositoryInvestigator:
             removed_from_head=tuple(item for item in removed if item is not None),
             truncated=len(comparisons) > limit,
         )
+
+    def changed_symbol_names(self) -> frozenset[str]:
+        """Return changed/added leaf names from the complete bounded repository indexes.
+
+        This internal planning signal is computed before observable-result truncation.
+        Only the separately bounded starting-context representation is exposed to the
+        model.
+        """
+        return self._changed_symbol_names(self._comparisons(path=None, qualified_name=None))
 
     def find_references(
         self,
@@ -656,6 +671,80 @@ class RepositoryInvestigator:
                 )
             )
         return comparisons
+
+    def _prioritized_observable_comparisons(
+        self, comparisons: list[SymbolComparison]
+    ) -> list[SymbolComparison]:
+        interesting_names = self._changed_symbol_names(comparisons)
+        changed_shared: list[SymbolComparison] = []
+        added: list[SymbolComparison] = []
+        removed: list[SymbolComparison] = []
+        relevant_shared: list[SymbolComparison] = []
+        unrelated_shared: list[SymbolComparison] = []
+
+        for comparison in comparisons:
+            if comparison.presence is ObservablePresence.NEW_ON_HEAD:
+                added.append(comparison)
+            elif comparison.presence is ObservablePresence.REMOVED_FROM_HEAD:
+                removed.append(comparison)
+            elif comparison.implementation_changed:
+                changed_shared.append(comparison)
+            elif self._comparison_references_any(comparison, interesting_names):
+                relevant_shared.append(comparison)
+            else:
+                unrelated_shared.append(comparison)
+
+        groups = (changed_shared, added, removed, relevant_shared)
+        for group in (*groups, unrelated_shared):
+            group.sort(key=self._observable_priority_key)
+        prioritized: list[SymbolComparison] = []
+        offset = 0
+        while any(offset < len(group) for group in groups):
+            for group in groups:
+                if offset < len(group):
+                    prioritized.append(group[offset])
+            offset += 1
+        prioritized.extend(unrelated_shared)
+        return prioritized
+
+    @staticmethod
+    def _changed_symbol_names(comparisons: list[SymbolComparison]) -> frozenset[str]:
+        return frozenset(
+            comparison.qualified_name.rsplit(".", maxsplit=1)[-1]
+            for comparison in comparisons
+            if comparison.presence is ObservablePresence.NEW_ON_HEAD
+            or (
+                comparison.presence is ObservablePresence.PRESENT_ON_BOTH
+                and comparison.implementation_changed
+            )
+        )
+
+    def _comparison_references_any(
+        self, comparison: SymbolComparison, names: frozenset[str]
+    ) -> bool:
+        symbol = comparison.head
+        if symbol is None or not names:
+            return False
+        own_leaf = symbol.qualified_name.rsplit(".", maxsplit=1)[-1]
+        relevant_names = names - {own_leaf}
+        return any(
+            reference.path == symbol.path
+            and symbol.start_line <= reference.start_line <= symbol.end_line
+            and reference.name in relevant_names
+            for reference in self.head.references
+        )
+
+    @staticmethod
+    def _observable_priority_key(comparison: SymbolComparison) -> tuple[int, int, str, str]:
+        symbol = comparison.head or comparison.base
+        if symbol is None:  # Forbidden by SymbolComparison validation; fail closed in sorting.
+            return (2, 1, comparison.path, comparison.qualified_name)
+        return (
+            0 if symbol.public else 1,
+            0 if symbol.exported is True else 1,
+            comparison.path,
+            comparison.qualified_name,
+        )
 
     def _ranked_references(
         self,

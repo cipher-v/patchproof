@@ -316,6 +316,76 @@ def test_observable_partition_limit_is_explicit(investigator: RepositoryInvestig
     )
 
 
+def test_observable_partition_prioritizes_a_late_changed_shared_symbol() -> None:
+    common = {
+        f"pkg/a_{index:02d}.py": "def unchanged(value):\n    return value\n" for index in range(25)
+    }
+    base = RepositoryIndex.from_files(
+        revision=Revision(RevisionRole.BASE, _BASE_SHA),
+        files={**common, "pkg/z_target.py": "def target():\n    return 'base'\n"},
+    )
+    head = RepositoryIndex.from_files(
+        revision=Revision(RevisionRole.HEAD, _HEAD_SHA),
+        files={**common, "pkg/z_target.py": "def target():\n    return 'head'\n"},
+    )
+    local = RepositoryInvestigator(base=base, head=head)
+
+    first = local.compare_observables()
+    second = local.compare_observables()
+    identities = {(item.path, item.qualified_name) for item in first.present_on_both}
+
+    assert ("pkg/z_target.py", "target") in identities
+    assert first.present_on_both[0].implementation_changed is True
+    assert len(first.present_on_both) == 20
+    assert first.truncated is True
+    assert first.model_dump_json() == second.model_dump_json()
+
+
+def test_observable_partition_balances_all_high_signal_change_kinds_and_callers() -> None:
+    common = {
+        f"pkg/unrelated_{index:02d}.py": "def stable(value):\n    return value\n"
+        for index in range(30)
+    }
+    base_source = """def changed_helper():
+    return "base"
+
+def public_api():
+    return changed_helper()
+
+def removed_operation():
+    return "removed"
+"""
+    head_source = """def changed_helper():
+    return "head"
+
+def public_api():
+    return changed_helper()
+
+def added_operation():
+    return "added"
+"""
+    base = RepositoryIndex.from_files(
+        revision=Revision(RevisionRole.BASE, _BASE_SHA),
+        files={**common, "pkg/signals.py": base_source},
+    )
+    head = RepositoryIndex.from_files(
+        revision=Revision(RevisionRole.HEAD, _HEAD_SHA),
+        files={**common, "pkg/signals.py": head_source},
+    )
+
+    result = RepositoryInvestigator(base=base, head=head).compare_observables()
+    shared = {item.qualified_name: item for item in result.present_on_both}
+
+    assert shared["changed_helper"].implementation_changed is True
+    assert "public_api" in shared
+    assert {item.qualified_name for item in result.new_on_head} == {"added_operation"}
+    assert {item.qualified_name for item in result.removed_from_head} == {"removed_operation"}
+    assert result.truncated is True
+    assert (
+        len(result.present_on_both) + len(result.new_on_head) + len(result.removed_from_head) == 20
+    )
+
+
 def test_caller_provenance_does_not_claim_runtime_identity_for_same_named_calls() -> None:
     source = """from pkg.api import helper as imported_helper
 
