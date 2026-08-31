@@ -21,6 +21,7 @@ from patchproof.claim_agent import (
     ModelUsage,
     PullRequestNarrative,
 )
+from patchproof.claim_investigator import ClaimInvestigatorFactory, InvestigationTranscript
 from patchproof.context_retrieval import DeterministicContextRetriever
 from patchproof.execution_contract import ExecutionContractLoader
 from patchproof.model_reliability import (
@@ -244,6 +245,14 @@ class EvidenceReport(BaseModel):
         default=None,
         exclude_if=lambda value: value is None,
     )
+    #: Bounded audit facts from Phase 2 claim investigation: turn count, validated tool
+    #: arguments, per-call status and provenance, the starting-context hash, and response
+    #: hashes. No chain-of-thought and no free model text. Optional, so v1 stored evidence
+    #: that predates claim investigation still loads unchanged.
+    investigation_transcript: InvestigationTranscript | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     candidate_attempts: tuple[CandidateAttemptEvidence, ...] = Field(max_length=3)
     candidate_evaluations: tuple[CandidateEvaluationEvidence, ...] = Field(max_length=3)
     selected_artifact_sha256: str | None
@@ -290,6 +299,7 @@ class EvidenceWorkflow:
         candidate_model: StructuredCandidateModel,
         challenge: BaseHeadChallenge,
         assessor: SemanticEvidenceAssessor,
+        claim_investigator: ClaimInvestigatorFactory | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.store = store
@@ -299,6 +309,10 @@ class EvidenceWorkflow:
             max_input_json_chars=claim_agent.max_input_json_chars,
             max_response_chars=claim_agent.max_response_chars,
         )
+        #: When supplied, claim selection runs through the Phase 2 investigator instead
+        #: of the diff-snippet claim agent. Everything downstream of a selected claim is
+        #: identical either way: the investigator returns the same ClaimAgentResult type.
+        self.claim_investigator = claim_investigator
         self.candidate_model = BoundedRetryingModel(candidate_model)
         self.challenge = challenge
         self.assessor = BoundedRetryingEvidenceAssessor(assessor)
@@ -350,10 +364,16 @@ class EvidenceWorkflow:
 
         context = self.context_retriever.retrieve(base_sha=run.base_sha, head_sha=run.head_sha)
         run = self._transition(run, RunTransition(phase=RunPhase.CLAIM))
-        claim_result = await self.claim_agent.select_claim(
-            context=context,
-            narrative=PullRequestNarrative.from_untrusted(title=run.title, body=run.body),
-        )
+        narrative = PullRequestNarrative.from_untrusted(title=run.title, body=run.body)
+        investigation_transcript: InvestigationTranscript | None = None
+        if self.claim_investigator is not None:
+            investigation = await self.claim_investigator.build(
+                base_sha=run.base_sha, head_sha=run.head_sha
+            ).investigate(narrative=narrative, diff=context.diff)
+            claim_result = investigation.agent_result
+            investigation_transcript = investigation.transcript
+        else:
+            claim_result = await self.claim_agent.select_claim(context=context, narrative=narrative)
         selection = claim_result.selection
         if selection.claim is None:
             status = (
@@ -368,6 +388,7 @@ class EvidenceWorkflow:
                 evaluations=(),
                 mechanical_status=status,
                 reason=selection.explanation,
+                investigation_transcript=investigation_transcript,
             )
             self._persist_terminal(run, report)
             return report
@@ -387,6 +408,7 @@ class EvidenceWorkflow:
                     mechanical_status=MechanicalEvidenceStatus.ENVIRONMENTAL,
                     reason=environment_readiness.reason,
                     environment_readiness=readiness_evidence,
+                    investigation_transcript=investigation_transcript,
                 )
                 self._persist_terminal(run, report)
                 return report
@@ -449,6 +471,7 @@ class EvidenceWorkflow:
                             reason=setup_failure.reason,
                             challenge=challenge,
                             environment_readiness=readiness_evidence,
+                            investigation_transcript=investigation_transcript,
                         )
                         self._persist_terminal(run, report)
                         return report
@@ -470,6 +493,7 @@ class EvidenceWorkflow:
                             challenge=challenge,
                             semantic_result=semantic_result,
                             environment_readiness=readiness_evidence,
+                            investigation_transcript=investigation_transcript,
                         )
                         self._persist_terminal(run, report)
                         return report
@@ -500,6 +524,7 @@ class EvidenceWorkflow:
                 reason=reason,
                 challenge=challenge,
                 environment_readiness=readiness_evidence,
+                investigation_transcript=investigation_transcript,
             )
             self._persist_terminal(run, report)
             return report
@@ -534,6 +559,7 @@ class EvidenceWorkflow:
         challenge: ChallengeResult,
         semantic_result: SemanticAssessmentResult,
         environment_readiness: EnvironmentReadinessEvidence,
+        investigation_transcript: InvestigationTranscript | None = None,
     ) -> EvidenceReport:
         claim = claim_result.selection.claim
         assert claim is not None
@@ -550,6 +576,7 @@ class EvidenceWorkflow:
             claim_usage=claim_result.usage,
             claim_response_sha256=claim_result.raw_response_sha256,
             environment_readiness=environment_readiness,
+            investigation_transcript=investigation_transcript,
             candidate_attempts=tuple(self._attempt_evidence(item) for item in attempts),
             candidate_evaluations=evaluations,
             selected_artifact_sha256=challenge.artifact.sha256,
@@ -575,6 +602,7 @@ class EvidenceWorkflow:
         reason: str,
         challenge: ChallengeResult | None = None,
         environment_readiness: EnvironmentReadinessEvidence | None = None,
+        investigation_transcript: InvestigationTranscript | None = None,
     ) -> EvidenceReport:
         return EvidenceReport(
             run_id=run.run_id,
@@ -587,6 +615,7 @@ class EvidenceWorkflow:
             claim_usage=claim_result.usage,
             claim_response_sha256=claim_result.raw_response_sha256,
             environment_readiness=environment_readiness,
+            investigation_transcript=investigation_transcript,
             candidate_attempts=tuple(self._attempt_evidence(item) for item in attempts),
             candidate_evaluations=evaluations,
             selected_artifact_sha256=challenge.artifact.sha256 if challenge else None,

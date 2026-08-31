@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import hashlib
 from enum import StrEnum
+from pathlib import Path
 from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
@@ -53,9 +54,14 @@ from patchproof.claim_agent import (
     SupportingContextRef,
 )
 from patchproof.claim_investigation import (
+    OBSERVABLE_KINDS,
     DeterministicInvestigationPlanner,
     InvestigationStartingContext,
     ObservableIdentity,
+    ObservableSelectionReason,
+    RankedObservable,
+    StartingContextBudget,
+    rank_observable,
 )
 from patchproof.investigation_toolbox import (
     InvestigationToolbox,
@@ -63,6 +69,13 @@ from patchproof.investigation_toolbox import (
     ToolCallRecord,
     ToolCallStatus,
 )
+from patchproof.investigation_tools import (
+    InvestigationQueryError,
+    ObservablePresence,
+    RepositoryInvestigator,
+)
+from patchproof.models import Revision, RevisionRole
+from patchproof.repository_index import RepositoryIndex, RepositoryIndexBudget
 from patchproof.structured_output import StrictGeminiOutputModel
 
 _DETERMINISTIC_CLAIM_ID = "claim-selected-behavior"
@@ -312,6 +325,7 @@ class ClaimInvestigator:
         observations: list[dict[str, Any]] = []
         response_hashes: list[str] = []
         grounded_ranges: set[tuple[str, int, int]] = self._context_ranges(starting_context)
+        discovered: set[str] = set()
         usage: ModelUsage | None = None
         decision: InvestigatorDecision | None = None
         turns = 0
@@ -353,6 +367,7 @@ class ClaimInvestigator:
                     {"tool": call.tool, "arguments": call.to_arguments(), "result": payload}
                 )
                 grounded_ranges.update(self._payload_ranges(payload))
+                discovered.update(self._payload_identities(payload))
 
             if not toolbox.begin_turn() or toolbox.exhausted:
                 # Budget spent: give the model exactly one final turn to conclude from
@@ -391,7 +406,7 @@ class ClaimInvestigator:
 
         assert decision is not None and usage is not None
         selection = self._normalize(
-            decision, starting_context, grounded_ranges, usage, response_hashes[-1]
+            decision, starting_context, discovered, usage, response_hashes[-1]
         )
         return ClaimInvestigationResult(
             agent_result=ClaimAgentResult(
@@ -414,7 +429,7 @@ class ClaimInvestigator:
         self,
         decision: InvestigatorDecision,
         starting_context: InvestigationStartingContext,
-        grounded_ranges: set[tuple[str, int, int]],
+        discovered: set[str],
         usage: ModelUsage,
         response_sha256: str,
     ) -> ClaimSelection:
@@ -441,22 +456,15 @@ class ClaimInvestigator:
 
         observable = starting_context.observable(identity)
         if observable is None:
-            head_only = {item.identity.text for item in starting_context.new_head_symbols}
-            if identity.text in head_only:
-                raise InvalidClaimAgentOutput(
-                    "claim interface exists only on HEAD; a differential experiment requires "
-                    "an interface present on both revisions",
-                    usage=usage,
-                    raw_response_sha256=response_sha256,
-                )
-            raise InvalidClaimAgentOutput(
-                "claim interface is not a shared observable in the deterministic starting "
-                f"context: {identity.text}",
+            observable = self._admit_discovered(
+                identity=identity,
+                starting_context=starting_context,
+                discovered=discovered,
                 usage=usage,
-                raw_response_sha256=response_sha256,
+                response_sha256=response_sha256,
             )
 
-        citation = self._citation(observable, grounded_ranges)
+        citation = self._citation(observable)
         claim = BehavioralClaim(
             claim_id=_DETERMINISTIC_CLAIM_ID,
             summary=draft.summary,
@@ -482,12 +490,140 @@ class ClaimInvestigator:
             explanation=decision.reasoning[:700],
         )
 
+    def _admit_discovered(
+        self,
+        *,
+        identity: ObservableIdentity,
+        starting_context: InvestigationStartingContext,
+        discovered: set[str],
+        usage: ModelUsage,
+        response_sha256: str,
+    ) -> RankedObservable:
+        """Admit an interface the deterministic pre-fetch omitted, on mechanical proof only.
+
+        The starting context is ranked and truncated, so a genuinely valid shared
+        observable can fall outside it. Investigation should be able to recover such an
+        interface -- otherwise tools can only enrich an existing candidate, never discover
+        one.
+
+        Two conditions must both hold, and neither is the model's word:
+
+        1. The identity was actually returned by a tool call during this run. A model may
+           not name an interface it never saw.
+        2. PatchProof re-derives the identity from the immutable BASE and HEAD indexes and
+           confirms it is PRESENT_ON_BOTH in an admissible observable kind.
+
+        The model asserting that an interface exists is never sufficient. HEAD-only
+        rejection is not weakened: for this path it is now *proven* from the indexes
+        rather than inferred from a truncated starting context.
+        """
+        head_only = {item.identity.text for item in starting_context.new_head_symbols}
+        if identity.text in head_only:
+            raise InvalidClaimAgentOutput(
+                "claim interface exists only on HEAD; a differential experiment requires "
+                "an interface present on both revisions",
+                usage=usage,
+                raw_response_sha256=response_sha256,
+            )
+        if identity.text not in discovered:
+            raise InvalidClaimAgentOutput(
+                "claim interface is neither a deterministic shared observable nor an "
+                f"interface discovered during investigation: {identity.text}",
+                usage=usage,
+                raw_response_sha256=response_sha256,
+            )
+
+        try:
+            comparison = self.planner.investigator.compare_symbol(
+                path=identity.path, qualified_name=identity.qualified_name, maximum=4
+            )
+        except InvestigationQueryError as error:
+            raise InvalidClaimAgentOutput(
+                f"claim interface could not be verified against the indexes: {error}",
+                usage=usage,
+                raw_response_sha256=response_sha256,
+            ) from None
+
+        exact = [
+            item
+            for item in comparison.comparisons
+            if item.path == identity.path and item.qualified_name == identity.qualified_name
+        ]
+        if not exact:
+            raise InvalidClaimAgentOutput(
+                "claim interface does not exist in the immutable BASE/HEAD indexes: "
+                f"{identity.text}",
+                usage=usage,
+                raw_response_sha256=response_sha256,
+            )
+        verified = exact[0]
+        if verified.presence is not ObservablePresence.PRESENT_ON_BOTH:
+            reason = (
+                "exists only on HEAD"
+                if verified.presence is ObservablePresence.NEW_ON_HEAD
+                else "was removed from HEAD"
+            )
+            raise InvalidClaimAgentOutput(
+                f"claim interface {reason}; a differential experiment requires an interface "
+                "present on both revisions",
+                usage=usage,
+                raw_response_sha256=response_sha256,
+            )
+        base_symbol, head_symbol = verified.base, verified.head
+        assert base_symbol is not None and head_symbol is not None
+        if head_symbol.kind not in OBSERVABLE_KINDS:
+            raise InvalidClaimAgentOutput(
+                f"claim interface kind {head_symbol.kind} is not an admissible observable",
+                usage=usage,
+                raw_response_sha256=response_sha256,
+            )
+
+        # Being shared is necessary but not sufficient. The deterministic planner omits
+        # observables for two different reasons: budget truncation, and deliberate
+        # irrelevance. Discovery is meant to recover the first, never the second --
+        # otherwise a tool result could be used to anchor a claim on any unchanged symbol
+        # anywhere in the repository, including one that merely shares a leaf name with
+        # something the pull request touched.
+        own_leaf = head_symbol.qualified_name.rsplit(".", maxsplit=1)[-1]
+        relevant_names = set(starting_context.changed_symbol_names) - {own_leaf}
+        if not verified.implementation_changed and not self.planner.references_any(
+            head_symbol, relevant_names
+        ):
+            raise InvalidClaimAgentOutput(
+                "claim interface exists on both revisions but is unrelated to this pull "
+                f"request: {identity.text} neither changed nor references a changed symbol",
+                usage=usage,
+                raw_response_sha256=response_sha256,
+            )
+        return RankedObservable(
+            identity=identity,
+            kind=head_symbol.kind,
+            rank=rank_observable(head_symbol),
+            public=head_symbol.public,
+            exported=head_symbol.exported,
+            implementation_changed=bool(verified.implementation_changed),
+            reasons=(ObservableSelectionReason.DISCOVERED_DURING_INVESTIGATION,),
+            base_start_line=base_symbol.start_line,
+            base_end_line=base_symbol.end_line,
+            head_start_line=head_symbol.start_line,
+            head_end_line=head_symbol.end_line,
+        )
+
     @staticmethod
-    def _citation(
-        observable: Any, grounded_ranges: set[tuple[str, int, int]]
-    ) -> SupportingContextRef:
+    def _payload_identities(payload: dict[str, Any]) -> set[str]:
+        """Identities a tool actually returned, in exact `path::qualified_name` form."""
+        identities: set[str] = set()
+        for match in payload.get("matches", ()) or ():
+            if not isinstance(match, dict):
+                continue
+            symbol = match.get("symbol")
+            if isinstance(symbol, dict) and isinstance(symbol.get("identity"), str):
+                identities.add(symbol["identity"])
+        return identities
+
+    @staticmethod
+    def _citation(observable: RankedObservable) -> SupportingContextRef:
         """Cite the observable's own HEAD definition; it is grounded by construction."""
-        del grounded_ranges
         return SupportingContextRef(
             path=observable.identity.path,
             start_line=observable.head_start_line,
@@ -517,3 +653,54 @@ class ClaimInvestigator:
             if isinstance(path, str) and isinstance(start, int) and isinstance(end, int):
                 ranges.add((path, start, end))
         return ranges
+
+
+class ClaimInvestigatorFactory(Protocol):
+    """Build one investigator for one immutable revision pair."""
+
+    def build(self, *, base_sha: str, head_sha: str) -> ClaimInvestigator: ...
+
+
+class GitClaimInvestigatorFactory:
+    """Production factory: index both revisions from immutable Git objects.
+
+    Index construction is per-run and read-only. It uses the same source repository and
+    the same excluded-path set the deterministic context retriever already uses, so a
+    holdout exclusion applies identically to claim investigation.
+    """
+
+    def __init__(
+        self,
+        *,
+        model: ClaimInvestigatorModel,
+        source_repository: Path,
+        excluded_paths: frozenset[str] = frozenset(),
+        index_budget: RepositoryIndexBudget | None = None,
+        context_budget: StartingContextBudget | None = None,
+        tool_budget: ToolBudget | None = None,
+    ) -> None:
+        self.model = model
+        self.source_repository = source_repository
+        self.excluded_paths = excluded_paths
+        self.index_budget = index_budget
+        self.context_budget = context_budget
+        self.tool_budget = tool_budget
+
+    def build(self, *, base_sha: str, head_sha: str) -> ClaimInvestigator:
+        base = RepositoryIndex.from_git(
+            source_repository=self.source_repository,
+            revision=Revision(role=RevisionRole.BASE, sha=base_sha),
+            budget=self.index_budget,
+            excluded_paths=self.excluded_paths,
+        )
+        head = RepositoryIndex.from_git(
+            source_repository=self.source_repository,
+            revision=Revision(role=RevisionRole.HEAD, sha=head_sha),
+            budget=self.index_budget,
+            excluded_paths=self.excluded_paths,
+        )
+        planner = DeterministicInvestigationPlanner(
+            investigator=RepositoryInvestigator(base=base, head=head),
+            budget=self.context_budget,
+        )
+        return ClaimInvestigator(model=self.model, planner=planner, tool_budget=self.tool_budget)

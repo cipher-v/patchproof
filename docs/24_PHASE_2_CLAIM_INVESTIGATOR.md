@@ -180,10 +180,7 @@ Run or Firestore work, no evaluation-corpus redesign, no negative controls, no e
 no mutation testing, no dynamic code execution, no competing agents, no multi-claim search,
 and no cleanup unrelated to Phase 2. No v1 infrastructure was deleted.
 
-`EvidenceWorkflow` is **not** rewired to call the investigator in this branch. The
-investigator emits the identical `ClaimAgentResult` type, so the swap is a one-line
-injection — but making it the default is a behavioral change to the production path that
-belongs with the live smoke run, not ahead of it.
+`EvidenceWorkflow` **is** now wired to the investigator (see "Production wiring" below).
 
 ---
 
@@ -196,7 +193,96 @@ belongs with the live smoke run, not ahead of it.
 - **Reachability is one hop and syntactic.** A behavior reached through two levels of
   indirection will not be linked, and dynamic dispatch is invisible — by design, and
   labelled as such.
-- **The planner is not wired into the production workflow** (see above).
 - **Related-test discovery reads HEAD**, which in production includes the pull request's
   own new tests. That makes production easier than a holdout and should be stated in any
   evaluation write-up.
+
+---
+
+## Production wiring
+
+`EvidenceWorkflow.__init__` gains one optional keyword, `claim_investigator:
+ClaimInvestigatorFactory | None = None`. When supplied, claim selection routes through the
+investigator; when omitted, the v1 claim agent runs exactly as before. The investigator is
+therefore opt-in and the v1 path is preserved, not replaced.
+
+The change inside `execute()` is a single branch around the existing call:
+
+```python
+if self.claim_investigator is not None:
+    investigation = await self.claim_investigator.build(
+        base_sha=run.base_sha, head_sha=run.head_sha
+    ).investigate(narrative=narrative, diff=context.diff)
+    claim_result = investigation.agent_result
+    investigation_transcript = investigation.transcript
+else:
+    claim_result = await self.claim_agent.select_claim(context=context, narrative=narrative)
+```
+
+`claim_result` is a `ClaimAgentResult` either way, so **everything after this line is
+byte-for-byte the code that already existed**: candidate generation, the deterministic
+validator, BASE/HEAD execution, artifact hashing, the mechanical classifier, the semantic
+assessor, and support admissibility.
+
+`GitClaimInvestigatorFactory` is the production implementation. It indexes both revisions
+from immutable Git objects using the same `source_repository` and the same
+`excluded_paths` the context retriever already uses, so holdout exclusions apply
+identically to claim investigation.
+
+## Tool-discovered interface admission
+
+The deterministic starting context is ranked and truncated, so a valid shared observable
+can fall outside it. Investigation may now recover one — but only through mechanical proof.
+
+An interface is accepted if **either**:
+
+**A.** it is already in `starting_context.shared_observables`; or
+
+**B.** all four of the following hold:
+
+1. the exact `path::qualified_name` was returned by an actual tool call in this run (the
+   model's assertion in its reasoning text has no effect — only PatchProof's own execution
+   of a tool populates the discovered set);
+2. `RepositoryInvestigator.compare_symbol` re-derives it from the immutable BASE/HEAD
+   indexes as `PRESENT_ON_BOTH`;
+3. its HEAD kind is an admissible observable kind;
+4. it is **relevant to this pull request** — its implementation changed, or its definition
+   references a symbol the pull request changed.
+
+Condition 4 exists because the planner omits observables for two different reasons: budget
+truncation, and deliberate irrelevance. Discovery must recover the first and never the
+second, or a tool result could be used to anchor a claim on any unchanged symbol anywhere
+in the repository — including one that merely shares a leaf name with something the pull
+request touched.
+
+**HEAD-only rejection is strengthened, not weakened.** On this path it is *proven* from the
+indexes (`NEW_ON_HEAD`) rather than inferred from a truncated starting context. Symbols
+removed from HEAD are rejected the same way.
+
+## Transcript persistence
+
+`EvidenceReport` gains `investigation_transcript: InvestigationTranscript | None`, excluded
+from serialization when absent. It carries exactly four fields:
+
+| Field | Content |
+|---|---|
+| `turns` | model turn count |
+| `tool_calls` | per call: sequence, turn, tool, **validated** arguments, status, match count, truncation, source chars, bounded detail |
+| `starting_context_sha256` | hash of the deterministic pre-fetch |
+| `response_sha256` | hashes of the raw model responses |
+
+**No chain-of-thought and no free model text.** A test asserts the persisted document
+contains neither the model's `reasoning` strings nor its raw responses, and pins the field
+set so it cannot silently grow.
+
+Arguments are the sanitized values from `ToolCallRecord`, retaining only short
+JSON-serializable scalars. Backward compatibility: the field is optional with a `None`
+default, so v1 stored evidence that predates claim investigation loads unchanged — pinned
+by a test that strips the field and re-validates.
+
+## Evidence admissibility: unchanged
+
+`evidence.py`, `challenge.py`, `pytest_runner.py`, `test_generation.py`,
+`execution_contract.py`, and `benchmarks/` have **zero** changes in this follow-up. The
+only deletion anywhere in `evidence_workflow.py` is the claim-selection call that the new
+branch replaces. The 39 evidence-gate and classifier invariant tests pass unchanged.

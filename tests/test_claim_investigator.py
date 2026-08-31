@@ -232,14 +232,14 @@ def test_invented_interface_is_rejected() -> None:
         conclude(path="pkg/console.py", qualified_name="Console.no_such_method")
     )
 
-    with pytest.raises(InvalidClaimAgentOutput, match="not a shared observable"):
+    with pytest.raises(InvalidClaimAgentOutput, match="neither a deterministic shared observable"):
         run(investigator)
 
 
 def test_invented_path_is_rejected() -> None:
     investigator, _ = build_investigator(conclude(path="pkg/imaginary.py"))
 
-    with pytest.raises(InvalidClaimAgentOutput, match="not a shared observable"):
+    with pytest.raises(InvalidClaimAgentOutput, match="neither a deterministic shared observable"):
         run(investigator)
 
 
@@ -267,7 +267,7 @@ def test_same_leaf_in_another_file_is_not_accepted_as_the_interface() -> None:
         head_files=head,
     )
 
-    with pytest.raises(InvalidClaimAgentOutput, match="not a shared observable"):
+    with pytest.raises(InvalidClaimAgentOutput, match="neither a deterministic shared observable"):
         run(investigator)
 
     # The identically named symbol in the file that actually changed is accepted.

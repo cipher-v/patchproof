@@ -104,6 +104,9 @@ class ObservableSelectionReason(StrEnum):
     REACHES_NEW_HEAD_SYMBOL = "REACHES_NEW_HEAD_SYMBOL"
     #: The observable references a symbol this pull request removed.
     REACHES_REMOVED_BASE_SYMBOL = "REACHES_REMOVED_BASE_SYMBOL"
+    #: The observable was not in the deterministic pre-fetch but was surfaced by a
+    #: tool call and then mechanically re-verified as present on both revisions.
+    DISCOVERED_DURING_INVESTIGATION = "DISCOVERED_DURING_INVESTIGATION"
     #: The observable's own definition references another symbol whose implementation
     #: changed. This is what lets a public caller be preferred over the changed private
     #: implementation it delegates to, and it is also how a module-level singleton is
@@ -259,6 +262,10 @@ class InvestigationStartingContext(BaseModel):
     removed_base_symbols: tuple[str, ...] = Field(default_factory=tuple, max_length=20)
     #: `path::qualified_name` of tests that statically reference a candidate observable.
     related_tests: tuple[str, ...] = Field(default_factory=tuple, max_length=20)
+    #: Leaf names of every symbol this pull request changed or introduced. Carried so the
+    #: relevance rule can be re-applied to an interface discovered later during
+    #: investigation, without recomputing the whole cross-revision comparison.
+    changed_symbol_names: tuple[str, ...] = Field(default_factory=tuple, max_length=80)
     notes: tuple[str, ...] = Field(default_factory=tuple, max_length=8)
 
     @property
@@ -408,6 +415,7 @@ class DeterministicInvestigationPlanner:
             ),
             removed_base_symbols=removed,
             related_tests=self._related_tests(selected),
+            changed_symbol_names=tuple(sorted(changed_names | new_names))[:80],
             notes=tuple(notes),
         )
 
@@ -447,7 +455,7 @@ class DeterministicInvestigationPlanner:
             if reached:
                 reasons.append(ObservableSelectionReason.REACHES_NEW_HEAD_SYMBOL)
             own_leaf = head_symbol.qualified_name.rsplit(".", maxsplit=1)[-1]
-            if self._references_any(head_symbol, interesting_names - {own_leaf}):
+            if self.references_any(head_symbol, interesting_names - {own_leaf}):
                 reasons.append(ObservableSelectionReason.REACHES_CHANGED_SYMBOL)
             if not reasons:
                 # Unchanged and unrelated to the diff: not a candidate anchor.
@@ -478,7 +486,7 @@ class DeterministicInvestigationPlanner:
         ranked.sort(key=lambda item: item.sort_key)
         return tuple(ranked)
 
-    def _references_any(self, symbol: IndexedSymbol, names: set[str]) -> bool:
+    def references_any(self, symbol: IndexedSymbol, names: set[str]) -> bool:
         """Whether the symbol's own HEAD definition syntactically references any name.
 
         Line-range containment is used rather than scope attribution, because a
