@@ -389,9 +389,7 @@ class CloudRunTaskProcessor:
             if run.event_action == "patchproof_analyze":
                 try:
                     known = find_known_pr(
-                        parse_pr_url(
-                            f"https://github.com/{run.repository}/pull/{run.pr_number}"
-                        ),
+                        parse_pr_url(f"https://github.com/{run.repository}/pull/{run.pr_number}"),
                         project_root=self.project_root,
                     )
                 except PrAnalyzeError as error:
@@ -571,9 +569,7 @@ class CloudControlSettings:
                 for item in os.environ.get("PATCHPROOF_DASHBOARD_RUN_IDS", "").split(",")
                 if item.strip()
             ),
-            dashboard_recent_limit=int(
-                os.environ.get("PATCHPROOF_DASHBOARD_RECENT_LIMIT", "8")
-            ),
+            dashboard_recent_limit=int(os.environ.get("PATCHPROOF_DASHBOARD_RECENT_LIMIT", "8")),
             firestore_namespace=os.environ.get("PATCHPROOF_FIRESTORE_NAMESPACE", "patchproof"),
             model_name=os.environ.get("PATCHPROOF_GEMINI_MODEL", DEFAULT_CLAIM_MODEL),
             gemini_provider=GeminiProviderConfig.from_environment(),

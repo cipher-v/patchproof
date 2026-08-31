@@ -151,11 +151,7 @@ def print_cloud_run(run: DashboardRun) -> None:
         print("-" * 72)
         print(candidate.source or "<no valid source>")
         evaluation = next(
-            (
-                item
-                for item in run.evaluations
-                if item.attempt_sequence == candidate.sequence
-            ),
+            (item for item in run.evaluations if item.attempt_sequence == candidate.sequence),
             None,
         )
         if evaluation is not None:

@@ -93,9 +93,7 @@ def _run_dashboard(args: argparse.Namespace) -> int:
         return 0
     control_url = _control_url()
     if not control_url:
-        raise PrAnalyzeError(
-            "set PATCHPROOF_CONTROL_URL or use 'patchproof dashboard --local'"
-        )
+        raise PrAnalyzeError("set PATCHPROOF_CONTROL_URL or use 'patchproof dashboard --local'")
     url = f"{control_url}/dashboard"
     print(f"PatchProof Evidence Console: {url}")
     if not args.no_open:
