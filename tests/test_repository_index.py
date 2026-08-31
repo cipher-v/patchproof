@@ -128,6 +128,30 @@ def test_index_models_definitions_imports_references_calls_and_tests() -> None:
     ]
 
 
+def test_relative_import_aliases_expand_to_their_static_absolute_target() -> None:
+    index = RepositoryIndex.from_files(
+        revision=_REVISION,
+        files={
+            "pkg/parser.py": "def parse(value):\n    return value\n",
+            "pkg/api.py": (
+                "from .parser import parse as _parse\n\n"
+                "def public(value):\n    return _parse(value)\n"
+            ),
+        },
+    )
+
+    imported = next(item for item in index.imports if item.alias == "_parse")
+    call = next(
+        item
+        for item in index.references
+        if item.path == "pkg/api.py" and item.kind is ReferenceKind.CALL
+    )
+
+    assert imported.imported_target == ".parser.parse"
+    assert imported.alias_target == "pkg.parser.parse"
+    assert call.module_import_alias_expansion == "pkg.parser.parse"
+
+
 def test_index_order_and_hash_do_not_depend_on_mapping_insertion_order() -> None:
     first = RepositoryIndex.from_files(
         revision=_REVISION,
@@ -247,6 +271,34 @@ def test_file_symbol_and_reference_budgets_truncate_deterministically() -> None:
     assert first.stats.imports_omitted > 0
     assert first.stats.reference_count <= 1
     assert first.stats.references_omitted > 0
+
+
+def test_priority_file_is_indexed_before_alphabetical_file_truncation() -> None:
+    budget = RepositoryIndexBudget(max_files=2, max_file_bytes=512, max_total_source_bytes=1_024)
+    files = {
+        "a_unrelated.py": "def a():\n    return 1\n",
+        "b_unrelated.py": "def b():\n    return 2\n",
+        "z_changed.py": "def changed():\n    return 3\n",
+    }
+
+    first = RepositoryIndex.from_files(
+        revision=_REVISION,
+        files=files,
+        budget=budget,
+        priority_paths=frozenset({"z_changed.py"}),
+    )
+    second = RepositoryIndex.from_files(
+        revision=_REVISION,
+        files=dict(reversed(tuple(files.items()))),
+        budget=budget,
+        priority_paths=frozenset({"z_changed.py"}),
+    )
+
+    assert {item.path for item in first.files} == {"a_unrelated.py", "z_changed.py"}
+    assert first.stats.files_indexed == 2
+    assert first.stats.file_limit_omitted == 1
+    assert first.stats.truncated is True
+    assert first.canonical_json == second.canonical_json
 
 
 def test_module_value_semantics_cover_bindings_but_omit_augmented_and_attribute_targets() -> None:

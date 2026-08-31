@@ -66,8 +66,10 @@ def test_process_output_is_streamed_into_a_hard_bounded_buffer(
     assert result.returncode == 0
     assert len(result.stdout) <= 1_000
     assert len(result.stderr) <= 1_000
-    assert result.stdout.endswith("... [output truncated by PatchProof]")
-    assert result.stderr.endswith("... [output truncated by PatchProof]")
+    assert "middle output omitted by PatchProof" in result.stdout
+    assert "middle output omitted by PatchProof" in result.stderr
+    assert result.stdout.endswith("o" * 20)
+    assert result.stderr.endswith("e" * 20)
 
 
 def test_process_timeout_terminates_promptly_and_returns_only_bounded_facts(
@@ -113,7 +115,11 @@ def test_process_start_failure_does_not_persist_os_error_details(
 
 
 def test_setup_output_sanitization_redacts_credentials_and_stays_bounded() -> None:
-    value = "token=super-secret-value\nBearer signed-value\n" + ("x" * 10_000)
+    value = (
+        "token=super-secret-value\nBearer signed-value\n"
+        + ("x" * 10_000)
+        + "\nterminal build cause"
+    )
 
     sanitized = sanitize_process_output(value, maximum_chars=500)
 
@@ -122,4 +128,5 @@ def test_setup_output_sanitization_redacts_credentials_and_stays_bounded() -> No
     assert "credential=<redacted>" in sanitized
     assert "Bearer <redacted>" in sanitized
     assert len(sanitized) <= 500
-    assert sanitized.endswith("... [output truncated by PatchProof]")
+    assert "middle output omitted by PatchProof" in sanitized
+    assert sanitized.endswith("terminal build cause")

@@ -45,11 +45,8 @@ _PROTECTED_CORE_PATHS = (
     "src/patchproof/challenge.py",
     "src/patchproof/claim_agent.py",
     "src/patchproof/context_retrieval.py",
-    "src/patchproof/git_workspace.py",
     "src/patchproof/models.py",
-    "src/patchproof/pytest_runner.py",
     "src/patchproof/reasoning_budget.py",
-    "src/patchproof/test_generation.py",
 )
 
 # Phase 2 intentionally changed claim-routing code in these modules. Keep the actual
@@ -65,6 +62,27 @@ _PROTECTED_CORE_DEFINITIONS = {
         (None, "_challenge"),
         (None, "_execution_document"),
         (None, "_bounded_candidate_challenges"),
+    ),
+    "src/patchproof/git_workspace.py": (
+        ("GitWorkspaceManager", "resolve_revision"),
+        ("GitWorkspaceManager", "_run_git"),
+    ),
+    "src/patchproof/pytest_runner.py": (
+        ("PytestJUnitParser", "parse"),
+        ("PytestJUnitParser", "_without_report"),
+        ("PytestJUnitParser", "_pytest_expectation_failure"),
+        ("PytestRunner", "_test_command"),
+        ("PytestRunner", "_safe_artifact_path"),
+        ("PytestRunner", "_hash_file"),
+    ),
+    "src/patchproof/test_generation.py": (
+        ("CandidateTestValidator", "validate"),
+        ("CandidateTestValidator", "_validate_imports"),
+        ("CandidateTestValidator", "_validate_calls"),
+        ("CandidateTestValidator", "_validate_shared_interface"),
+        ("BoundedCandidateTestGenerator", "generate_initial"),
+        ("BoundedCandidateTestGenerator", "repair"),
+        ("BoundedCandidateTestGenerator", "_invoke"),
     ),
 }
 
@@ -714,6 +732,7 @@ def analyze_known_pr(
             ),
             source_repository=repository,
             excluded_paths=frozenset(case.excluded_paths),
+            priority_paths=frozenset(case.production_files_changed),
         )
 
         stage = "context retrieval"

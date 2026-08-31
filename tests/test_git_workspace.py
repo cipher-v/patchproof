@@ -36,5 +36,7 @@ def test_manager_resolves_full_shas_and_cleans_detached_worktrees(
         assert _head_sha(str(pair.head_path)) == repository_history.head_sha
         assert pair.base_path.is_dir()
         assert pair.head_path.is_dir()
+        assert pair.base_path.parent.name.startswith("r-")
+        assert len(pair.base_path.parent.name) <= 16
 
     assert list(repository_history.workspace_root.iterdir()) == []

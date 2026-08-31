@@ -294,6 +294,25 @@ class ClaimInvestigationResult(BaseModel):
     starting_context: InvestigationStartingContext
 
 
+class InvalidClaimInvestigationOutput(InvalidClaimAgentOutput):
+    """Rejected Phase-2 output with its bounded, content-addressed transcript."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        transcript: InvestigationTranscript,
+        usage: ModelUsage | None = None,
+        raw_response_sha256: str | None = None,
+    ) -> None:
+        self.transcript = transcript
+        super().__init__(
+            message,
+            usage=usage,
+            raw_response_sha256=raw_response_sha256,
+        )
+
+
 class ClaimInvestigator:
     """Run the bounded hybrid loop and return a grounded claim or an abstention."""
 
@@ -344,16 +363,24 @@ class ClaimInvestigator:
             response_hash = hashlib.sha256(response.text.encode("utf-8")).hexdigest()
             response_hashes.append(response_hash)
             if len(response.text) > self.max_response_chars:
-                raise InvalidClaimAgentOutput(
+                raise self._invalid_output(
                     "claim investigator response exceeds the configured budget",
+                    turns=turns,
+                    toolbox=toolbox,
+                    context_sha=context_sha,
+                    response_hashes=response_hashes,
                     usage=usage,
                     raw_response_sha256=response_hash,
                 )
             try:
                 decision = InvestigatorDecision.model_validate_json(response.text)
             except ValidationError as error:
-                raise InvalidClaimAgentOutput(
+                raise self._invalid_output(
                     "claim investigator returned invalid structured output",
+                    turns=turns,
+                    toolbox=toolbox,
+                    context_sha=context_sha,
+                    response_hashes=response_hashes,
                     usage=usage,
                     raw_response_sha256=response_hash,
                 ) from error
@@ -388,26 +415,55 @@ class ClaimInvestigator:
                 usage = response.usage
                 response_hash = hashlib.sha256(response.text.encode("utf-8")).hexdigest()
                 response_hashes.append(response_hash)
+                if len(response.text) > self.max_response_chars:
+                    raise self._invalid_output(
+                        "claim investigator response exceeds the configured budget",
+                        turns=turns,
+                        toolbox=toolbox,
+                        context_sha=context_sha,
+                        response_hashes=response_hashes,
+                        usage=usage,
+                        raw_response_sha256=response_hash,
+                    )
                 try:
                     decision = InvestigatorDecision.model_validate_json(response.text)
                 except ValidationError as error:
-                    raise InvalidClaimAgentOutput(
+                    raise self._invalid_output(
                         "claim investigator returned invalid structured output",
+                        turns=turns,
+                        toolbox=toolbox,
+                        context_sha=context_sha,
+                        response_hashes=response_hashes,
                         usage=usage,
                         raw_response_sha256=response_hash,
                     ) from error
                 if decision.action is not InvestigatorAction.CONCLUDE:
-                    raise InvalidClaimAgentOutput(
+                    raise self._invalid_output(
                         "claim investigator did not conclude within its turn budget",
+                        turns=turns,
+                        toolbox=toolbox,
+                        context_sha=context_sha,
+                        response_hashes=response_hashes,
                         usage=usage,
                         raw_response_sha256=response_hash,
                     )
                 break
 
         assert decision is not None and usage is not None
-        selection = self._normalize(
-            decision, starting_context, discovered, usage, response_hashes[-1]
-        )
+        try:
+            selection = self._normalize(
+                decision, starting_context, discovered, usage, response_hashes[-1]
+            )
+        except InvalidClaimAgentOutput as error:
+            raise self._invalid_output(
+                str(error),
+                turns=turns,
+                toolbox=toolbox,
+                context_sha=context_sha,
+                response_hashes=response_hashes,
+                usage=error.usage,
+                raw_response_sha256=error.raw_response_sha256,
+            ) from error
         return ClaimInvestigationResult(
             agent_result=ClaimAgentResult(
                 selection=selection,
@@ -421,6 +477,29 @@ class ClaimInvestigator:
                 response_sha256=tuple(response_hashes[:8]),
             ),
             starting_context=starting_context,
+        )
+
+    @staticmethod
+    def _invalid_output(
+        message: str,
+        *,
+        turns: int,
+        toolbox: InvestigationToolbox,
+        context_sha: str,
+        response_hashes: list[str],
+        usage: ModelUsage | None,
+        raw_response_sha256: str | None,
+    ) -> InvalidClaimInvestigationOutput:
+        return InvalidClaimInvestigationOutput(
+            message,
+            transcript=InvestigationTranscript(
+                turns=turns,
+                tool_calls=toolbox.transcript,
+                starting_context_sha256=context_sha,
+                response_sha256=tuple(response_hashes[:8]),
+            ),
+            usage=usage,
+            raw_response_sha256=raw_response_sha256,
         )
 
     # -- grounding -------------------------------------------------------------------
@@ -584,11 +663,8 @@ class ClaimInvestigator:
         # otherwise a tool result could be used to anchor a claim on any unchanged symbol
         # anywhere in the repository, including one that merely shares a leaf name with
         # something the pull request touched.
-        own_leaf = head_symbol.qualified_name.rsplit(".", maxsplit=1)[-1]
-        relevant_names = set(starting_context.changed_symbol_names) - {own_leaf}
-        if not verified.implementation_changed and not self.planner.references_any(
-            head_symbol, relevant_names
-        ):
+        relevant_identities = self.planner.investigator.relevance_identities()
+        if not verified.implementation_changed and identity.text not in relevant_identities:
             raise InvalidClaimAgentOutput(
                 "claim interface exists on both revisions but is unrelated to this pull "
                 f"request: {identity.text} neither changed nor references a changed symbol",
@@ -675,6 +751,7 @@ class GitClaimInvestigatorFactory:
         model: ClaimInvestigatorModel,
         source_repository: Path,
         excluded_paths: frozenset[str] = frozenset(),
+        priority_paths: frozenset[str] = frozenset(),
         index_budget: RepositoryIndexBudget | None = None,
         context_budget: StartingContextBudget | None = None,
         tool_budget: ToolBudget | None = None,
@@ -682,6 +759,7 @@ class GitClaimInvestigatorFactory:
         self.model = model
         self.source_repository = source_repository
         self.excluded_paths = excluded_paths
+        self.priority_paths = priority_paths
         self.index_budget = index_budget
         self.context_budget = context_budget
         self.tool_budget = tool_budget
@@ -692,12 +770,14 @@ class GitClaimInvestigatorFactory:
             revision=Revision(role=RevisionRole.BASE, sha=base_sha),
             budget=self.index_budget,
             excluded_paths=self.excluded_paths,
+            priority_paths=self.priority_paths,
         )
         head = RepositoryIndex.from_git(
             source_repository=self.source_repository,
             revision=Revision(role=RevisionRole.HEAD, sha=head_sha),
             budget=self.index_budget,
             excluded_paths=self.excluded_paths,
+            priority_paths=self.priority_paths,
         )
         planner = DeterministicInvestigationPlanner(
             investigator=RepositoryInvestigator(base=base, head=head),

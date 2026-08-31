@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import tempfile
 import time
-import uuid
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -61,8 +61,7 @@ class GitWorkspaceManager:
         """Yield verified detached BASE and HEAD worktrees, then remove them."""
         base_revision = self.resolve_revision(base_ref, RevisionRole.BASE)
         head_revision = self.resolve_revision(head_ref, RevisionRole.HEAD)
-        run_root = self.workspace_root / f"patchproof-run-{uuid.uuid4().hex}"
-        run_root.mkdir()
+        run_root = Path(tempfile.mkdtemp(prefix="r-", dir=self.workspace_root))
         base_path = run_root / "base"
         head_path = run_root / "head"
         registered_paths: list[Path] = []

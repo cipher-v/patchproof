@@ -821,27 +821,28 @@ class CandidateTestValidator:
         and discarding it would let a candidate manufacture a difference rather than
         observe one.
         """
-        bound_names = set(_import_bindings(tree))
+        import_bindings = _import_bindings(tree)
         for node in ast.walk(tree):
             if isinstance(node, ast.ExceptHandler):
-                CandidateTestValidator._validate_handler(node, bound_names)
+                CandidateTestValidator._validate_handler(node, import_bindings)
             elif isinstance(node, ast.Call):
                 CandidateTestValidator._validate_raises_call(node)
 
     @staticmethod
-    def _validate_handler(handler: ast.ExceptHandler, bound_names: set[str]) -> None:
+    def _validate_handler(handler: ast.ExceptHandler, import_bindings: dict[str, str]) -> None:
         if handler.type is None:
             CandidateTestValidator._reject(
                 CandidateIssueCode.BROAD_EXCEPTION_HANDLER,
                 "a bare except clause cannot express a specific behavioral expectation",
             )
         for name in CandidateTestValidator._exception_names(handler.type):
-            if name in _OVERBROAD_EXCEPTION_NAMES:
+            leaf = name.rsplit(".", maxsplit=1)[-1]
+            if leaf in _OVERBROAD_EXCEPTION_NAMES:
                 CandidateTestValidator._reject(
                     CandidateIssueCode.BROAD_EXCEPTION_HANDLER,
                     f"catching {name!r} is too broad to be claim-scoped evidence",
                 )
-            if not CandidateTestValidator._is_grounded_exception(name, bound_names):
+            if not CandidateTestValidator._is_grounded_exception(name, import_bindings):
                 CandidateTestValidator._reject(
                     CandidateIssueCode.UNGROUNDED_EXCEPTION_TYPE,
                     f"exception type {name!r} is neither a builtin nor imported by the test",
@@ -864,7 +865,7 @@ class CandidateTestValidator:
         if not is_raises or not node.args:
             return
         for name in CandidateTestValidator._exception_names(node.args[0]):
-            if name in _OVERBROAD_EXCEPTION_NAMES:
+            if name.rsplit(".", maxsplit=1)[-1] in _OVERBROAD_EXCEPTION_NAMES:
                 CandidateTestValidator._reject(
                     CandidateIssueCode.BROAD_EXCEPTION_HANDLER,
                     f"pytest.raises({name}) is too broad to be claim-scoped evidence",
@@ -883,14 +884,25 @@ class CandidateTestValidator:
         if isinstance(node, ast.Name):
             return (node.id,)
         if isinstance(node, ast.Attribute):
+            parts = [node.attr]
+            value = node.value
+            while isinstance(value, ast.Attribute):
+                parts.append(value.attr)
+                value = value.value
+            if isinstance(value, ast.Name):
+                parts.append(value.id)
+                return (".".join(reversed(parts)),)
             return (node.attr,)
         return ()
 
     @staticmethod
-    def _is_grounded_exception(name: str, bound_names: set[str]) -> bool:
+    def _is_grounded_exception(name: str, import_bindings: dict[str, str]) -> bool:
         """Accept builtin exceptions and anything the candidate actually imported."""
-        if name in bound_names:
+        root = name.split(".", maxsplit=1)[0]
+        if root in import_bindings:
             return True
+        if "." in name:
+            return False
         builtin = getattr(builtins, name, None)
         return isinstance(builtin, type) and issubclass(builtin, BaseException)
 

@@ -215,6 +215,43 @@ def test_readiness_retains_bounded_structured_install_diagnostics(
     }
 
 
+def test_uv_python_pin_applies_only_to_virtual_environment_creation(
+    writable_test_directory: Path,
+) -> None:
+    environments: list[tuple[tuple[str, ...], dict[str, str]]] = []
+
+    class RecordingProcesses:
+        def run(self, command, **kwargs):
+            environments.append((tuple(command), dict(kwargs["environment"])))
+            return BoundedProcessResult(returncode=0, duration_seconds=0.01, stdout="", stderr="")
+
+    contract = ExecutionContract.model_validate(
+        {
+            "version": 1,
+            "python": "3.12",
+            "install": [["uv", "venv"], ["uv", "pip", "install", "pytest"]],
+            "test": {"command": ["python", "-m", "pytest"]},
+            "allowed_test_paths": ["patchproof_generated_tests/"],
+            "timeout_seconds": 5,
+            "synthesized": True,
+        }
+    )
+    workspace = writable_test_directory / "pin-scope-workspace"
+    workspace.mkdir()
+    runner = PytestRunner(
+        contract=contract,
+        python_executable=Path(sys.executable),
+        install_dependencies=True,
+        processes=RecordingProcesses(),  # type: ignore[arg-type]
+    )
+
+    assert runner._install(workspace.resolve()) is None
+    assert environments[0][0] == ("uv", "venv")
+    assert environments[0][1]["UV_PYTHON"] == str(Path(sys.executable).resolve())
+    assert environments[1][0] == ("uv", "pip", "install", "pytest")
+    assert "UV_PYTHON" not in environments[1][1]
+
+
 def test_base_assertion_failure_and_head_pass_are_mechanically_discriminating(
     repository_history: RepositoryHistory,
 ) -> None:

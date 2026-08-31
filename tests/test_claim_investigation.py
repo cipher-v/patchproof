@@ -170,6 +170,25 @@ def test_same_leaf_in_different_files_produces_distinct_identities() -> None:
     assert "pkg/b.py::Report.render" not in identities
 
 
+def test_same_leaf_import_from_an_unrelated_module_does_not_join_relevance() -> None:
+    base = {
+        "pkg/changed.py": "def parse(value):\n    return value\n",
+        "pkg/stable.py": "def parse(value):\n    return value\n",
+        "pkg/api.py": (
+            "from .stable import parse\n\ndef public(value):\n    return parse(value)\n"
+        ),
+    }
+    head = {**base, "pkg/changed.py": "def parse(value):\n    return value + 1\n"}
+    planner = build_planner(base, head)
+
+    context = planner.build()
+    identities = {item.identity.text for item in context.shared_observables}
+
+    assert "pkg/changed.py::parse" in identities
+    assert "pkg/api.py::public" not in identities
+    assert "pkg/api.py::public" not in planner.investigator.relevance_identities()
+
+
 # ---------------------------------------------------------------------------------
 # MODULE_VALUE
 # ---------------------------------------------------------------------------------
@@ -423,6 +442,34 @@ def test_starting_context_retains_a_shared_caller_when_its_changed_callee_is_tru
     assert "_changed_24" not in selected
     assert ObservableSelectionReason.REACHES_CHANGED_SYMBOL in selected["public_api"].reasons
     assert context.coverage.observables_truncated is True
+
+
+def test_starting_context_retains_a_public_caller_across_bounded_alias_hops() -> None:
+    base = {
+        "pkg/rules.py": "RULES = {'END': '$'}\n",
+        "pkg/parser.py": (
+            "from .rules import RULES\n\ndef parse(value):\n    return RULES['END'], value\n"
+        ),
+        "pkg/api.py": (
+            "from .parser import parse as _parse\n\n"
+            "class PublicRequest:\n"
+            "    def __init__(self, value):\n"
+            "        self.parsed = _parse(value)\n"
+        ),
+    }
+    head = {**base, "pkg/rules.py": "RULES = {'END': '\\\\Z'}\n"}
+
+    planner = build_planner(base, head)
+    context = planner.build()
+    selected = {item.identity.text: item for item in context.shared_observables}
+
+    assert "pkg/api.py::PublicRequest" in selected, (
+        tuple(selected),
+        planner.investigator.relevance_identities(),
+    )
+    public = selected["pkg/api.py::PublicRequest"]
+    assert ObservableSelectionReason.REACHES_CHANGED_SYMBOL in public.reasons
+    assert public.implementation_changed is False
 
 
 def test_invalid_starting_context_budgets_are_rejected() -> None:

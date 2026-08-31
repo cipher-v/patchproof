@@ -7,8 +7,8 @@ import hashlib
 import os
 import re
 import shutil
+import tempfile
 import time
-import uuid
 import xml.etree.ElementTree as element_tree
 from contextlib import suppress
 from dataclasses import dataclass
@@ -345,8 +345,7 @@ class PytestRunner:
                 detail=syntax_error,
             )
 
-        result_directory = workspace.parent / f".patchproof-results-{uuid.uuid4().hex}"
-        result_directory.mkdir()
+        result_directory = Path(tempfile.mkdtemp(prefix=".ppr-", dir=workspace.parent))
         try:
             report_path = result_directory / "pytest.xml"
             command = (
@@ -489,14 +488,20 @@ class PytestRunner:
 
     def _install(self, workspace: Path) -> EnvironmentSetupDiagnostic | None:
         """Run only validated contract argument arrays, without a command shell."""
-        runtime_root = workspace.parent / f".patchproof-install-{uuid.uuid4().hex}"
+        runtime_root = Path(tempfile.mkdtemp(prefix=".ppi-", dir=workspace.parent))
         try:
             environment = self.environment_policy.build(runtime_root=runtime_root)
             for command in self.contract.install:
+                command_environment = dict(environment)
+                # Pin only environment creation. Keeping UV_PYTHON set for later
+                # `uv pip` commands makes uv target the host interpreter rather than
+                # the repository-local `.venv` it just created.
+                if command == ("uv", "venv"):
+                    command_environment["UV_PYTHON"] = str(self.python_executable)
                 completed = self.processes.run(
                     command,
                     cwd=workspace,
-                    environment=environment,
+                    environment=command_environment,
                     timeout_seconds=self.install_timeout_seconds,
                 )
                 if (
@@ -526,13 +531,14 @@ class PytestRunner:
                         timed_out=completed.timed_out,
                         start_error=completed.start_error,
                         environment=tuple(
-                            (name, environment[name])
+                            (name, command_environment[name])
                             for name in (
                                 "UV_NO_CACHE",
                                 "UV_NO_PROGRESS",
+                                "UV_PYTHON",
                                 "UV_PYTHON_DOWNLOADS",
                             )
-                            if name in environment
+                            if name in command_environment
                         ),
                     )
             return None

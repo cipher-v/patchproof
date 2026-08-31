@@ -297,13 +297,12 @@ def test_hardened_guard_accepts_phase_two_routing_but_keeps_proof_core_frozen() 
     assert {
         "src/patchproof/adk_evidence_assessor.py",
         "src/patchproof/challenge.py",
-        "src/patchproof/git_workspace.py",
         "src/patchproof/models.py",
-        "src/patchproof/pytest_runner.py",
-        "src/patchproof/test_generation.py",
     } <= path_guard
     workflow_definitions = set(_PROTECTED_CORE_DEFINITIONS["src/patchproof/evidence_workflow.py"])
     hard_mode_definitions = set(_PROTECTED_CORE_DEFINITIONS["src/patchproof/hard_mode.py"])
+    runner_definitions = set(_PROTECTED_CORE_DEFINITIONS["src/patchproof/pytest_runner.py"])
+    generator_definitions = set(_PROTECTED_CORE_DEFINITIONS["src/patchproof/test_generation.py"])
     assert {
         ("EvidenceReport", "validate_evidence_pair"),
         ("EvidenceWorkflow", "_validate_semantic_decision"),
@@ -315,6 +314,16 @@ def test_hardened_guard_accepts_phase_two_routing_but_keeps_proof_core_frozen() 
         (None, "_execution_document"),
         (None, "_bounded_candidate_challenges"),
     } <= hard_mode_definitions
+    assert {
+        ("PytestJUnitParser", "parse"),
+        ("PytestRunner", "_safe_artifact_path"),
+        ("PytestRunner", "_hash_file"),
+    } <= runner_definitions
+    assert {
+        ("CandidateTestValidator", "validate"),
+        ("CandidateTestValidator", "_validate_shared_interface"),
+        ("BoundedCandidateTestGenerator", "_invoke"),
+    } <= generator_definitions
     verify_hardened_core(project_root=project_root)
 
 

@@ -192,8 +192,14 @@ class DependencyInstallProber:
         if "uv.lock" in paths and "pyproject.toml" in paths:
             return InstallPlan(
                 strategy=InstallStrategy.UV_SYNC_LOCKED,
-                commands=(("uv", "sync", "--frozen", "--all-groups"),),
-                rationale="committed uv.lock and pyproject.toml reproduce a locked environment",
+                commands=(
+                    ("uv", "sync", "--frozen"),
+                    ("uv", "pip", "install", "pytest"),
+                ),
+                rationale=(
+                    "committed uv.lock and pyproject.toml reproduce the frozen default "
+                    "environment without unrelated dependency groups"
+                ),
             )
 
         metadata = self._project_metadata(revision_sha, paths)
@@ -308,17 +314,24 @@ def _first_match(preference: tuple[str, ...], declared: tuple[str, ...]) -> str 
 
 
 def _select_requirements_path(paths: frozenset[str]) -> str | None:
-    """Choose one committed requirements file deterministically."""
+    """Choose a runtime requirements file without installing a full dev environment."""
     candidates = sorted(path for path in paths if _is_requirements_path(path))
     if not candidates:
         return None
-    # Prefer an explicitly test-scoped requirements file, then the shortest generic one,
-    # so the choice is stable across revisions rather than dependent on iteration order.
-    for marker in ("test", "dev"):
-        scoped = [path for path in candidates if marker in PurePosixPath(path).name.lower()]
-        if scoped:
-            return min(scoped, key=lambda path: (len(path), path))
-    return min(candidates, key=lambda path: (len(path), path))
+    # Generated tests need the production package plus pytest, not coverage, docs,
+    # linting, or a repository's complete development matrix. Editable installation
+    # already installs declared runtime dependencies, so a dev/test-only file is not a
+    # reason to widen the environment.
+    development_markers = ("dev", "test", "testing", "docs", "lint", "typing")
+    runtime = [
+        path
+        for path in candidates
+        if not any(marker in PurePosixPath(path).name.lower() for marker in development_markers)
+    ]
+    if not runtime:
+        return None
+    exact = [path for path in runtime if path == "requirements.txt"]
+    return exact[0] if exact else min(runtime, key=lambda path: (len(path), path))
 
 
 #: Where a synthesized contract places generated tests. This directory is deliberately

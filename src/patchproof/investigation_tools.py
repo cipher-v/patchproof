@@ -13,6 +13,7 @@ from patchproof.repository_index import (
     IndexedImport,
     IndexedReference,
     IndexedSymbol,
+    ObservableSymbolKind,
     ReferenceKind,
     RepositoryIndex,
     RepositoryIndexStats,
@@ -76,6 +77,7 @@ class InvestigationBudget:
     max_source_window_lines: int = 120
     max_source_chars: int = 12_000
     max_total_source_chars: int = 24_000
+    max_relevance_hops: int = 3
 
     def __post_init__(self) -> None:
         for item in fields(self):
@@ -89,6 +91,8 @@ class InvestigationBudget:
             raise ValueError("source line budget exceeds its safety ceiling")
         if self.max_source_chars > 32_000:
             raise ValueError("source character budget exceeds its safety ceiling")
+        if self.max_relevance_hops > 5:
+            raise ValueError("relevance traversal exceeds its safety ceiling")
         if (
             self.max_total_source_chars < self.max_source_chars
             or self.max_total_source_chars > 64_000
@@ -318,8 +322,8 @@ class RepositoryInvestigator:
     def compare_observables(self, *, maximum: int | None = None) -> CrossRevisionObservables:
         """Return a relevance-first bounded partition of cross-revision observables.
 
-        Direct changes, additions, removals, and shared definitions that reference a
-        changed or added symbol are selected before unrelated shared symbols. The
+        Direct changes, additions, removals, and shared definitions that transitively
+        reference a changed or added symbol are selected before unrelated shared symbols. The
         high-signal groups are interleaved deterministically so one large change kind
         cannot crowd every other kind out of the bounded result.
         """
@@ -352,6 +356,12 @@ class RepositoryInvestigator:
         model.
         """
         return self._changed_symbol_names(self._comparisons(path=None, qualified_name=None))
+
+    def relevance_identities(self) -> frozenset[str]:
+        """Return exact `path::qualified_name` identities in the bounded caller closure."""
+        comparisons = self._comparisons(path=None, qualified_name=None)
+        relevant = self._relevance_identities(comparisons)
+        return frozenset(f"{path}::{qualified_name}" for path, qualified_name in relevant)
 
     def find_references(
         self,
@@ -675,7 +685,7 @@ class RepositoryInvestigator:
     def _prioritized_observable_comparisons(
         self, comparisons: list[SymbolComparison]
     ) -> list[SymbolComparison]:
-        interesting_names = self._changed_symbol_names(comparisons)
+        relevant_identities = self._relevance_identities(comparisons)
         changed_shared: list[SymbolComparison] = []
         added: list[SymbolComparison] = []
         removed: list[SymbolComparison] = []
@@ -689,7 +699,7 @@ class RepositoryInvestigator:
                 removed.append(comparison)
             elif comparison.implementation_changed:
                 changed_shared.append(comparison)
-            elif self._comparison_references_any(comparison, interesting_names):
+            elif (comparison.path, comparison.qualified_name) in relevant_identities:
                 relevant_shared.append(comparison)
             else:
                 unrelated_shared.append(comparison)
@@ -719,20 +729,93 @@ class RepositoryInvestigator:
             )
         )
 
-    def _comparison_references_any(
-        self, comparison: SymbolComparison, names: frozenset[str]
-    ) -> bool:
-        symbol = comparison.head
-        if symbol is None or not names:
-            return False
-        own_leaf = symbol.qualified_name.rsplit(".", maxsplit=1)[-1]
-        relevant_names = names - {own_leaf}
-        return any(
-            reference.path == symbol.path
-            and symbol.start_line <= reference.start_line <= symbol.end_line
-            and reference.name in relevant_names
-            for reference in self.head.references
+    def _relevance_identities(
+        self, comparisons: list[SymbolComparison]
+    ) -> frozenset[tuple[str, str]]:
+        """Expand direct changes through a bounded exact-identity caller closure."""
+        relevant = {
+            (comparison.path, comparison.qualified_name)
+            for comparison in comparisons
+            if comparison.presence is ObservablePresence.NEW_ON_HEAD
+            or (
+                comparison.presence is ObservablePresence.PRESENT_ON_BOTH
+                and comparison.implementation_changed
+            )
+        }
+        shared = [
+            comparison
+            for comparison in comparisons
+            if comparison.presence is ObservablePresence.PRESENT_ON_BOTH
+            and comparison.head is not None
+        ]
+        shared.sort(key=self._observable_priority_key)
+        targets_by_expansion: dict[str, set[tuple[str, str]]] = {}
+        targets_by_path_and_name: dict[tuple[str, str], set[tuple[str, str]]] = {}
+        for comparison in comparisons:
+            target = comparison.head
+            if target is None:
+                continue
+            identity = (comparison.path, comparison.qualified_name)
+            expansions = {f"{target.module}.{target.qualified_name}"}
+            if target.path.startswith("src/") and target.module.startswith("src."):
+                expansions.add(f"{target.module[4:]}.{target.qualified_name}")
+            for expansion in expansions:
+                targets_by_expansion.setdefault(expansion, set()).add(identity)
+            targets_by_path_and_name.setdefault((target.path, target.qualified_name), set()).add(
+                identity
+            )
+
+        references_by_path: dict[str, list[IndexedReference]] = {}
+        for reference in self.head.references:
+            references_by_path.setdefault(reference.path, []).append(reference)
+        dependency_graph: dict[tuple[str, str], set[tuple[str, str]]] = {}
+        for comparison in shared:
+            symbol = comparison.head
+            assert symbol is not None
+            identity = (comparison.path, comparison.qualified_name)
+            dependencies = dependency_graph.setdefault(identity, set())
+            for reference in references_by_path.get(symbol.path, ()):
+                if not symbol.start_line <= reference.start_line <= symbol.end_line:
+                    continue
+                expansion = reference.module_import_alias_expansion
+                if expansion is not None:
+                    dependencies.update(targets_by_expansion.get(expansion, ()))
+                    continue
+                local_name = self._same_file_reference_name(symbol, reference)
+                if local_name is not None:
+                    dependencies.update(targets_by_path_and_name.get((symbol.path, local_name), ()))
+
+        for _ in range(self.budget.max_relevance_hops):
+            reached = {
+                identity
+                for identity, dependencies in dependency_graph.items()
+                if dependencies & relevant
+            }
+            additions = reached - relevant
+            if not additions:
+                break
+            relevant.update(additions)
+        return frozenset(relevant)
+
+    @staticmethod
+    def _same_file_reference_name(symbol: IndexedSymbol, reference: IndexedReference) -> str | None:
+        """Resolve only lexically defensible same-file identities.
+
+        Bare names can refer to module-level definitions. ``self``/``cls`` attributes
+        can refer to a method on the enclosing indexed class. Other unresolved
+        attributes are deliberately ignored instead of being joined by leaf name.
+        """
+        if "." not in reference.expression:
+            return reference.name
+        receiver, _, _ = reference.expression.rpartition(".")
+        if receiver not in {"self", "cls"}:
+            return None
+        parent = (
+            symbol.qualified_name
+            if symbol.kind is ObservableSymbolKind.CLASS
+            else symbol.qualified_name.rsplit(".", maxsplit=1)[0]
         )
+        return f"{parent}.{reference.name}"
 
     @staticmethod
     def _observable_priority_key(comparison: SymbolComparison) -> tuple[int, int, str, str]:

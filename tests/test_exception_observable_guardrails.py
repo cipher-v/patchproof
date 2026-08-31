@@ -186,6 +186,72 @@ def test_builtin_exceptions_are_grounded_without_an_import() -> None:
     assert validated.behavior_fingerprint
 
 
+@pytest.mark.parametrize(
+    "exception_expression",
+    ["pickle.PicklingError", "asyncio.TimeoutError"],
+)
+def test_module_qualified_exception_is_grounded_by_its_imported_root(
+    exception_expression: str,
+) -> None:
+    root = exception_expression.split(".", maxsplit=1)[0]
+    validated = _validate(
+        f"""import {root}
+
+
+def test_patchproof_generated_behavior():
+    try:
+        observed = ("ok", 1)
+    except {exception_expression} as error:
+        observed = ("error", type(error).__name__)
+    assert observed == ("ok", 1)
+"""
+    )
+    assert validated.behavior_fingerprint
+
+
+def test_module_qualified_exception_with_unimported_root_is_rejected() -> None:
+    _expect(
+        """def test_patchproof_generated_behavior():
+    try:
+        observed = ("ok", 1)
+    except pickle.PicklingError as error:
+        observed = ("error", type(error).__name__)
+    assert observed == ("ok", 1)
+""",
+        CandidateIssueCode.UNGROUNDED_EXCEPTION_TYPE,
+    )
+
+
+def test_pytest_raises_accepts_a_module_qualified_imported_exception() -> None:
+    validated = _validate(
+        """import pickle
+import pytest
+
+
+def test_patchproof_generated_behavior():
+    with pytest.raises(pickle.PicklingError):
+        raise pickle.PicklingError("expected observation")
+"""
+    )
+    assert validated.behavior_fingerprint
+
+
+def test_module_qualified_overbroad_exception_remains_rejected() -> None:
+    _expect(
+        """import builtins
+
+
+def test_patchproof_generated_behavior():
+    try:
+        observed = ("ok", 1)
+    except builtins.Exception as error:
+        observed = ("error", type(error).__name__)
+    assert observed == ("ok", 1)
+""",
+        CandidateIssueCode.BROAD_EXCEPTION_HANDLER,
+    )
+
+
 def test_guidance_states_the_guardrails_it_relies_on() -> None:
     """The prompt text and the validator must not drift apart."""
     assert "Never catch Exception or BaseException" in _EXCEPTION_TO_OBSERVABLE_GUIDANCE

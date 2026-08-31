@@ -376,8 +376,13 @@ class DeterministicInvestigationPlanner:
         # caller can lose its REACHES_CHANGED_SYMBOL reason when its callee is omitted
         # from that partition.
         changed_names = set(self.investigator.changed_symbol_names())
+        relevance_identities = set(self.investigator.relevance_identities())
         new_names = {symbol.qualified_name.rsplit(".", maxsplit=1)[-1] for symbol in new_head}
-        ranked = self._rank_shared(observables.present_on_both, reaches, changed_names | new_names)
+        ranked = self._rank_shared(
+            observables.present_on_both,
+            reaches,
+            relevance_identities,
+        )
         selected = ranked[: self.budget.max_shared_observables]
 
         notes: list[str] = []
@@ -422,7 +427,7 @@ class DeterministicInvestigationPlanner:
         self,
         comparisons: tuple[SymbolComparison, ...],
         reaches: dict[str, set[str]],
-        interesting_names: set[str],
+        relevant_identities: set[str],
     ) -> tuple[RankedObservable, ...]:
         """Select and order shared observables that this pull request plausibly affects.
 
@@ -453,8 +458,7 @@ class DeterministicInvestigationPlanner:
                 reasons.append(ObservableSelectionReason.IMPLEMENTATION_CHANGED)
             if reached:
                 reasons.append(ObservableSelectionReason.REACHES_NEW_HEAD_SYMBOL)
-            own_leaf = head_symbol.qualified_name.rsplit(".", maxsplit=1)[-1]
-            if self.references_any(head_symbol, interesting_names - {own_leaf}):
+            if identity.text in relevant_identities and not comparison.implementation_changed:
                 reasons.append(ObservableSelectionReason.REACHES_CHANGED_SYMBOL)
             if not reasons:
                 # Unchanged and unrelated to the diff: not a candidate anchor.
@@ -484,24 +488,6 @@ class DeterministicInvestigationPlanner:
             )
         ranked.sort(key=lambda item: item.sort_key)
         return tuple(ranked)
-
-    def references_any(self, symbol: IndexedSymbol, names: set[str]) -> bool:
-        """Whether the symbol's own HEAD definition syntactically references any name.
-
-        Line-range containment is used rather than scope attribution, because a
-        module-level assignment such as ``missing = _Missing()`` has module scope while
-        still being the definition of the observable.
-        """
-        if not names:
-            return False
-        for reference in self.investigator.head.references:
-            if reference.path != symbol.path:
-                continue
-            if not symbol.start_line <= reference.start_line <= symbol.end_line:
-                continue
-            if reference.name in names:
-                return True
-        return False
 
     def _callers_of(self, symbol: IndexedSymbol) -> tuple[ObservableIdentity, ...]:
         """Map HEAD callers of one symbol back to enclosing shared observable identities."""

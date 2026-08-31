@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
-_TRUNCATION_MARKER = "\n... [output truncated by PatchProof]"
+_TRUNCATION_MARKER = "\n... [middle output omitted by PatchProof] ...\n"
 _CREDENTIAL_PATTERN = re.compile(
     r"(?i)\b(?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|credential)\s*[:=]\s*[^\s]+"
 )
@@ -40,10 +40,19 @@ def sanitize_process_output(value: str, *, maximum_chars: int = 4_000) -> str:
     text = _CREDENTIAL_PATTERN.sub("credential=<redacted>", value)
     text = _BEARER_PATTERN.sub("Bearer <redacted>", text)
     text = text.replace("\x00", "")
-    if len(text) <= maximum_chars:
-        return text
+    return _bounded_head_tail(text, maximum_chars=maximum_chars)
+
+
+def _bounded_head_tail(value: str, *, maximum_chars: int) -> str:
+    """Keep both command context and the terminal cause from long diagnostics."""
+    if maximum_chars <= len(_TRUNCATION_MARKER):
+        raise ValueError("bounded output budget is too small")
+    if len(value) <= maximum_chars:
+        return value
     retained = maximum_chars - len(_TRUNCATION_MARKER)
-    return text[:retained] + _TRUNCATION_MARKER
+    head_chars = retained // 2
+    tail_chars = retained - head_chars
+    return value[:head_chars] + _TRUNCATION_MARKER + value[-tail_chars:]
 
 
 class ChildProcessEnvironmentPolicy:
@@ -112,25 +121,37 @@ class ChildProcessEnvironmentPolicy:
 class _BoundedCollector:
     def __init__(self, maximum_bytes: int) -> None:
         self.maximum_bytes = maximum_bytes
-        self.data = bytearray()
+        self.head_limit = maximum_bytes // 2
+        self.tail_limit = maximum_bytes - self.head_limit
+        self.head = bytearray()
+        self.tail = bytearray()
         self.total_bytes = 0
 
     def drain(self, stream: BinaryIO) -> None:
         try:
             while chunk := stream.read(8_192):
                 self.total_bytes += len(chunk)
-                remaining = self.maximum_bytes - len(self.data)
+                remaining = self.head_limit - len(self.head)
                 if remaining > 0:
-                    self.data.extend(chunk[:remaining])
+                    self.head.extend(chunk[:remaining])
+                    chunk = chunk[remaining:]
+                if chunk:
+                    self.tail.extend(chunk)
+                    overflow = len(self.tail) - self.tail_limit
+                    if overflow > 0:
+                        del self.tail[:overflow]
         finally:
             stream.close()
 
     def text(self, maximum_chars: int) -> str:
-        value = bytes(self.data).decode("utf-8", errors="replace")
-        if self.total_bytes <= self.maximum_bytes and len(value) <= maximum_chars:
-            return value
-        retained = max(0, maximum_chars - len(_TRUNCATION_MARKER))
-        return value[:retained] + _TRUNCATION_MARKER
+        head = bytes(self.head).decode("utf-8", errors="replace")
+        tail = bytes(self.tail).decode("utf-8", errors="replace")
+        if self.total_bytes <= self.maximum_bytes:
+            return _bounded_head_tail(head + tail, maximum_chars=maximum_chars)
+        retained = maximum_chars - len(_TRUNCATION_MARKER)
+        head_chars = retained // 2
+        tail_chars = retained - head_chars
+        return head[:head_chars] + _TRUNCATION_MARKER + tail[-tail_chars:]
 
 
 class BoundedSubprocessRunner:

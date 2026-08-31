@@ -33,7 +33,10 @@ from patchproof.claim_agent import (
     InvalidClaimAgentOutput,
     PullRequestNarrative,
 )
-from patchproof.claim_investigator import ClaimInvestigatorFactory
+from patchproof.claim_investigator import (
+    ClaimInvestigatorFactory,
+    InvalidClaimInvestigationOutput,
+)
 from patchproof.context_retrieval import DeterministicContextRetriever, PullRequestContext
 from patchproof.evidence_workflow import EvidenceWorkflow
 from patchproof.execution_contract import ExecutionContract, TestCommandContract
@@ -1052,6 +1055,8 @@ async def _run_ready_live_case(
             claim_result = investigation.agent_result
             result["investigation_transcript"] = investigation.transcript.model_dump(mode="json")
     except InvalidClaimAgentOutput as error:
+        if isinstance(error, InvalidClaimInvestigationOutput):
+            result["investigation_transcript"] = error.transcript.model_dump(mode="json")
         result["terminal_status"] = "CLAIM_INVALID_OUTPUT"
         result["error"] = {
             "type": type(error).__name__,

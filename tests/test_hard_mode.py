@@ -13,6 +13,10 @@ from types import SimpleNamespace
 import pytest
 
 import patchproof.hard_mode as hard_mode_module
+from patchproof.claim_investigator import (
+    InvalidClaimInvestigationOutput,
+    InvestigationTranscript,
+)
 from patchproof.gemini_provider import GeminiProviderSurface
 from patchproof.hard_mode import (
     HardModeCaseKind,
@@ -544,6 +548,46 @@ def test_ready_live_case_uses_explicit_phase_two_factory(
     }
     assert completed["claim_result"] == claim_result.model_dump()
     assert completed["investigation_transcript"] == transcript_document
+
+
+def test_ready_live_case_persists_phase_two_transcript_on_grounding_rejection() -> None:
+    transcript = InvestigationTranscript(
+        turns=1,
+        starting_context_sha256="c" * 64,
+        response_sha256=("d" * 64,),
+    )
+
+    class Investigator:
+        async def investigate(self, **_kwargs):
+            raise InvalidClaimInvestigationOutput(
+                "claim interface is not grounded",
+                transcript=transcript,
+                raw_response_sha256="d" * 64,
+            )
+
+    class Factory:
+        @staticmethod
+        def build(**_kwargs):
+            return Investigator()
+
+    completed = asyncio.run(
+        hard_mode_module._run_ready_live_case(
+            case=SimpleNamespace(base_sha="a" * 40, head_sha="b" * 40),
+            context_retriever=SimpleNamespace(),
+            context=SimpleNamespace(diff="bounded diff"),
+            narrative=SimpleNamespace(),
+            execution_plan=SimpleNamespace(),
+            session=SimpleNamespace(),
+            model_name="gemini-3.6-flash",
+            provider_config=SimpleNamespace(),
+            result=_ready_result(),
+            started=datetime.now(UTC),
+            claim_investigator=Factory(),
+        )
+    )
+
+    assert completed["terminal_status"] == "CLAIM_INVALID_OUTPUT"
+    assert completed["investigation_transcript"] == transcript.model_dump(mode="json")
 
 
 def test_phase_two_selection_enters_the_existing_candidate_and_evidence_path(

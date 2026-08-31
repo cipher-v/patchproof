@@ -28,6 +28,7 @@ from patchproof.claim_investigation import (
 )
 from patchproof.claim_investigator import (
     ClaimInvestigator,
+    InvalidClaimInvestigationOutput,
     InvestigatorTurnRequest,
     RawInvestigatorResponse,
 )
@@ -187,6 +188,34 @@ def test_zero_tool_claim_selection_uses_only_the_deterministic_context() -> None
     assert result.starting_context.shared_observables[0].rank is ObservableRank.EXPORTED_SHARED
 
 
+def test_valid_conclusion_on_a_transitive_public_caller_is_mechanically_grounded() -> None:
+    base = {
+        "pkg/rules.py": "RULES = {'END': '$'}\n",
+        "pkg/parser.py": (
+            "from .rules import RULES\n\ndef parse(value):\n    return RULES['END'], value\n"
+        ),
+        "pkg/api.py": (
+            "from .parser import parse as _parse\n\n"
+            "class PublicRequest:\n"
+            "    def __init__(self, value):\n"
+            "        self.parsed = _parse(value)\n"
+        ),
+    }
+    head = {**base, "pkg/rules.py": "RULES = {'END': '\\\\Z'}\n"}
+    investigator, _ = build_investigator(
+        conclude(path="pkg/api.py", qualified_name="PublicRequest"),
+        base_files=base,
+        head_files=head,
+    )
+
+    result = run(investigator)
+
+    claim = result.agent_result.selection.claim
+    assert claim is not None
+    assert claim.shared_interface == "pkg/api.py::PublicRequest"
+    assert result.transcript.turns == 1
+
+
 def test_one_tool_call_then_conclusion_is_recorded() -> None:
     investigator, model = build_investigator(
         investigate(
@@ -232,8 +261,13 @@ def test_invented_interface_is_rejected() -> None:
         conclude(path="pkg/console.py", qualified_name="Console.no_such_method")
     )
 
-    with pytest.raises(InvalidClaimAgentOutput, match="neither a deterministic shared observable"):
+    with pytest.raises(
+        InvalidClaimInvestigationOutput,
+        match="neither a deterministic shared observable",
+    ) as rejected:
         run(investigator)
+    assert rejected.value.transcript.turns == 1
+    assert len(rejected.value.transcript.response_sha256) == 1
 
 
 def test_invented_path_is_rejected() -> None:
@@ -417,6 +451,23 @@ def test_oversized_model_output_is_rejected() -> None:
 
     with pytest.raises(InvalidClaimAgentOutput, match="exceeds the configured budget"):
         run(investigator)
+
+
+def test_oversized_forced_final_output_is_rejected_and_transcripted() -> None:
+    investigator, _ = build_investigator(
+        investigate(
+            {"tool": "inspect_symbol", "revision": "HEAD", "qualified_name": "Console.render"}
+        ),
+        "x" * 20_000,
+        tool_budget=ToolBudget(max_turns=1),
+    )
+
+    with pytest.raises(
+        InvalidClaimInvestigationOutput, match="exceeds the configured budget"
+    ) as rejected:
+        run(investigator)
+    assert rejected.value.transcript.turns == 2
+    assert len(rejected.value.transcript.response_sha256) == 2
 
 
 def test_invalid_tool_call_does_not_abort_the_investigation() -> None:

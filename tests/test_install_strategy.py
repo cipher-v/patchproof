@@ -51,7 +51,11 @@ def test_committed_lockfile_reproduces_the_locked_environment() -> None:
     prober, _ = _prober({"uv.lock": b"", "pyproject.toml": b"[project]\nname='x'\n"})
     plan = prober.probe("a" * 40)
     assert plan.strategy is InstallStrategy.UV_SYNC_LOCKED
-    assert plan.commands == (("uv", "sync", "--frozen", "--all-groups"),)
+    assert plan.commands == (
+        ("uv", "sync", "--frozen"),
+        ("uv", "pip", "install", "pytest"),
+    )
+    assert all("--all-groups" not in command for command in plan.commands)
 
 
 def test_declared_test_extra_is_used_when_the_repository_declares_it() -> None:
@@ -100,7 +104,21 @@ def test_committed_requirements_file_is_selected_deterministically() -> None:
     )
     plan = prober.probe("a" * 40)
     assert plan.strategy is InstallStrategy.UV_PIP_EDITABLE_WITH_REQUIREMENTS
-    assert ("uv", "pip", "install", "-r", "requirements-test.txt") in plan.commands
+    assert ("uv", "pip", "install", "-r", "requirements.txt") in plan.commands
+
+
+def test_dev_only_requirements_do_not_expand_the_generated_test_environment() -> None:
+    prober, _ = _prober(
+        {
+            "setup.py": b"",
+            "requirements-dev.txt": b"coverage\nhypothesis\nsphinx\n",
+        }
+    )
+
+    plan = prober.probe("a" * 40)
+
+    assert plan.strategy is InstallStrategy.UV_PIP_EDITABLE
+    assert all("requirements-dev.txt" not in command for command in plan.commands)
 
 
 def test_repository_without_packaging_metadata_is_unsupported_not_guessed() -> None:

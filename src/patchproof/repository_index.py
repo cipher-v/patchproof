@@ -343,6 +343,7 @@ def _literal_exports(tree: ast.Module) -> frozenset[str] | None:
 class _ImportCollector(ast.NodeVisitor):
     def __init__(self, path: str, maximum: int) -> None:
         self.path = path
+        self.module = _module_name(path)
         self.maximum = maximum
         self.scope: list[_Scope] = []
         self.imports: list[IndexedImport] = []
@@ -384,13 +385,25 @@ class _ImportCollector(ast.NodeVisitor):
             bound = alias.asname or alias.name
             absolute_target = f"{node.module}.{alias.name}" if node.module else alias.name
             imported_target = f"{'.' * node.level}{absolute_target}"
+            alias_target = absolute_target
+            if node.level:
+                module_parts = self.module.split(".") if self.module else []
+                if PurePosixPath(self.path).name != "__init__.py" and module_parts:
+                    module_parts.pop()
+                ascend = node.level - 1
+                if ascend > len(module_parts):
+                    alias_target = None
+                else:
+                    prefix = module_parts[: len(module_parts) - ascend]
+                    suffix = [*(node.module or "").split("."), alias.name]
+                    alias_target = ".".join(part for part in (*prefix, *suffix) if part)
             self._append(
                 node,
                 module=module or ".",
                 imported_name=alias.name,
                 alias=bound,
                 imported_target=imported_target,
-                alias_target=absolute_target if node.level == 0 else None,
+                alias_target=alias_target,
                 relative_level=node.level,
             )
 
@@ -727,6 +740,7 @@ class RepositoryIndex:
         files: Mapping[str, bytes | str],
         budget: RepositoryIndexBudget | None = None,
         excluded_paths: frozenset[str] = frozenset(),
+        priority_paths: frozenset[str] = frozenset(),
     ) -> RepositoryIndex:
         """Build from already trusted immutable bytes, primarily for adapters and tests."""
         active_budget = budget or RepositoryIndexBudget()
@@ -734,6 +748,10 @@ class RepositoryIndex:
             excluded = frozenset(validate_repository_source_path(path) for path in excluded_paths)
         except ValueError as error:
             raise RepositoryIndexError(f"invalid excluded repository path: {error}") from error
+        try:
+            priority = frozenset(validate_repository_source_path(path) for path in priority_paths)
+        except ValueError as error:
+            raise RepositoryIndexError(f"invalid priority repository path: {error}") from error
         normalized: dict[str, bytes] = {}
         excluded_count = 0
         for path, content in files.items():
@@ -756,6 +774,7 @@ class RepositoryIndex:
             discovered=len(normalized) + excluded_count,
             symlinks_skipped=0,
             excluded_files_skipped=excluded_count,
+            priority_paths=priority,
         )
 
     @classmethod
@@ -766,6 +785,7 @@ class RepositoryIndex:
         revision: Revision,
         budget: RepositoryIndexBudget | None = None,
         excluded_paths: frozenset[str] = frozenset(),
+        priority_paths: frozenset[str] = frozenset(),
     ) -> RepositoryIndex:
         """Build using only fixed read-only Git object commands over one full commit SHA."""
         active_budget = budget or RepositoryIndexBudget()
@@ -776,6 +796,10 @@ class RepositoryIndex:
             excluded = frozenset(validate_repository_source_path(path) for path in excluded_paths)
         except ValueError as error:
             raise RepositoryIndexError(f"invalid excluded repository path: {error}") from error
+        try:
+            priority = frozenset(validate_repository_source_path(path) for path in priority_paths)
+        except ValueError as error:
+            raise RepositoryIndexError(f"invalid priority repository path: {error}") from error
         deadline = time.monotonic() + active_budget.git_timeout_seconds
 
         def run(
@@ -867,12 +891,16 @@ class RepositoryIndex:
 
         selected_entries: list[tuple[str, str, int]] = []
         total = 0
-        file_limit_omitted = max(0, len(entries) - active_budget.max_files)
+        file_limit_omitted = 0
         total_byte_budget_omitted = 0
         oversized = 0
-        for path, object_id, size in sorted(entries)[: active_budget.max_files]:
+        ordered_entries = sorted(entries, key=lambda item: (item[0] not in priority, item[0]))
+        for path, object_id, size in ordered_entries:
             if size > active_budget.max_file_bytes:
                 oversized += 1
+                continue
+            if len(selected_entries) >= active_budget.max_files:
+                file_limit_omitted += 1
                 continue
             if total + size > active_budget.max_total_source_bytes:
                 total_byte_budget_omitted += 1
@@ -924,6 +952,7 @@ class RepositoryIndex:
             pre_file_limit_omitted=file_limit_omitted,
             pre_total_byte_budget_omitted=total_byte_budget_omitted,
             pre_oversized=oversized,
+            priority_paths=priority,
         )
 
     @classmethod
@@ -939,6 +968,7 @@ class RepositoryIndex:
         pre_file_limit_omitted: int = 0,
         pre_total_byte_budget_omitted: int = 0,
         pre_oversized: int = 0,
+        priority_paths: frozenset[str] = frozenset(),
     ) -> RepositoryIndex:
         selected: list[tuple[str, bytes]] = []
         oversized = pre_oversized
@@ -954,7 +984,10 @@ class RepositoryIndex:
                 pre_oversized,
             )
         )
-        for path, content in sorted(raw_files.items()):
+        ordered_files = sorted(
+            raw_files.items(), key=lambda item: (item[0] not in priority_paths, item[0])
+        )
+        for path, content in ordered_files:
             if len(selected) >= budget.max_files:
                 file_limit_omitted += 1
                 truncated = True
