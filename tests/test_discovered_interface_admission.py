@@ -14,11 +14,11 @@ from __future__ import annotations
 import json
 
 import pytest
+from test_claim_investigator import build_investigator, conclude, investigate, run
 
 from patchproof.claim_agent import InvalidClaimAgentOutput
 from patchproof.claim_investigation import ObservableSelectionReason, StartingContextBudget
 from patchproof.investigation_toolbox import ToolCallStatus
-from tests.test_claim_investigator import build_investigator, conclude, investigate, run
 
 # A repository with many changed public functions, so a small starting-context budget
 # necessarily omits some genuinely valid shared observables.

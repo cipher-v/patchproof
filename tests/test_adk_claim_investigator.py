@@ -12,6 +12,13 @@ import pathlib
 from types import SimpleNamespace
 
 import pytest
+from test_claim_investigator import (
+    _BASE,
+    _HEAD,
+    build_investigator,
+    conclude,
+    run,
+)
 
 import patchproof.adk_claim_investigator as adk_module
 from patchproof.adk_claim_investigator import (
@@ -34,13 +41,6 @@ from patchproof.investigation_tools import RepositoryInvestigator
 from patchproof.models import Revision, RevisionRole
 from patchproof.reasoning_budget import AgentTask, budget_for
 from patchproof.repository_index import RepositoryIndex
-from tests.test_claim_investigator import (
-    _BASE,
-    _HEAD,
-    build_investigator,
-    conclude,
-    run,
-)
 
 # ---------------------------------------------------------------------------------
 # ADK adapter configuration
