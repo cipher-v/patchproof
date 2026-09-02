@@ -1,0 +1,196 @@
+{
+  "frozen_implementation_sha": "851b8342b3aac6a0c1664c519b5c1827a1fe6079",
+  "model_calls_used": 0,
+  "protocol_frozen_at": "2026-09-01T13:54:43Z",
+  "screened_candidates": [
+    {
+      "candidate_id": "tomlkit-551",
+      "repository": "python-poetry/tomlkit",
+      "pull_request_number": 551,
+      "disposition": "INCLUDED_POSITIVE",
+      "reason": "Isolated multiline-string round-trip behavior through a shared public API."
+    },
+    {
+      "candidate_id": "werkzeug-3255",
+      "repository": "pallets/werkzeug",
+      "pull_request_number": 3255,
+      "disposition": "INCLUDED_POSITIVE",
+      "reason": "Isolated invalid Range parsing behavior through a shared function."
+    },
+    {
+      "candidate_id": "urllib3-5071",
+      "repository": "urllib3/urllib3",
+      "pull_request_number": 5071,
+      "disposition": "INCLUDED_POSITIVE",
+      "reason": "Explicit port-zero preservation is offline, deterministic, and observable through shared URL APIs."
+    },
+    {
+      "candidate_id": "tablib-651",
+      "repository": "jazzband/tablib",
+      "pull_request_number": 651,
+      "disposition": "INCLUDED_POSITIVE",
+      "reason": "Headerless Dataset column stacking is a bounded shared-method behavior."
+    },
+    {
+      "candidate_id": "babel-1291",
+      "repository": "python-babel/babel",
+      "pull_request_number": 1291,
+      "disposition": "REJECTED",
+      "reason": "The deterministic editable install omits generated locale data, so the shared behavior cannot execute through the real candidate path."
+    },
+    {
+      "candidate_id": "typeguard-566",
+      "repository": "agronholm/typeguard",
+      "pull_request_number": 566,
+      "disposition": "INCLUDED_POSITIVE",
+      "reason": "Literal validation order is a small deterministic shared-interface behavior."
+    },
+    {
+      "candidate_id": "jsonlogger-66",
+      "repository": "nhairs/python-json-logger",
+      "pull_request_number": 66,
+      "disposition": "INCLUDED_POSITIVE",
+      "reason": "Caller-owned mapping mutation is locally observable through the existing formatter."
+    },
+    {
+      "candidate_id": "boltons-410",
+      "repository": "mahmoud/boltons",
+      "pull_request_number": 410,
+      "disposition": "INCLUDED_POSITIVE",
+      "reason": "OrderedMultiDict copy preservation is deterministic and uses a shared public type."
+    },
+    {
+      "candidate_id": "requests-7431",
+      "repository": "psf/requests",
+      "pull_request_number": 7431,
+      "disposition": "INCLUDED_NEGATIVE",
+      "reason": "TYPE_CHECKING-only imports and annotations change the static contract, not runtime request behavior."
+    },
+    {
+      "candidate_id": "typeguard-555",
+      "repository": "agronholm/typeguard",
+      "pull_request_number": 555,
+      "disposition": "INCLUDED_NEGATIVE",
+      "reason": "Documentation and a source comment correct spelling only."
+    },
+    {
+      "candidate_id": "importlib-metadata-472",
+      "repository": "python/importlib_metadata",
+      "pull_request_number": 472,
+      "disposition": "REJECTED",
+      "reason": "The frozen revision's editable installation fails under the required Python 3.12 environment."
+    },
+    {
+      "candidate_id": "tablib-443",
+      "repository": "jazzband/tablib",
+      "pull_request_number": 443,
+      "disposition": "INCLUDED_NEGATIVE",
+      "reason": "Whitespace, comments, unused imports, noqa, and test formatting only; direct diff review found no runtime change."
+    },
+    {
+      "candidate_id": "sortedcontainers-114",
+      "repository": "grantjenks/python-sortedcontainers",
+      "pull_request_number": 114,
+      "disposition": "REJECTED",
+      "reason": "The frozen revision's committed requirements cannot be installed under the required Python 3.12 environment."
+    },
+    {
+      "candidate_id": "click-3499",
+      "repository": "pallets/click",
+      "pull_request_number": 3499,
+      "disposition": "INCLUDED_NEGATIVE",
+      "reason": "Test/stress maintenance plus removal of an unused private platform constant; supported runtime behavior is unchanged."
+    },
+    {
+      "candidate_id": "itsdangerous-322",
+      "repository": "pallets/itsdangerous",
+      "pull_request_number": 322,
+      "disposition": "INCLUDED_NEGATIVE",
+      "reason": "Only a flake8-bugbear ignore entry changes."
+    },
+    {
+      "candidate_id": "requests-6951",
+      "repository": "psf/requests",
+      "pull_request_number": 6951,
+      "disposition": "INCLUDED_NEGATIVE",
+      "reason": "Documentation link and prose maintenance only."
+    },
+    {
+      "candidate_id": "boltons-418",
+      "repository": "mahmoud/boltons",
+      "pull_request_number": 418,
+      "disposition": "INCLUDED_POSITIVE",
+      "reason": "Double-s singularization is isolated, deterministic text behavior through a shared public function."
+    },
+    {
+      "candidate_id": "h11-183",
+      "repository": "python-hyper/h11",
+      "pull_request_number": 183,
+      "disposition": "INCLUDED_NEGATIVE",
+      "reason": "Only a release-note hyperlink target changes."
+    },
+    {
+      "candidate_id": "pygments-3139",
+      "repository": "pygments/pygments",
+      "pull_request_number": 3139,
+      "disposition": "REJECTED",
+      "reason": "The frozen PR BASE-to-HEAD pair contains 72 files while the reviewed PR patch contains 3, so the behavior is not isolated to the PR."
+    },
+    {
+      "candidate_id": "attrs-1496",
+      "repository": "python-attrs/attrs",
+      "pull_request_number": 1496,
+      "disposition": "INCLUDED_NEGATIVE",
+      "reason": "The apparent validator fix is exclusively a .pyi static typing change plus a withheld static typing example; runtime implementation is unchanged."
+    },
+    {
+      "candidate_id": "h11-168",
+      "repository": "python-hyper/h11",
+      "pull_request_number": 168,
+      "disposition": "REJECTED",
+      "reason": "The sole production change is a private error-message wording correction, too narrow for the positive behavior mix."
+    },
+    {
+      "candidate_id": "filelock-721",
+      "repository": "tox-dev/filelock",
+      "pull_request_number": 721,
+      "disposition": "REJECTED",
+      "reason": "Lease acquisition behavior depends on filesystem locking and timing, adding avoidable platform ambiguity."
+    },
+    {
+      "candidate_id": "requests-6963",
+      "repository": "psf/requests",
+      "pull_request_number": 6963,
+      "disposition": "REJECTED",
+      "reason": "Security-sensitive credential-leak behavior was excluded from benchmark construction."
+    },
+    {
+      "candidate_id": "marshmallow-3016",
+      "repository": "marshmallow-code/marshmallow",
+      "pull_request_number": 3016,
+      "disposition": "REJECTED",
+      "reason": "Repository already appears in prior PatchProof development benchmark artifacts, so it was not reused."
+    },
+    {
+      "candidate_id": "httpcore-882",
+      "repository": "encode/httpcore",
+      "pull_request_number": 882,
+      "disposition": "REJECTED",
+      "reason": "Protocol-stream setup requires a substantially more elaborate harness than the selected offline cases."
+    },
+    {
+      "candidate_id": "structlog-805",
+      "repository": "hynek/structlog",
+      "pull_request_number": 805,
+      "disposition": "REJECTED",
+      "reason": "Thread-name behavior across asynchronous worker execution introduces scheduler and thread-environment complexity."
+    },
+    {
+      "candidate_id": "itsdangerous-378",
+      "repository": "pallets/itsdangerous",
+      "pull_request_number": 378,
+      "disposition": "REJECTED",
+      "reason": "FIPS-mode hashing availability is platform-dependent and would require environment simulation."
+    }
+  ]
+}

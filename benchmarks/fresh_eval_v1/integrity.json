@@ -1,0 +1,18 @@
+{
+  "algorithm": "sha256",
+  "frozen_implementation_sha": "851b8342b3aac6a0c1664c519b5c1827a1fe6079",
+  "generated_at": "2026-09-01T15:34:25Z",
+  "files": {
+    "candidate_ledger.json": "31762f87643bf20a9fb579fcb314657846a219df91b4970cbe1720c8b240b7c2",
+    "manifest.json": "051e1d72e1f76ccd9c2565bee871b50f1326b2a555ba985134e6b7f26df05e74",
+    "oracles/boltons_410.py": "7c7e35946e09726b7bc54c912dbb04df1bba76052092e37b8b9e865ed6389586",
+    "oracles/boltons_418.py": "d4ce4475bc85b8d4c6fad6e4af68c6e2c1d997d2adcf759158f324e8d681030b",
+    "oracles/jsonlogger_66.py": "ff1c70345f1f2dd984ba6910f218cb24d7027842b4feb317dab78c45b04dae0c",
+    "oracles/tablib_651.py": "9ca314ff8057857c0844818220e1ade8c0575aea680c8c60813aec8dfab45d79",
+    "oracles/tomlkit_551.py": "4be171ffdfa0699fa2989ca6083ed6c21d1a9669cf7718901efe6ce97adcfe11",
+    "oracles/typeguard_566.py": "c6863b951da77add13ebb0fef129b18a815943428bedce6b4186276137a2afab",
+    "oracles/urllib3_5071.py": "46593b65ffb5d4a0a41bfe6323e7b94f2c3de8decd212cac9ea2117c0f502251",
+    "oracles/werkzeug_3255.py": "5972c0c96aa7a3e656d6a8dfebf77ba692e0188bf250275d23a8c6378dba8889",
+    "selection_protocol.md": "0e4a5066d2c6d233420af6565bd8e28dce1f47237ea615c01ee854e8d4e5cc9d"
+  }
+}
