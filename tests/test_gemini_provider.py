@@ -160,6 +160,7 @@ def test_vertex_usage_metadata_is_normalized_without_fabricating_missing_values(
             "promptTokenCount": 31,
             "candidatesTokenCount": 7,
             "totalTokenCount": 38,
+            "thoughtsTokenCount": 5,
         }
     )
 
@@ -168,6 +169,7 @@ def test_vertex_usage_metadata_is_normalized_without_fabricating_missing_values(
         output_tokens=7,
         total_tokens=38,
         cached_tokens=None,
+        reasoning_tokens=5,
     )
 
 

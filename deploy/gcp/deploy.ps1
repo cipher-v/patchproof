@@ -2,15 +2,20 @@ param(
     [Parameter(Mandatory = $true)][string]$ProjectId,
     [string]$Region = "asia-south1",
     [string]$VertexLocation = "global",
-    [string]$AllowedRepositories = "cipher-v/patchproof",
+    [string]$AllowedRepositories = "cipher-v/patchproof,agronholm/anyio,dateutil/dateutil,kludex/starlette,more-itertools/more-itertools,pallets/jinja,pypa/packaging,python-attrs/cattrs,python-jsonschema/jsonschema,textualize/rich,tox-dev/platformdirs,marshmallow-code/marshmallow,pallets/click,pylint-dev/astroid,python-attrs/attrs",
     [string]$ImageTag = "phase9",
     [string]$DashboardRunIds = "",
+    [string]$FirestoreNamespace = "patchproof-final-v1",
     [Parameter(Mandatory = $true)][int]$GitHubAppId,
-    [Parameter(Mandatory = $true)][string]$WebhookSecretFile,
-    [Parameter(Mandatory = $true)][string]$GitHubPrivateKeyFile
+    [string]$WebhookSecretFile = "",
+    [string]$GitHubPrivateKeyFile = "",
+    [switch]$UpdateSecretVersions
 )
 
 $ErrorActionPreference = "Stop"
+if ($FirestoreNamespace -cnotmatch '^[a-z][a-z0-9_-]{1,39}$') {
+    throw "Firestore namespace must be a bounded lowercase identifier."
+}
 $Queue = "patchproof-verification-runs"
 $Repository = "patchproof"
 $Image = "$Region-docker.pkg.dev/$ProjectId/$Repository/patchproof:$ImageTag"
@@ -48,12 +53,6 @@ function Test-GcloudResource {
     }
     finally {
         $ErrorActionPreference = $PreviousErrorActionPreference
-    }
-}
-
-foreach ($RequiredFile in @($WebhookSecretFile, $GitHubPrivateKeyFile)) {
-    if (-not (Test-Path -LiteralPath $RequiredFile -PathType Leaf)) {
-        throw "Required secret file does not exist: $RequiredFile"
     }
 }
 
@@ -106,22 +105,32 @@ if (-not (Test-GcloudResource -Arguments @(
 }
 Invoke-Gcloud tasks queues update $Queue --location=$Region --max-dispatches-per-second=1 --max-concurrent-dispatches=1 --max-attempts=3 --max-retry-duration=3600s
 
-foreach ($Secret in @("patchproof-webhook-secret", "patchproof-github-private-key")) {
+$SecretFiles = @{
+    "patchproof-webhook-secret" = $WebhookSecretFile
+    "patchproof-github-private-key" = $GitHubPrivateKeyFile
+}
+foreach ($Secret in $SecretFiles.Keys) {
     if (-not (Test-GcloudResource -Arguments @("secrets", "describe", $Secret))) {
         Invoke-Gcloud secrets create $Secret --replication-policy=automatic
     }
     Invoke-Gcloud secrets add-iam-policy-binding $Secret --member="serviceAccount:$ControlAccount" --role="roles/secretmanager.secretAccessor"
+    $EnabledVersion = Invoke-Gcloud secrets versions list $Secret --filter="state=ENABLED" --limit=1 --format="value(name)"
+    if ($UpdateSecretVersions -or -not $EnabledVersion) {
+        $SecretFile = $SecretFiles[$Secret]
+        if (-not $SecretFile -or -not (Test-Path -LiteralPath $SecretFile -PathType Leaf)) {
+            throw "A local secret file is required to create or update $Secret."
+        }
+        Invoke-Gcloud secrets versions add $Secret --data-file=$SecretFile
+    }
 }
-Invoke-Gcloud secrets versions add patchproof-webhook-secret --data-file=$WebhookSecretFile
-Invoke-Gcloud secrets versions add patchproof-github-private-key --data-file=$GitHubPrivateKeyFile
 
 Invoke-Gcloud builds submit --config=deploy/cloudbuild.yaml --substitutions="_IMAGE=$Image" .
 
-Invoke-Gcloud run deploy $ExecutorService --image=$Image --region=$Region --platform=managed --service-account=$ExecutorAccount --no-allow-unauthenticated --set-env-vars="GOOGLE_CLOUD_PROJECT=${ProjectId},PATCHPROOF_SERVICE_ROLE=executor,PATCHPROOF_ALLOWED_REPOSITORIES=${AllowedRepositories}" --startup-probe="httpGet.path=/healthz,httpGet.port=8080,timeoutSeconds=5,periodSeconds=5,failureThreshold=12" --min-instances=0 --max-instances=1 --concurrency=1 --cpu=2 --memory=2Gi --timeout=900
+Invoke-Gcloud run deploy $ExecutorService --image=$Image --region=$Region --platform=managed --service-account=$ExecutorAccount --no-allow-unauthenticated --set-env-vars="^#^GOOGLE_CLOUD_PROJECT=${ProjectId}#PATCHPROOF_SERVICE_ROLE=executor#PATCHPROOF_ALLOWED_REPOSITORIES=${AllowedRepositories}" --startup-probe="httpGet.path=/healthz,httpGet.port=8080,timeoutSeconds=5,periodSeconds=5,failureThreshold=12" --min-instances=0 --max-instances=1 --concurrency=1 --cpu=2 --memory=2Gi --timeout=900
 $ExecutorUrl = Invoke-Gcloud run services describe $ExecutorService --region=$Region --format="value(status.url)"
 Invoke-Gcloud run services add-iam-policy-binding $ExecutorService --region=$Region --member="serviceAccount:$ControlAccount" --role="roles/run.invoker"
 
-Invoke-Gcloud run deploy $ControlService --image=$Image --region=$Region --platform=managed --service-account=$ControlAccount --no-invoker-iam-check --set-env-vars="^#^GOOGLE_CLOUD_PROJECT=${ProjectId}#GOOGLE_CLOUD_LOCATION=${VertexLocation}#PATCHPROOF_GEMINI_PROVIDER=VERTEX_AI#PATCHPROOF_SERVICE_ROLE=control#PATCHPROOF_REGION=${Region}#PATCHPROOF_TASK_QUEUE=${Queue}#PATCHPROOF_CONTROL_URL=https://pending.invalid#PATCHPROOF_EXECUTOR_URL=${ExecutorUrl}#PATCHPROOF_TASK_INVOKER_EMAIL=${TaskAccount}#PATCHPROOF_ALLOWED_REPOSITORIES=${AllowedRepositories}#PATCHPROOF_GITHUB_APP_ID=${GitHubAppId}#PATCHPROOF_GEMINI_MODEL=gemini-3.6-flash#PATCHPROOF_DASHBOARD_RUN_IDS=${DashboardRunIds}" --set-secrets="PATCHPROOF_WEBHOOK_SECRET=patchproof-webhook-secret:latest,PATCHPROOF_GITHUB_PRIVATE_KEY=patchproof-github-private-key:latest" --startup-probe="httpGet.path=/healthz,httpGet.port=8080,timeoutSeconds=5,periodSeconds=5,failureThreshold=12" --min-instances=0 --max-instances=2 --concurrency=4 --cpu=1 --memory=1Gi --timeout=900
+Invoke-Gcloud run deploy $ControlService --image=$Image --region=$Region --platform=managed --service-account=$ControlAccount --no-invoker-iam-check --set-env-vars="^#^GOOGLE_CLOUD_PROJECT=${ProjectId}#GOOGLE_CLOUD_LOCATION=${VertexLocation}#PATCHPROOF_GEMINI_PROVIDER=VERTEX_AI#PATCHPROOF_SERVICE_ROLE=control#PATCHPROOF_REGION=${Region}#PATCHPROOF_TASK_QUEUE=${Queue}#PATCHPROOF_CONTROL_URL=https://pending.invalid#PATCHPROOF_EXECUTOR_URL=${ExecutorUrl}#PATCHPROOF_TASK_INVOKER_EMAIL=${TaskAccount}#PATCHPROOF_ALLOWED_REPOSITORIES=${AllowedRepositories}#PATCHPROOF_GITHUB_APP_ID=${GitHubAppId}#PATCHPROOF_GEMINI_MODEL=gemini-3.6-flash#PATCHPROOF_DASHBOARD_RUN_IDS=${DashboardRunIds}#PATCHPROOF_FIRESTORE_NAMESPACE=${FirestoreNamespace}" --set-secrets="PATCHPROOF_WEBHOOK_SECRET=patchproof-webhook-secret:latest,PATCHPROOF_GITHUB_PRIVATE_KEY=patchproof-github-private-key:latest" --startup-probe="httpGet.path=/healthz,httpGet.port=8080,timeoutSeconds=5,periodSeconds=5,failureThreshold=12" --min-instances=0 --max-instances=2 --concurrency=4 --cpu=1 --memory=1Gi --timeout=900
 $ControlUrl = Invoke-Gcloud run services describe $ControlService --region=$Region --format="value(status.url)"
 Invoke-Gcloud run services update $ControlService --region=$Region --update-env-vars="PATCHPROOF_CONTROL_URL=$ControlUrl"
 
@@ -129,5 +138,9 @@ Write-Output "Control URL: $ControlUrl"
 Write-Output "Executor URL: $ExecutorUrl"
 Write-Output "GitHub webhook URL: $ControlUrl/webhooks/github"
 Write-Output "Evidence dashboard: $ControlUrl/dashboard"
+Write-Output "Cloud analyze API: $ControlUrl/api/analyze"
+Write-Output "Firestore namespace: $FirestoreNamespace"
+Write-Output "CLI: `$env:PATCHPROOF_CONTROL_URL='$ControlUrl'; uv run patchproof analyze <ALLOWED_REPOSITORY_PR_URL>"
+Write-Output "Dashboard CLI: `$env:PATCHPROOF_CONTROL_URL='$ControlUrl'; uv run patchproof dashboard"
 Write-Output "Public health proof: Invoke-RestMethod $ControlUrl/livez"
 Write-Output "Private executor proof: gcloud run services proxy $ExecutorService --region=$Region --port=8081"

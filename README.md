@@ -62,21 +62,22 @@ successful immutable run `695eaa20-7db3-492f-a57e-9819ebb54087` traversed Cloud 
 private executor, persisted hash-verified evidence, observed BASE assertion failure / HEAD pass,
 and published successful GitHub Check 97764451438. The first delivery also demonstrated honest
 abstention after two invalid model-generated candidates. These live cases prove the deployed
-composition, not an aggregate agent success rate. The live read-only
-[evidence console](https://patchproof-control-q26kc4fdba-el.a.run.app/dashboard) now projects only
-those two explicitly configured runs from Firestore, recomputes their evidence hashes, and shows
-claim, candidate lineage, BASE/HEAD facts, abstention, and final GitHub result without publishing
-raw model/process output or credentials. Hostile-code isolation is not implemented, and browser
-screenshots remain pending because the available capture tool requires a newer Node runtime.
+composition, not an aggregate agent success rate. The live
+[evidence console](https://patchproof-control-q26kc4fdba-el.a.run.app/dashboard) projects a bounded
+newest-first run list from Firestore, recomputes evidence hashes, and shows claim, candidate
+lineage, BASE/HEAD facts, abstention, and final results without publishing raw model/process output
+or credentials. It can start one known reproducible PR analysis and follow that same durable run
+through completion. Hostile-code isolation is not implemented.
 
 ## Supported scope
 
 The supported product scope is GitHub, explicitly allowlisted public repositories, Python 3.12,
-pytest, and deterministic unit or small integration tests. A repository must be deliberately
-onboarded with a committed `.patchproof.yaml` that is valid and identical on BASE and HEAD. Its
-declared package manager resolves locked dependencies; PatchProof validates and executes only the
-allowlisted argument arrays and never guesses installation commands. Missing, mismatched, or
-failed environment setup produces a conservative abstention before candidate generation.
+pytest, and deterministic unit or small integration tests. Normal webhook onboarding requires a
+committed `.patchproof.yaml` that is valid and identical on BASE and HEAD. The constrained known-PR
+product path instead probes committed package metadata on both revisions and proceeds only with an
+equivalent contract synthesized from fixed validated templates. PatchProof executes only
+allowlisted argument arrays; missing, mismatched, or failed setup produces a conservative
+abstention before candidate generation.
 PatchProof is not intended to prove whole-PR correctness, replace review, or safely execute
 arbitrary malicious repositories.
 
@@ -114,14 +115,25 @@ service account and does not need a service-account key file. Local setup, safe 
 Cloud Run IAM, Developer API compatibility, and evaluation provenance are documented in
 [`docs/VERTEX_AI_PROVIDER.md`](docs/VERTEX_AI_PROVIDER.md).
 
+## PR analysis demonstration
+
+With `PATCHPROOF_CONTROL_URL` configured, `patchproof analyze <GitHub PR URL>` accepts any pull
+request number in a deployment-allowlisted public repository, creates one durable cloud run, and
+polls the same sanitized evidence shown automatically by `patchproof dashboard`. The service
+independently resolves and stores immutable BASE/HEAD revisions before dispatch. Without a control
+URL, the manifest-backed local demonstration remains the default; `--cloud` and `--local` are
+explicit overrides. See
+[`docs/23_CLOUD_ANALYZE_INTEGRATION.md`](docs/23_CLOUD_ANALYZE_INTEGRATION.md).
+
 To preview the evidence console with the checked sanitized live-proof fixture:
 
 ```shell
 uv run python -m patchproof.dashboard_preview
 ```
 
-Then open `http://127.0.0.1:8092/dashboard`. Production reads only the UUIDs explicitly listed in
-`PATCHPROOF_DASHBOARD_RUN_IDS` and never accepts arbitrary dashboard record IDs from a request.
+Then open `http://127.0.0.1:8092/dashboard`. Production discovers at most eight newest durable runs
+through a bounded Firestore query. Optional `PATCHPROOF_DASHBOARD_RUN_IDS` values remain featured
+overrides, not a requirement for new runs to appear.
 
 ## Repository layout
 

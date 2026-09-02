@@ -2,36 +2,41 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 from uuid import UUID
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, status
 from google.auth.transport.requests import Request as GoogleAuthRequest
 from google.cloud import firestore
 from google.oauth2 import id_token
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from patchproof.adk_claim_agent import DEFAULT_CLAIM_MODEL, AdkGeminiClaimModel
+from patchproof.adk_claim_investigator import AdkGeminiClaimInvestigator
 from patchproof.adk_evidence_assessor import AdkGeminiEvidenceAssessor
 from patchproof.adk_test_agent import AdkGeminiCandidateModel
 from patchproof.claim_agent import BehavioralClaimAgent
+from patchproof.claim_investigator import GitClaimInvestigatorFactory
 from patchproof.cloud_executor import (
+    ExecutionContractOrigin,
     ExecutorChallengeRequest,
     ExecutorChallengeResponse,
     ExecutorEnvironmentRequest,
     ExecutorEnvironmentResponse,
 )
 from patchproof.cloud_tasks import CloudTasksDispatcherSettings, CloudTasksRunDispatcher
-from patchproof.context_retrieval import DeterministicContextRetriever
-from patchproof.control_plane import ControlPlaneSettings, create_app
-from patchproof.dashboard import StoreDashboardSnapshotProvider, install_dashboard
+from patchproof.context_retrieval import ContextRetrievalError, DeterministicContextRetriever
+from patchproof.control_plane import ControlPlaneSettings, _read_bounded_body, create_app
+from patchproof.dashboard import DashboardRun, StoreDashboardSnapshotProvider, install_dashboard
 from patchproof.evidence_workflow import EvidenceWorkflow
 from patchproof.execution_contract import ExecutionContract, ExecutionContractLoader
 from patchproof.firestore_store import FirestoreVerificationRunStore
@@ -48,9 +53,30 @@ from patchproof.github_checks import (
     GitHubCheckTerminalError,
 )
 from patchproof.models import ChallengeResult, EnvironmentReadiness, ExecutionResult, TestArtifact
+from patchproof.pr_resolution import (
+    GitHubRestPullRequestResolver,
+    PullRequestResolutionError,
+    PullRequestResolver,
+    PullRequestUpstreamError,
+    PullRequestUrlError,
+    ResolvedPullRequest,
+    parse_github_pull_request_url,
+)
+from patchproof.product_preparation import (
+    ProductExecutionContextRetriever,
+    ProductExecutionPlanSource,
+    prepare_pull_request,
+)
 from patchproof.reliable_worker import EvidenceWorkerError, ReliableEvidenceWorker
-from patchproof.storage import VerificationRunStore
-from patchproof.workflow import normalize_repository_name
+from patchproof.storage import RunNotFoundError, VerificationRunStore
+from patchproof.workflow import (
+    PublicationState,
+    PullRequestEvent,
+    RevisionState,
+    RunLifecycle,
+    RunTransition,
+    normalize_repository_name,
+)
 
 
 class RunTaskRequest(BaseModel):
@@ -59,6 +85,26 @@ class RunTaskRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     run_id: UUID
+
+
+class AnalyzeRequest(BaseModel):
+    """Bounded request for one PR in a deployment-allowlisted public repository."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    pr_url: str = Field(min_length=1, max_length=300)
+
+
+class AnalyzeResponse(BaseModel):
+    """Fast acknowledgement for one durable asynchronous cloud run."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    run_id: UUID
+    status: str
+    pr_url: str
+    dashboard_url: str
+    result_url: str
 
 
 class TaskIdentityVerifier(Protocol):
@@ -118,6 +164,36 @@ class _RemoteRunnerContract:
     install_dependencies: bool = True
 
 
+@dataclass(frozen=True, slots=True)
+class _RemoteChallengeSession:
+    """Bind immutable revision refs while retaining the remote executor boundary."""
+
+    challenge: RemoteBaseHeadChallenge
+    base_ref: str
+    head_ref: str
+
+    def prepare_environment(self) -> EnvironmentReadiness:
+        return self.challenge.prepare_environment(base_ref=self.base_ref, head_ref=self.head_ref)
+
+    def run(
+        self,
+        *,
+        artifact: TestArtifact,
+        on_base_complete: Callable[[ExecutionResult], None] | None = None,
+    ) -> ChallengeResult:
+        return self.challenge.run(
+            base_ref=self.base_ref,
+            head_ref=self.head_ref,
+            artifact=artifact,
+            on_base_complete=on_base_complete,
+        )
+
+    def installed_import_roots(self) -> frozenset[str]:
+        # The credentialed control plane does not inspect the executor's environment.
+        # Empty preserves the validator's context-derived import grounding.
+        return frozenset()
+
+
 class RemoteBaseHeadChallenge:
     """EvidenceWorkflow-compatible adapter for the credentialless private executor."""
 
@@ -127,18 +203,27 @@ class RemoteBaseHeadChallenge:
         repository: str,
         pull_request_number: int,
         contract: ExecutionContract,
+        contract_origin: ExecutionContractOrigin = ExecutionContractOrigin.REPOSITORY,
+        repository_python_paths: tuple[str, ...] = (),
         executor_url: str,
         tokens: ExecutorIdentityTokenProvider,
         client: httpx.Client | None = None,
     ) -> None:
         self.repository = normalize_repository_name(repository)
         self.pull_request_number = pull_request_number
+        self.contract_origin = contract_origin
+        self.repository_python_paths = repository_python_paths
         self.executor_url = executor_url.rstrip("/")
         if not self.executor_url.startswith("https://"):
             raise ValueError("executor URL must use HTTPS")
         self.tokens = tokens
         self.client = client or httpx.Client(timeout=950.0)
         self.runner = _RemoteRunnerContract(contract=contract)
+
+    @contextmanager
+    def session(self, *, base_ref: str, head_ref: str) -> Iterator[_RemoteChallengeSession]:
+        """Expose the session interface without moving execution into the control plane."""
+        yield _RemoteChallengeSession(self, base_ref, head_ref)
 
     def prepare_environment(self, *, base_ref: str, head_ref: str) -> EnvironmentReadiness:
         request = ExecutorEnvironmentRequest(
@@ -147,6 +232,8 @@ class RemoteBaseHeadChallenge:
             base_sha=base_ref,
             head_sha=head_ref,
             contract=self.runner.contract,
+            contract_origin=self.contract_origin,
+            repository_python_paths=self.repository_python_paths,
         )
         token = self.tokens.token(self.executor_url)
         try:
@@ -178,6 +265,8 @@ class RemoteBaseHeadChallenge:
             base_sha=base_ref,
             head_sha=head_ref,
             contract=self.runner.contract,
+            contract_origin=self.contract_origin,
+            repository_python_paths=self.repository_python_paths,
             artifact_path=artifact.relative_path,
             node_id=artifact.node_id,
             artifact_source=artifact.content.decode("utf-8"),
@@ -251,7 +340,10 @@ class CloudRunTaskProcessor:
         if run.repository not in self.allowed_repositories:
             raise PermissionError("durable run repository is not allowlisted")
         if self.store.get_evidence(run_id) is not None:
-            self.publisher.publish(run_id)
+            if run.installation_id is not None:
+                self.publisher.publish(run_id)
+            else:
+                self._finish_without_github_check(run_id)
             return
         with tempfile.TemporaryDirectory(prefix="patchproof-control-") as temporary:
             repository = Path(temporary) / "repository.git"
@@ -262,18 +354,61 @@ class CloudRunTaskProcessor:
                 run.head_sha,
                 repository,
             )
-            context = DeterministicContextRetriever(source_repository=repository)
-            loader = ExecutionContractLoader()
-            contract = loader.load_bytes(
-                context.read_committed_file(
-                    revision_sha=run.head_sha,
-                    path=loader.filename,
+            contract_origin = ExecutionContractOrigin.REPOSITORY
+            repository_python_paths: tuple[str, ...] = ()
+            claim_investigator = None
+            if run.event_action == "patchproof_analyze":
+                resolved = ResolvedPullRequest(
+                    repository=run.repository,
+                    number=run.pr_number,
+                    url=f"https://github.com/{run.repository}/pull/{run.pr_number}",
+                    base_sha=run.base_sha,
+                    head_sha=run.head_sha,
+                    title=run.title,
+                    body=run.body,
+                    updated_at=run.head_updated_at,
                 )
-            )
+                prepared = prepare_pull_request(
+                    resolved=resolved,
+                    source_repository=repository,
+                )
+                contract = prepared.execution_plan.contract
+                contract_origin = (
+                    ExecutionContractOrigin.REPOSITORY
+                    if prepared.execution_plan.source
+                    is ProductExecutionPlanSource.REPOSITORY_CONTRACT
+                    else ExecutionContractOrigin.PATCHPROOF_PROBE
+                )
+                context = ProductExecutionContextRetriever(
+                    source_repository=repository,
+                    excluded_paths=frozenset(prepared.excluded_paths),
+                    contract=contract,
+                    revisions=frozenset({run.base_sha, run.head_sha}),
+                )
+                claim_investigator = GitClaimInvestigatorFactory(
+                    model=AdkGeminiClaimInvestigator(
+                        model_name=self.model_name,
+                        provider_config=self.provider_config,
+                    ),
+                    source_repository=repository,
+                    excluded_paths=frozenset(prepared.excluded_paths),
+                    priority_paths=frozenset(prepared.priority_paths),
+                )
+            else:
+                context = DeterministicContextRetriever(source_repository=repository)
+                loader = ExecutionContractLoader()
+                contract = loader.load_bytes(
+                    context.read_committed_file(
+                        revision_sha=run.head_sha,
+                        path=loader.filename,
+                    )
+                )
             challenge = RemoteBaseHeadChallenge(
                 repository=run.repository,
                 pull_request_number=run.pr_number,
                 contract=contract,
+                contract_origin=contract_origin,
+                repository_python_paths=repository_python_paths,
                 executor_url=self.executor_url,
                 tokens=self.executor_tokens,
             )
@@ -295,9 +430,22 @@ class CloudRunTaskProcessor:
                     model_name=self.model_name,
                     provider_config=self.provider_config,
                 ),
+                claim_investigator=claim_investigator,
             )
             await ReliableEvidenceWorker(workflow=workflow, store=self.store).run(run_id)
-        self.publisher.publish(run_id)
+        if run.installation_id is not None:
+            self.publisher.publish(run_id)
+        else:
+            self._finish_without_github_check(run_id)
+
+    def _finish_without_github_check(self, run_id: UUID) -> None:
+        run = self.store.get_run(run_id)
+        if run.publication_state is PublicationState.PENDING:
+            self.store.transition_run(
+                run_id=run_id,
+                expected_version=run.version,
+                transition=RunTransition(publication_state=PublicationState.NOT_APPLICABLE),
+            )
 
     @staticmethod
     def _prepare_repository(
@@ -340,21 +488,26 @@ class CloudRunTaskProcessor:
             ("git", "-C", str(destination), "rev-parse", "refs/patchproof/head"),
         )
         completed: subprocess.CompletedProcess[str] | None = None
-        for command in commands:
-            completed = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=120,
-                check=False,
-            )
-            if completed.returncode != 0:
-                raise RuntimeError("immutable public pull-request fetch failed")
+        try:
+            for command in commands:
+                completed = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=120,
+                    check=False,
+                )
+                if completed.returncode != 0:
+                    raise ContextRetrievalError("immutable public pull-request fetch failed")
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise ContextRetrievalError(
+                "immutable public pull-request fetch did not complete"
+            ) from error
         assert completed is not None
         if completed.stdout.strip().lower() != expected_head:
-            raise RuntimeError("fetched pull-request HEAD differs from the durable run")
+            raise ContextRetrievalError("fetched pull-request HEAD differs from the durable run")
 
 
 @dataclass(frozen=True, slots=True)
@@ -372,6 +525,7 @@ class CloudControlSettings:
     github_app_id: int
     github_private_key: str
     dashboard_run_ids: tuple[UUID, ...] = ()
+    dashboard_recent_limit: int = 8
     firestore_namespace: str = "patchproof"
     model_name: str = DEFAULT_CLAIM_MODEL
     gemini_provider: GeminiProviderConfig = field(
@@ -406,6 +560,7 @@ class CloudControlSettings:
                 for item in os.environ.get("PATCHPROOF_DASHBOARD_RUN_IDS", "").split(",")
                 if item.strip()
             ),
+            dashboard_recent_limit=int(os.environ.get("PATCHPROOF_DASHBOARD_RECENT_LIMIT", "8")),
             firestore_namespace=os.environ.get("PATCHPROOF_FIRESTORE_NAMESPACE", "patchproof"),
             model_name=os.environ.get("PATCHPROOF_GEMINI_MODEL", DEFAULT_CLAIM_MODEL),
             gemini_provider=GeminiProviderConfig.from_environment(),
@@ -419,6 +574,7 @@ def create_cloud_control_app(
     dispatcher: CloudTasksRunDispatcher | None = None,
     processor: RunTaskProcessor | None = None,
     verifier: TaskIdentityVerifier | None = None,
+    pr_resolver: PullRequestResolver | None = None,
 ) -> FastAPI:
     """Create the public webhook plus OIDC-protected task callback application."""
     resolved_store = store or FirestoreVerificationRunStore(
@@ -457,13 +613,110 @@ def create_cloud_control_app(
         store=resolved_store,
         dispatcher=resolved_dispatcher,
     )
+    dashboard_provider = StoreDashboardSnapshotProvider(
+        store=resolved_store,
+        run_ids=settings.dashboard_run_ids,
+        max_runs=settings.dashboard_recent_limit,
+    )
     install_dashboard(
         app,
-        provider=StoreDashboardSnapshotProvider(
-            store=resolved_store,
-            run_ids=settings.dashboard_run_ids,
-        ),
+        provider=dashboard_provider,
     )
+    resolved_pr_resolver = pr_resolver or GitHubRestPullRequestResolver()
+
+    @app.post(
+        "/api/analyze",
+        response_model=AnalyzeResponse,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def analyze(request: Request) -> AnalyzeResponse:
+        if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != (
+            "application/json"
+        ):
+            raise HTTPException(status_code=415, detail="Content-Type must be application/json")
+        body = await _read_bounded_body(request, maximum_bytes=1_024)
+        try:
+            payload = AnalyzeRequest.model_validate_json(body)
+        except ValidationError as error:
+            raise HTTPException(status_code=422, detail="invalid cloud analyze request") from error
+        try:
+            parsed = parse_github_pull_request_url(payload.pr_url)
+        except PullRequestUrlError as error:
+            raise HTTPException(status_code=422, detail=f"INVALID_PR_URL: {error}") from error
+        # The allowlist remains the repository-code trust and cost boundary. Supporting
+        # arbitrary PR numbers does not make the executor a hostile-code sandbox.
+        if parsed.repository not in settings.allowed_repositories:
+            raise HTTPException(
+                status_code=403,
+                detail="REPOSITORY_NOT_ALLOWED: repository is not enabled for this deployment",
+            )
+        try:
+            resolved = await resolved_pr_resolver.resolve(parsed)
+        except PullRequestUpstreamError as error:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "PR_RESOLUTION_UPSTREAM_FAILED: GitHub pull-request resolution "
+                    "is temporarily unavailable"
+                ),
+            ) from error
+        except PullRequestResolutionError as error:
+            raise HTTPException(
+                status_code=422,
+                detail="PR_RESOLUTION_FAILED: GitHub pull request could not be resolved safely",
+            ) from error
+        if resolved.repository != parsed.repository or resolved.number != parsed.number:
+            raise HTTPException(status_code=502, detail="PR_RESOLUTION_FAILED: identity mismatch")
+
+        identity = (
+            f"{resolved.repository}:{resolved.number}:{resolved.base_sha}:{resolved.head_sha}"
+        )
+        delivery_id = "product-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()
+        acceptance = resolved_store.accept_pull_request(
+            PullRequestEvent(
+                delivery_id=delivery_id,
+                action="patchproof_analyze",
+                repository=resolved.repository,
+                pr_number=resolved.number,
+                base_sha=resolved.base_sha,
+                head_sha=resolved.head_sha,
+                head_updated_at=resolved.updated_at,
+                title=resolved.title,
+                body=resolved.body,
+                installation_id=None,
+            )
+        )
+        run = acceptance.run
+        if (
+            run.revision_state is RevisionState.CURRENT
+            and run.lifecycle is not RunLifecycle.TERMINAL
+        ):
+            try:
+                resolved_dispatcher.dispatch(run.run_id)
+            except Exception as error:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Verification dispatch is temporarily unavailable.",
+                ) from error
+        return AnalyzeResponse(
+            run_id=run.run_id,
+            status=str(run.lifecycle),
+            pr_url=resolved.url,
+            dashboard_url=f"{settings.control_url}/dashboard?run={run.run_id}",
+            result_url=f"{settings.control_url}/api/runs/{run.run_id}",
+        )
+
+    @app.get("/api/runs/{run_id}", response_model=DashboardRun)
+    async def run_status(run_id: UUID) -> DashboardRun:
+        try:
+            return dashboard_provider.project_run(run_id)
+        except RunNotFoundError as error:
+            raise HTTPException(status_code=404, detail="verification run not found") from error
+        except (RuntimeError, ValueError) as error:
+            raise HTTPException(
+                status_code=503,
+                detail="verification evidence is temporarily unavailable",
+            ) from error
 
     @app.post("/tasks/verify")
     async def verify_task(payload: RunTaskRequest, request: Request) -> dict[str, str]:
@@ -477,6 +730,22 @@ def create_cloud_control_app(
             raise HTTPException(status_code=503, detail="publication retry requested") from error
         except (EvidenceWorkerError, GitHubCheckTerminalError, PermissionError):
             # These paths are already represented durably or cannot become valid by retrying.
+            return {"status": "terminal"}
+        except Exception as error:
+            failure = ReliableEvidenceWorker.classify(error)
+            run = resolved_store.get_run(payload.run_id)
+            if (
+                run.revision_state is RevisionState.CURRENT
+                and run.lifecycle is not RunLifecycle.TERMINAL
+            ):
+                resolved_store.fail_run(
+                    run_id=run.run_id,
+                    error_code=failure.code,
+                    summary=failure.summary,
+                    retryable=failure.retryable,
+                    model_usage=failure.model_usage,
+                    raw_response_sha256=failure.raw_response_sha256,
+                )
             return {"status": "terminal"}
         return {"status": "completed"}
 

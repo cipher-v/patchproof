@@ -21,6 +21,7 @@ from patchproof.claim_agent import (
     ModelUsage,
     PullRequestNarrative,
 )
+from patchproof.claim_investigator import ClaimInvestigatorFactory, InvestigationTranscript
 from patchproof.context_retrieval import DeterministicContextRetriever
 from patchproof.execution_contract import ExecutionContractLoader
 from patchproof.model_reliability import (
@@ -41,6 +42,8 @@ from patchproof.models import (
 from patchproof.storage import StoredEvidence, VerificationRunStore
 from patchproof.structured_output import StrictGeminiOutputModel
 from patchproof.test_generation import (
+    _MAX_CANDIDATE_MODEL_CALLS,
+    _MAX_REPAIRS,
     BoundedCandidateTestGenerator,
     CandidateAttempt,
     CandidateAttemptStatus,
@@ -73,6 +76,31 @@ _UNIX_PATH_PATTERN = re.compile(r"(?<![\w.])/(?:[^/\s]+/)+[^:\s]+")
 _OPAQUE_VALUE_PATTERN = re.compile(r"(?<![A-Za-z0-9])[A-Za-z0-9_-]{32,}(?![A-Za-z0-9])")
 _CONTROL_PATTERN = re.compile(r"[\x00-\x1f\x7f]+")
 _TRUNCATION_MARKER = "...[truncated]"
+#: A pytest short-traceback frame line, e.g. `src/pkg/mod.py:42: in helper`.
+_TRACEBACK_FRAME_PATTERN = re.compile(r"^.+\.py:\d+: in \S+")
+
+#: General repair guidance for a one-sided escaping exception.
+#:
+#: This is a transformation, not a rule about any particular exception, repository, or
+#: claim. An escaping exception is not assertion evidence, so PatchProof cannot admit
+#: the pair -- but the same behavioral difference becomes admissible when the test
+#: converts the outcome into an explicit observed value and asserts on it. In the sealed
+#: unseen holdout the Starlette candidate had already found the discriminating trigger
+#: and was discarded purely because of the shape of its observation.
+#:
+#: The guardrails are enforced mechanically in `CandidateTestValidator`, not merely
+#: requested here: a handler must name a specific exception type grounded in the
+#: supplied context, and must bind the outcome to a value that is asserted on.
+_EXCEPTION_TO_OBSERVABLE_GUIDANCE = (
+    "Exactly one revision let an exception escape. That is a real behavioral difference, "
+    "but an escaping exception is not assertion evidence, so it cannot support a claim. "
+    "Rewrite the same scenario so both outcomes become one observed value and assert on "
+    "it, for example: observed = ('ok', repr(operation())) inside try, and "
+    "observed = ('error', type(error).__name__) in an except clause naming that specific "
+    "exception type; then assert observed == <expected HEAD observation>. Keep the same "
+    "selected claim and the same trigger. Never catch Exception or BaseException, never "
+    "use a bare except, and never swallow an outcome without asserting on it."
+)
 
 
 class AssertionRelation(StrEnum):
@@ -217,6 +245,14 @@ class EvidenceReport(BaseModel):
         default=None,
         exclude_if=lambda value: value is None,
     )
+    #: Bounded audit facts from Phase 2 claim investigation: turn count, validated tool
+    #: arguments, per-call status and provenance, the starting-context hash, and response
+    #: hashes. No chain-of-thought and no free model text. Optional, so v1 stored evidence
+    #: that predates claim investigation still loads unchanged.
+    investigation_transcript: InvestigationTranscript | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     candidate_attempts: tuple[CandidateAttemptEvidence, ...] = Field(max_length=3)
     candidate_evaluations: tuple[CandidateEvaluationEvidence, ...] = Field(max_length=3)
     selected_artifact_sha256: str | None
@@ -263,6 +299,7 @@ class EvidenceWorkflow:
         candidate_model: StructuredCandidateModel,
         challenge: BaseHeadChallenge,
         assessor: SemanticEvidenceAssessor,
+        claim_investigator: ClaimInvestigatorFactory | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.store = store
@@ -272,6 +309,10 @@ class EvidenceWorkflow:
             max_input_json_chars=claim_agent.max_input_json_chars,
             max_response_chars=claim_agent.max_response_chars,
         )
+        #: When supplied, claim selection runs through the Phase 2 investigator instead
+        #: of the diff-snippet claim agent. Everything downstream of a selected claim is
+        #: identical either way: the investigator returns the same ClaimAgentResult type.
+        self.claim_investigator = claim_investigator
         self.candidate_model = BoundedRetryingModel(candidate_model)
         self.challenge = challenge
         self.assessor = BoundedRetryingEvidenceAssessor(assessor)
@@ -323,10 +364,16 @@ class EvidenceWorkflow:
 
         context = self.context_retriever.retrieve(base_sha=run.base_sha, head_sha=run.head_sha)
         run = self._transition(run, RunTransition(phase=RunPhase.CLAIM))
-        claim_result = await self.claim_agent.select_claim(
-            context=context,
-            narrative=PullRequestNarrative.from_untrusted(title=run.title, body=run.body),
-        )
+        narrative = PullRequestNarrative.from_untrusted(title=run.title, body=run.body)
+        investigation_transcript: InvestigationTranscript | None = None
+        if self.claim_investigator is not None:
+            investigation = await self.claim_investigator.build(
+                base_sha=run.base_sha, head_sha=run.head_sha
+            ).investigate(narrative=narrative, diff=context.diff)
+            claim_result = investigation.agent_result
+            investigation_transcript = investigation.transcript
+        else:
+            claim_result = await self.claim_agent.select_claim(context=context, narrative=narrative)
         selection = claim_result.selection
         if selection.claim is None:
             status = (
@@ -341,137 +388,146 @@ class EvidenceWorkflow:
                 evaluations=(),
                 mechanical_status=status,
                 reason=selection.explanation,
+                investigation_transcript=investigation_transcript,
             )
             self._persist_terminal(run, report)
             return report
 
-        environment_readiness = self.challenge.prepare_environment(
-            base_ref=run.base_sha,
-            head_ref=run.head_sha,
-        )
-        readiness_evidence = EnvironmentReadinessEvidence.from_domain(environment_readiness)
-        if not environment_readiness.ready:
+        # One worktree pair serves readiness and every candidate attempt, so the
+        # repository-declared install commands run once per revision rather than once
+        # per operation.
+        with self.challenge.session(base_ref=run.base_sha, head_ref=run.head_sha) as session:
+            environment_readiness = session.prepare_environment()
+            readiness_evidence = EnvironmentReadinessEvidence.from_domain(environment_readiness)
+            if not environment_readiness.ready:
+                report = self._abstention_report(
+                    run=run,
+                    claim_result=claim_result,
+                    attempts=(),
+                    evaluations=(),
+                    mechanical_status=MechanicalEvidenceStatus.ENVIRONMENTAL,
+                    reason=environment_readiness.reason,
+                    environment_readiness=readiness_evidence,
+                    investigation_transcript=investigation_transcript,
+                )
+                self._persist_terminal(run, report)
+                return report
+
+            run = self._transition(run, RunTransition(phase=RunPhase.TEST_GENERATION))
+            signature_context = self.context_retriever.retrieve_callable_signatures(
+                head_sha=run.head_sha,
+                context=context,
+                affected_symbols=tuple(
+                    (symbol.path, symbol.qualified_name)
+                    for symbol in selection.claim.affected_symbols
+                ),
+            )
+            generator = BoundedCandidateTestGenerator(
+                model=self.candidate_model,
+                validator=CandidateTestValidator(
+                    installed_import_roots=session.installed_import_roots()
+                ),
+                claim=selection.claim,
+                context=context,
+                contract=contract,
+                existing_paths=existing_paths,
+                repository_signatures=signature_context,
+            )
+            attempts: list[CandidateAttempt] = []
+            challenge: ChallengeResult | None = None
+            evaluations: list[CandidateEvaluationEvidence] = []
+            attempt = await generator.generate_initial()
+            attempts.append(attempt)
+
+            for attempt_number in range(_MAX_CANDIDATE_MODEL_CALLS):
+                if attempt.validated is not None:
+                    self._require_current(self.store.get_run(run_id))
+                    run = self._advance_for_execution(run)
+
+                    def mark_head_execution(_base_result: ExecutionResult) -> None:
+                        nonlocal run
+                        self._require_current(self.store.get_run(run_id))
+                        if run.phase is RunPhase.BASE_EXECUTION:
+                            run = self._transition(
+                                run, RunTransition(phase=RunPhase.HEAD_EXECUTION)
+                            )
+
+                    challenge = session.run(
+                        artifact=attempt.validated.artifact,
+                        on_base_complete=mark_head_execution,
+                    )
+                    evaluations.append(self._evaluation_evidence(attempt.sequence, challenge))
+                    if run.phase is not RunPhase.ASSESSMENT:
+                        run = self._transition(run, RunTransition(phase=RunPhase.ASSESSMENT))
+                    setup_failure = self._candidate_environment_failure(challenge)
+                    if setup_failure is not None:
+                        readiness_evidence = EnvironmentReadinessEvidence.from_domain(setup_failure)
+                        report = self._abstention_report(
+                            run=run,
+                            claim_result=claim_result,
+                            attempts=tuple(attempts),
+                            evaluations=tuple(evaluations),
+                            mechanical_status=MechanicalEvidenceStatus.ENVIRONMENTAL,
+                            reason=setup_failure.reason,
+                            challenge=challenge,
+                            environment_readiness=readiness_evidence,
+                            investigation_transcript=investigation_transcript,
+                        )
+                        self._persist_terminal(run, report)
+                        return report
+                    if (
+                        challenge.assessment.mechanical_status
+                        is MechanicalEvidenceStatus.DISCRIMINATING
+                    ):
+                        semantic_result = await self.assessor.assess(
+                            claim=selection.claim,
+                            candidate_source=attempt.validated.proposal.source,
+                            challenge=challenge,
+                        )
+                        self._validate_semantic_decision(challenge, semantic_result.decision)
+                        report = self._completed_report(
+                            run=run,
+                            claim_result=claim_result,
+                            attempts=tuple(attempts),
+                            evaluations=tuple(evaluations),
+                            challenge=challenge,
+                            semantic_result=semantic_result,
+                            environment_readiness=readiness_evidence,
+                            investigation_transcript=investigation_transcript,
+                        )
+                        self._persist_terminal(run, report)
+                        return report
+
+                if attempt_number >= _MAX_REPAIRS:
+                    break
+                feedback = self._repair_feedback(attempt=attempt, challenge=challenge)
+                attempt = await generator.repair(feedback=feedback)
+                attempts.append(attempt)
+                challenge = None
+
+            status = (
+                challenge.assessment.mechanical_status
+                if challenge is not None
+                else MechanicalEvidenceStatus.INVALID_TEST
+            )
+            reason = (
+                challenge.assessment.reason
+                if challenge is not None
+                else "All three bounded candidate attempts failed deterministic validation."
+            )
             report = self._abstention_report(
                 run=run,
                 claim_result=claim_result,
-                attempts=(),
-                evaluations=(),
-                mechanical_status=MechanicalEvidenceStatus.ENVIRONMENTAL,
-                reason=environment_readiness.reason,
+                attempts=tuple(attempts),
+                evaluations=tuple(evaluations),
+                mechanical_status=status,
+                reason=reason,
+                challenge=challenge,
                 environment_readiness=readiness_evidence,
+                investigation_transcript=investigation_transcript,
             )
             self._persist_terminal(run, report)
             return report
-
-        run = self._transition(run, RunTransition(phase=RunPhase.TEST_GENERATION))
-        signature_context = self.context_retriever.retrieve_callable_signatures(
-            head_sha=run.head_sha,
-            context=context,
-            affected_symbols=tuple(
-                (symbol.path, symbol.qualified_name) for symbol in selection.claim.affected_symbols
-            ),
-        )
-        generator = BoundedCandidateTestGenerator(
-            model=self.candidate_model,
-            validator=CandidateTestValidator(),
-            claim=selection.claim,
-            context=context,
-            contract=contract,
-            existing_paths=existing_paths,
-            repository_signatures=signature_context,
-        )
-        attempts: list[CandidateAttempt] = []
-        challenge: ChallengeResult | None = None
-        evaluations: list[CandidateEvaluationEvidence] = []
-        attempt = await generator.generate_initial()
-        attempts.append(attempt)
-
-        for attempt_number in range(3):
-            if attempt.validated is not None:
-                self._require_current(self.store.get_run(run_id))
-                run = self._advance_for_execution(run)
-
-                def mark_head_execution(_base_result: ExecutionResult) -> None:
-                    nonlocal run
-                    self._require_current(self.store.get_run(run_id))
-                    if run.phase is RunPhase.BASE_EXECUTION:
-                        run = self._transition(run, RunTransition(phase=RunPhase.HEAD_EXECUTION))
-
-                challenge = self.challenge.run(
-                    base_ref=run.base_sha,
-                    head_ref=run.head_sha,
-                    artifact=attempt.validated.artifact,
-                    on_base_complete=mark_head_execution,
-                )
-                evaluations.append(self._evaluation_evidence(attempt.sequence, challenge))
-                if run.phase is not RunPhase.ASSESSMENT:
-                    run = self._transition(run, RunTransition(phase=RunPhase.ASSESSMENT))
-                setup_failure = self._candidate_environment_failure(challenge)
-                if setup_failure is not None:
-                    readiness_evidence = EnvironmentReadinessEvidence.from_domain(setup_failure)
-                    report = self._abstention_report(
-                        run=run,
-                        claim_result=claim_result,
-                        attempts=tuple(attempts),
-                        evaluations=tuple(evaluations),
-                        mechanical_status=MechanicalEvidenceStatus.ENVIRONMENTAL,
-                        reason=setup_failure.reason,
-                        challenge=challenge,
-                        environment_readiness=readiness_evidence,
-                    )
-                    self._persist_terminal(run, report)
-                    return report
-                if (
-                    challenge.assessment.mechanical_status
-                    is MechanicalEvidenceStatus.DISCRIMINATING
-                ):
-                    semantic_result = await self.assessor.assess(
-                        claim=selection.claim,
-                        candidate_source=attempt.validated.proposal.source,
-                        challenge=challenge,
-                    )
-                    self._validate_semantic_decision(challenge, semantic_result.decision)
-                    report = self._completed_report(
-                        run=run,
-                        claim_result=claim_result,
-                        attempts=tuple(attempts),
-                        evaluations=tuple(evaluations),
-                        challenge=challenge,
-                        semantic_result=semantic_result,
-                        environment_readiness=readiness_evidence,
-                    )
-                    self._persist_terminal(run, report)
-                    return report
-
-            if attempt_number == 2:
-                break
-            feedback = self._repair_feedback(attempt=attempt, challenge=challenge)
-            attempt = await generator.repair(feedback=feedback)
-            attempts.append(attempt)
-            challenge = None
-
-        status = (
-            challenge.assessment.mechanical_status
-            if challenge is not None
-            else MechanicalEvidenceStatus.INVALID_TEST
-        )
-        reason = (
-            challenge.assessment.reason
-            if challenge is not None
-            else "All three bounded candidate attempts failed deterministic validation."
-        )
-        report = self._abstention_report(
-            run=run,
-            claim_result=claim_result,
-            attempts=tuple(attempts),
-            evaluations=tuple(evaluations),
-            mechanical_status=status,
-            reason=reason,
-            challenge=challenge,
-            environment_readiness=readiness_evidence,
-        )
-        self._persist_terminal(run, report)
-        return report
 
     def _persist_terminal(self, run: VerificationRun, report: EvidenceReport) -> StoredEvidence:
         stored = self.store.save_evidence(
@@ -503,6 +559,7 @@ class EvidenceWorkflow:
         challenge: ChallengeResult,
         semantic_result: SemanticAssessmentResult,
         environment_readiness: EnvironmentReadinessEvidence,
+        investigation_transcript: InvestigationTranscript | None = None,
     ) -> EvidenceReport:
         claim = claim_result.selection.claim
         assert claim is not None
@@ -519,6 +576,7 @@ class EvidenceWorkflow:
             claim_usage=claim_result.usage,
             claim_response_sha256=claim_result.raw_response_sha256,
             environment_readiness=environment_readiness,
+            investigation_transcript=investigation_transcript,
             candidate_attempts=tuple(self._attempt_evidence(item) for item in attempts),
             candidate_evaluations=evaluations,
             selected_artifact_sha256=challenge.artifact.sha256,
@@ -544,6 +602,7 @@ class EvidenceWorkflow:
         reason: str,
         challenge: ChallengeResult | None = None,
         environment_readiness: EnvironmentReadinessEvidence | None = None,
+        investigation_transcript: InvestigationTranscript | None = None,
     ) -> EvidenceReport:
         return EvidenceReport(
             run_id=run.run_id,
@@ -556,6 +615,7 @@ class EvidenceWorkflow:
             claim_usage=claim_result.usage,
             claim_response_sha256=claim_result.raw_response_sha256,
             environment_readiness=environment_readiness,
+            investigation_transcript=investigation_transcript,
             candidate_attempts=tuple(self._attempt_evidence(item) for item in attempts),
             candidate_evaluations=evaluations,
             selected_artifact_sha256=challenge.artifact.sha256 if challenge else None,
@@ -652,15 +712,24 @@ class EvidenceWorkflow:
                 and base_exception == head_exception
             )
             observations.append(f"same_exception_on_base_and_head={str(same_exception).lower()}")
-        elif {
-            challenge.base.status,
-            challenge.head.status,
-        } == {TestExecutionStatus.TEST_ERROR, TestExecutionStatus.PASSED}:
+        elif (
+            challenge.assessment.mechanical_status
+            is MechanicalEvidenceStatus.UNCAUGHT_EXCEPTION_ON_ONE_REVISION
+        ):
+            observations.append(_EXCEPTION_TO_OBSERVABLE_GUIDANCE)
+        elif challenge.assessment.pattern is DifferentialPattern.BOTH_PASSED:
             observations.append(
-                "An exception escaping on one revision is mechanically TEST_ERROR. If it "
-                "represents expected claim behavior and its exception import is grounded in "
-                "the supplied context, convert it into an explicit deterministic pytest "
-                "assertion/failure; do not catch unrelated exceptions."
+                "The same observation occurred on both revisions, so this input does not "
+                "reach the changed behavior or does not depend on it. Change the input or "
+                "the observed property so the two revisions must differ; do not restate "
+                "the same scenario. If repository_frame is absent, the call never entered "
+                "the changed code at all."
+            )
+        elif challenge.assessment.pattern is DifferentialPattern.BOTH_ASSERTION_FAILED:
+            observations.append(
+                "Both revisions failed the same assertion, so the expected value is wrong "
+                "rather than the trigger. Use the observed values above to correct the "
+                "expectation for HEAD while keeping the same selected claim."
             )
         return CandidateFeedback(
             category="EXECUTION_EVIDENCE",
@@ -670,6 +739,59 @@ class EvidenceWorkflow:
             ),
             observations=tuple(observations),
         )
+
+    @staticmethod
+    def _assertion_observation(result: ExecutionResult) -> str | None:
+        """Extract what the assertion actually observed, for the repair to reason about.
+
+        This is the single most important thing a repair can be told and it was
+        previously never sent. `_execution_exception` returns None unless the status is
+        TEST_ERROR, so a repair following BOTH_PASSED or BOTH_ASSERTION_FAILED -- the two
+        situations where repair is the whole point -- received only status names and the
+        text of its own failing line. It was asked to find a discriminating input while
+        being told nothing except that its input was not discriminating.
+
+        pytest's assertion rewriting puts the comparison and its operand values on the
+        `E   ` continuation lines, which is exactly the differential signal needed.
+        """
+        if result.status is not TestExecutionStatus.ASSERTION_FAILED or not result.detail:
+            return None
+        explanation = [
+            line.strip()[1:].strip()
+            for line in result.detail.splitlines()
+            if line.strip().startswith("E ")
+        ]
+        if not explanation:
+            return None
+        joined = " | ".join(part for part in explanation if part)
+        return EvidenceWorkflow._sanitize_observed_value(joined, limit=400) or None
+
+    @staticmethod
+    def _production_frame(result: ExecutionResult, attempt: CandidateAttempt) -> str | None:
+        """Return the deepest traceback frame that is not the generated test itself.
+
+        For BOTH_PASSED this answers the question a repair most needs and cannot
+        otherwise ask: did my trigger actually reach the changed code, or did it never
+        get there at all? For an escaping exception it names where the failure arose in
+        the repository rather than where the test called it.
+        """
+        if not result.detail or attempt.validated is None:
+            return None
+        relative_path = attempt.validated.artifact.relative_path
+        generated_markers = {
+            relative_path,
+            relative_path.replace("/", "\\"),
+            relative_path.rsplit("/", maxsplit=1)[-1],
+        }
+        frames = [
+            line.strip()
+            for line in result.detail.splitlines()
+            if _TRACEBACK_FRAME_PATTERN.match(line.strip())
+            and not any(marker in line for marker in generated_markers)
+        ]
+        if not frames:
+            return None
+        return EvidenceWorkflow._sanitize_feedback_text(frames[-1], limit=200) or None
 
     @staticmethod
     def _execution_exception(result: ExecutionResult) -> tuple[str, str] | None:
@@ -697,11 +819,19 @@ class EvidenceWorkflow:
             exception_type, message = exception
             parts.append(f"exception_type={exception_type}")
             parts.append(f"message={message or '<empty>'}")
+        observation = EvidenceWorkflow._assertion_observation(result)
+        if observation is not None:
+            parts.append(f"observed={observation}")
         generated_line = EvidenceWorkflow._generated_failing_line(result, attempt)
         if generated_line is not None:
             line_number, source = generated_line
             parts.append(f"generated_line={line_number}:{source}")
-        return EvidenceWorkflow._sanitize_feedback_text("; ".join(parts), limit=500)
+        frame = EvidenceWorkflow._production_frame(result, attempt)
+        if frame is not None:
+            parts.append(f"repository_frame={frame}")
+        # Sanitization is applied per part rather than to the joined string so that an
+        # observed value keeps its content: redacting it would defeat the purpose.
+        return "; ".join(parts)[:900]
 
     @staticmethod
     def _generated_failing_line(
@@ -731,6 +861,27 @@ class EvidenceWorkflow:
                 )
                 return line_number, source or "<blank>"
         return None
+
+    @staticmethod
+    def _sanitize_observed_value(value: str, *, limit: int) -> str:
+        """Redact credentials while preserving the observed value itself.
+
+        `_sanitize_feedback_text` additionally rewrites anything path-shaped and any long
+        opaque token. That is right for a traceback frame and wrong for an assertion
+        diff: for a repository like platformdirs the observed value *is* a path, and for
+        many others it is a long string or hash, so the generic rules would erase exactly
+        the differential signal the repair needs. Credential, bearer-token, and known
+        provider-token redaction and control-character stripping still apply.
+        """
+        text = _CREDENTIAL_PATTERN.sub("credential=<redacted>", value)
+        text = _BEARER_PATTERN.sub("Bearer <redacted>", text)
+        text = _KNOWN_TOKEN_PATTERN.sub("<redacted-token>", text)
+        text = _CONTROL_PATTERN.sub(" ", text)
+        text = " ".join(text.split())
+        if len(text) <= limit:
+            return text
+        keep = max(0, limit - len(_TRUNCATION_MARKER))
+        return f"{text[:keep].rstrip()}{_TRUNCATION_MARKER}"
 
     @staticmethod
     def _sanitize_feedback_text(value: str, *, limit: int) -> str:

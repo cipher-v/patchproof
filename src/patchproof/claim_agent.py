@@ -135,6 +135,11 @@ class BehavioralClaim(StrictGeminiOutputModel):
 
     claim_id: str
     summary: str = Field(min_length=1, max_length=300)
+    observable_operation: str = Field(default="", max_length=300)
+    trigger_condition: str = Field(default="", max_length=300)
+    expected_head_observation: str = Field(default="", max_length=400)
+    expected_base_hypothesis: str = Field(default="", max_length=400)
+    shared_interface: str = Field(default="", max_length=256)
     preconditions: tuple[str, ...] = Field(default_factory=tuple, max_length=6)
     action: str = Field(min_length=1, max_length=500)
     expected_behavior: str = Field(min_length=1, max_length=700)
@@ -167,10 +172,29 @@ class BehavioralClaim(StrictGeminiOutputModel):
         return self
 
 
+#: The differential hypothesis fields.
+#:
+#: Before these existed, every claim field described HEAD: summary, preconditions,
+#: action, expected_behavior. There was nowhere to say what BASE was supposed to do
+#: differently and nowhere to commit to an interface, so the schema could not express a
+#: falsifiable differential hypothesis and the agent was never asked for one.
+#:
+#: `shared_interface` is the field that earns its place mechanically rather than as
+#: prose: it is validated against the deterministic BASE/HEAD symbol partition, so a
+#: claim aimed at something only HEAD defines is rejected at selection time instead of
+#: wasting all three candidate attempts. `expected_base_hypothesis` gives the semantic
+#: assessor an actual prediction to judge relatedness against.
+
+
 class BehavioralClaimDraft(StrictGeminiOutputModel):
     """Provider-visible semantic claim fields without control-plane metadata."""
 
     summary: str = Field(min_length=1, max_length=220)
+    observable_operation: str = Field(min_length=1, max_length=220)
+    trigger_condition: str = Field(min_length=1, max_length=220)
+    expected_head_observation: str = Field(min_length=1, max_length=280)
+    expected_base_hypothesis: str = Field(min_length=1, max_length=280)
+    shared_interface: str = Field(min_length=1, max_length=256)
     preconditions: tuple[str, ...] = Field(default_factory=tuple, max_length=4)
     action: str = Field(min_length=1, max_length=350)
     expected_behavior: str = Field(min_length=1, max_length=450)
@@ -242,6 +266,7 @@ class ModelUsage(BaseModel):
     output_tokens: int | None = Field(default=None, ge=0)
     total_tokens: int | None = Field(default=None, ge=0)
     cached_tokens: int | None = Field(default=None, ge=0)
+    reasoning_tokens: int | None = Field(default=None, ge=0)
     duration_seconds: float = Field(ge=0)
     provider_attempts: int = Field(default=1, ge=1, le=2)
 
@@ -529,6 +554,11 @@ class BehavioralClaimAgent:
             claim=BehavioralClaim(
                 claim_id=_DETERMINISTIC_CLAIM_ID,
                 summary=claim.summary,
+                observable_operation=claim.observable_operation,
+                trigger_condition=claim.trigger_condition,
+                expected_head_observation=claim.expected_head_observation,
+                expected_base_hypothesis=claim.expected_base_hypothesis,
+                shared_interface=claim.shared_interface,
                 preconditions=claim.preconditions,
                 action=claim.action,
                 expected_behavior=claim.expected_behavior,
@@ -550,6 +580,23 @@ class BehavioralClaimAgent:
             if (symbol.path, symbol.qualified_name) not in known_symbols:
                 raise InvalidClaimAgentOutput(
                     "claim references an affected symbol absent from deterministic context"
+                )
+        interfaces = context.interfaces
+        shared = selection.claim.shared_interface
+        if shared:
+            leaf = shared.rsplit(".", maxsplit=1)[-1]
+            shared_leaves = {
+                name.rsplit(".", maxsplit=1)[-1] for name in interfaces.present_on_both
+            }
+            if leaf in interfaces.head_only_leaf_names:
+                raise InvalidClaimAgentOutput(
+                    "claim targets an interface that exists only on HEAD; a differential "
+                    "experiment requires an interface present on both revisions"
+                )
+            if leaf not in shared_leaves:
+                raise InvalidClaimAgentOutput(
+                    "claim's shared interface is absent from the deterministic "
+                    "BASE/HEAD symbol partition"
                 )
         for citation in selection.claim.supporting_context:
             if not any(

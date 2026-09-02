@@ -7,9 +7,20 @@ from pathlib import Path, PurePosixPath
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 _SAFE_TOKEN = re.compile(r"[^\x00-\x1f\x7f]{1,300}")
+
+#: Install commands a repository may declare literally in its own `.patchproof.yaml`.
+#: These stay narrow: a repository author writing this file by hand should not be able
+#: to express anything beyond reproducing a committed lockfile.
 _ALLOWED_INSTALL_COMMANDS = {
     ("uv", "sync", "--frozen"),
     ("uv", "sync", "--frozen", "--all-groups"),
@@ -68,19 +79,42 @@ class ExecutionContract(BaseModel):
 
     version: Literal[1]
     python: Literal["3.12"]
-    install: tuple[tuple[str, ...], ...] = Field(min_length=1, max_length=2)
+    install: tuple[tuple[str, ...], ...] = Field(min_length=1, max_length=4)
     test: TestCommandContract
     allowed_test_paths: tuple[str, ...] = Field(min_length=1, max_length=4)
     timeout_seconds: float = Field(ge=0.05, le=300)
+    #: Separate budget for the repository-declared install commands. Installing a real
+    #: project from a cold cache routinely takes longer than running one test, and
+    #: sharing a single budget meant that on any substantial repository the install --
+    #: not the test -- was what timed out.
+    install_timeout_seconds: float = Field(default=900.0, ge=1.0, le=1_800.0)
 
-    @field_validator("install")
-    @classmethod
-    def validate_install_commands(
-        cls, value: tuple[tuple[str, ...], ...]
-    ) -> tuple[tuple[str, ...], ...]:
-        return tuple(
-            _validate_argv(command, allowed=_ALLOWED_INSTALL_COMMANDS) for command in value
-        )
+    #: Whether this contract's install commands came from a deterministic probe of
+    #: committed repository files rather than from a literal `.patchproof.yaml`. A
+    #: synthesized contract validates its install commands through
+    #: `patchproof.install_strategy`'s template allowlist instead of the narrow literal
+    #: set; both paths forbid model involvement and forbid free-form strings.
+    synthesized: bool = False
+
+    @model_validator(mode="after")
+    def validate_install_commands(self) -> ExecutionContract:
+        if not self.synthesized and len(self.install) > 2:
+            raise ValueError("a repository-declared contract may declare at most two installs")
+        for command in self.install:
+            if not command or len(command) > 8:
+                raise ValueError("command must contain 1-8 bounded argument tokens")
+            if any(_SAFE_TOKEN.fullmatch(token) is None for token in command):
+                raise ValueError("command must contain 1-8 bounded argument tokens")
+            if self.synthesized:
+                # Imported lazily: install_strategy imports nothing from this module, but
+                # keeping the dependency one-directional at import time avoids a cycle if
+                # that ever changes.
+                from patchproof.install_strategy import validate_probed_install_command
+
+                validate_probed_install_command(command)
+            elif command not in _ALLOWED_INSTALL_COMMANDS:
+                raise ValueError("command is not an allowed PatchProof execution template")
+        return self
 
     @field_validator("allowed_test_paths")
     @classmethod

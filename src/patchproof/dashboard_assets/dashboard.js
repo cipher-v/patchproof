@@ -1,4 +1,4 @@
-const state = { runs: [], selected: 0 };
+const state = { runs: [], selected: 0, activeRunId: null };
 
 const $ = (id) => document.getElementById(id);
 const shortSha = (value) => value ? value.slice(0, 8) : "—";
@@ -24,7 +24,13 @@ function appendIdentity(parent, label, value, href) {
 }
 
 function outcomeTone(run) {
+  if (run.status === "FAILED") return "failure";
   return run.claim_outcome === "CLAIM_SUPPORTED_FOR_SCENARIO" ? "success" : "neutral";
+}
+
+function runLabel(run) {
+  if (!["COMPLETE", "ABSTAINED"].includes(run.status)) return displayEnum(run.status);
+  return run.claim_outcome === "CLAIM_SUPPORTED_FOR_SCENARIO" ? "SUPPORTED" : run.status;
 }
 
 function renderTabs() {
@@ -45,7 +51,7 @@ function renderTabs() {
       selectRun(next);
       tabs.children[next].focus();
     });
-    const badge = node("b", outcomeTone(run), run.claim_outcome === "CLAIM_SUPPORTED_FOR_SCENARIO" ? "SUPPORTED" : "ABSTAINED");
+    const badge = node("b", outcomeTone(run), runLabel(run));
     const title = node("strong", "", `${run.event_action.toUpperCase()} · PR #${run.pr_number}`);
     title.prepend(badge);
     button.append(title, node("span", "", compactId(run.run_id)));
@@ -60,13 +66,33 @@ function selectRun(index) {
     tab.tabIndex = tabIndex === index ? 0 : -1;
   });
   renderRun(state.runs[index]);
+  state.activeRunId = state.runs[index].run_id;
+  const url = new URL(window.location.href);
+  url.searchParams.set("run", state.activeRunId);
+  window.history.replaceState({}, "", url);
 }
 
 function renderLifecycle(run) {
-  const labels = ["Webhook accepted", "Task queued", "Worker running", "Evidence stored", "Check published"];
+  const labels = ["Accepted", "Claim", "Candidate", "BASE / HEAD", "Terminal"];
+  const active = {
+    ACCEPTED: 0,
+    QUEUED: 0,
+    PREPARING_CONTEXT: 0,
+    SELECTING_CLAIM: 1,
+    GENERATING_CANDIDATE: 2,
+    RUNNING_BASE_HEAD: 3,
+    ASSESSING_SEMANTICS: 3,
+    FINALIZING: 4,
+    COMPLETE: 4,
+    ABSTAINED: 4,
+    FAILED: 4,
+  }[run.status] ?? 0;
   const rail = $("lifecycle-rail");
-  rail.replaceChildren(...labels.map((label) => node("li", "", label)));
-  if (run.publication_state !== "PUBLISHED") rail.lastElementChild.classList.add("incomplete");
+  rail.replaceChildren(...labels.map((label, index) => {
+    const item = node("li", index > active ? "incomplete" : "", label);
+    if (run.status === "FAILED" && index === active) item.classList.add("failed");
+    return item;
+  }));
 }
 
 function renderClaim(run) {
@@ -168,7 +194,7 @@ function renderRun(run) {
   appendIdentity(identities, "phase", run.phase);
   const outcome = $("run-outcome");
   outcome.className = `outcome-badge ${outcomeTone(run)}`;
-  outcome.textContent = displayEnum(run.claim_outcome || run.terminal_reason);
+  outcome.textContent = runLabel(run);
   renderLifecycle(run);
   renderClaim(run);
   renderCandidates(run);
@@ -194,26 +220,111 @@ function renderRun(run) {
   $("run-panel").hidden = false;
 }
 
-async function boot() {
+function updateMetrics() {
+  $("metric-runs").textContent = state.runs.length;
+  $("metric-checks").textContent = state.runs.filter((run) => run.publication_state === "PUBLISHED").length;
+  $("metric-hashes").textContent = state.runs.filter((run) => run.evidence_hash_verified).length;
+}
+
+function upsertRun(run) {
+  const existing = state.runs.findIndex((item) => item.run_id === run.run_id);
+  if (existing >= 0) state.runs[existing] = run;
+  else state.runs.unshift(run);
+  state.selected = state.runs.findIndex((item) => item.run_id === run.run_id);
+  state.activeRunId = run.run_id;
+  $("dashboard-status")?.remove();
+  updateMetrics();
+  renderTabs();
+  selectRun(state.selected);
+}
+
+async function loadSnapshot(preferredRunId = null) {
+  const response = await fetch("/dashboard/api/runs", { headers: { Accept: "application/json" } });
+  if (!response.ok) throw new Error(`evidence endpoint returned ${response.status}`);
+  const snapshot = await response.json();
+  state.runs = snapshot.runs || [];
+  $("scope-notice").textContent = snapshot.scope_notice;
+  updateMetrics();
+  if (!state.runs.length) {
+    const status = $("dashboard-status");
+    status.className = "loading-card";
+    status.replaceChildren(
+      node("strong", "", "No durable runs yet"),
+      node("p", "", "Submit an onboarded pull request above to create the first cloud run."),
+    );
+    return;
+  }
+  $("dashboard-status")?.remove();
+  const requested = preferredRunId || state.activeRunId;
+  const selected = requested ? state.runs.findIndex((run) => run.run_id === requested) : 0;
+  state.selected = selected >= 0 ? selected : 0;
+  renderTabs();
+  selectRun(state.selected);
+}
+
+async function fetchRun(runId) {
+  const response = await fetch(`/api/runs/${encodeURIComponent(runId)}`, {
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) throw new Error(`run status endpoint returned ${response.status}`);
+  return response.json();
+}
+
+async function pollRun(runId) {
+  while (true) {
+    const run = await fetchRun(runId);
+    upsertRun(run);
+    $("analyze-status").textContent = `Run ${compactId(runId)} · ${displayEnum(run.status)}`;
+    if (["COMPLETE", "ABSTAINED", "FAILED"].includes(run.status)) {
+      await loadSnapshot(runId);
+      return;
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 3000));
+  }
+}
+
+async function submitAnalysis(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector("button");
+  button.disabled = true;
+  $("analyze-status").textContent = "Submitting durable cloud run…";
   try {
-    const response = await fetch("/dashboard/api/runs", { headers: { Accept: "application/json" } });
-    if (!response.ok) throw new Error(`evidence endpoint returned ${response.status}`);
-    const snapshot = await response.json();
-    state.runs = snapshot.runs || [];
-    $("scope-notice").textContent = snapshot.scope_notice;
-    $("metric-runs").textContent = state.runs.length;
-    $("metric-checks").textContent = state.runs.filter((run) => run.publication_state === "PUBLISHED").length;
-    $("metric-hashes").textContent = state.runs.filter((run) => run.evidence_hash_verified).length;
-    if (!state.runs.length) throw new Error("no featured run IDs are configured");
-    $("dashboard-status").remove();
-    renderTabs();
-    renderRun(state.runs[0]);
+    const response = await fetch("/api/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ pr_url: $("pr-url").value.trim() }),
+    });
+    const document = await response.json();
+    if (!response.ok) throw new Error(document.detail || `analyze endpoint returned ${response.status}`);
+    state.activeRunId = document.run_id;
+    $("analyze-status").textContent = `Run ${compactId(document.run_id)} · ${displayEnum(document.status)}`;
+    await pollRun(document.run_id);
+  } catch (error) {
+    $("analyze-status").textContent = `Analysis could not start: ${error.message}`;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function boot() {
+  $("analyze-form").addEventListener("submit", submitAnalysis);
+  const requestedRun = new URLSearchParams(window.location.search).get("run");
+  try {
+    await loadSnapshot(requestedRun);
+    if (requestedRun && !["COMPLETE", "ABSTAINED", "FAILED"].includes(
+      state.runs.find((run) => run.run_id === requestedRun)?.status,
+    )) {
+      pollRun(requestedRun).catch((error) => {
+        $("analyze-status").textContent = `Run polling stopped: ${error.message}`;
+      });
+    }
   } catch (error) {
     const status = $("dashboard-status");
     status.className = "loading-card error-card";
     status.replaceChildren(
       node("strong", "", "Evidence is unavailable"),
-      node("p", "", `The read-only dashboard could not load its configured run projection: ${error.message}`),
+      node("p", "", `The dashboard could not load its bounded run projection: ${error.message}`),
     );
   }
 }

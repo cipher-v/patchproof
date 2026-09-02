@@ -41,6 +41,32 @@
         </div>
       </section>
 
+      <section class="analyze-bar" aria-labelledby="analyze-title">
+        <div>
+          <p class="eyebrow">START A DURABLE CLOUD RUN</p>
+          <h2 id="analyze-title">Analyze an allowed public pull request</h2>
+          <p>One run ID flows through Cloud Tasks, the private executor, and this console.</p>
+        </div>
+        <form id="analyze-form">
+          <label for="pr-url">GitHub Pull Request</label>
+          <div class="analyze-controls">
+            <input
+              id="pr-url"
+              name="pr_url"
+              type="url"
+              maxlength="300"
+              required
+              placeholder="https://github.com/owner/repo/pull/123"
+              autocomplete="url"
+            />
+            <button type="submit">Analyze</button>
+          </div>
+          <p id="analyze-status" class="analyze-status" role="status">
+            The repository must be enabled in this PatchProof deployment.
+          </p>
+        </form>
+      </section>
+
       <section class="console" aria-labelledby="console-title">
         <div class="section-heading">
           <div>

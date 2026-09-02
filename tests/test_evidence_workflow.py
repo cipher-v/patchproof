@@ -7,6 +7,7 @@ import hashlib
 import json
 import sys
 from collections import deque
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,6 +31,7 @@ from patchproof.claim_agent import (
     SupportingContextRef,
 )
 from patchproof.context_retrieval import DeterministicContextRetriever
+from patchproof.evidence import MechanicalEvidenceClassifier
 from patchproof.evidence_workflow import (
     AssertionRelation,
     EvidenceReport,
@@ -91,6 +93,11 @@ class FakeClaimModel:
             claim=(
                 BehavioralClaimDraft(
                     summary=claim.summary,
+                    observable_operation=claim.observable_operation,
+                    trigger_condition=claim.trigger_condition,
+                    expected_head_observation=claim.expected_head_observation,
+                    expected_base_hypothesis=claim.expected_base_hypothesis,
+                    shared_interface=claim.shared_interface,
                     preconditions=claim.preconditions,
                     action=claim.action,
                     expected_behavior=claim.expected_behavior,
@@ -139,12 +146,38 @@ class FakeAssessor:
         )
 
 
+class CountingSession:
+    """Count readiness and candidate executions inside one real worktree session."""
+
+    def __init__(self, owner: CountingChallenge, inner) -> None:
+        self.owner = owner
+        self.inner = inner
+
+    def prepare_environment(self, **kwargs):
+        self.owner.readiness_calls += 1
+        return self.inner.prepare_environment(**kwargs)
+
+    def run(self, **kwargs):
+        self.owner.calls += 1
+        return self.inner.run(**kwargs)
+
+    def installed_import_roots(self):
+        return self.inner.installed_import_roots()
+
+
 class CountingChallenge:
     def __init__(self, challenge: BaseHeadChallenge) -> None:
         self.inner = challenge
         self.runner = challenge.runner
         self.calls = 0
         self.readiness_calls = 0
+        self.sessions_opened = 0
+
+    @contextmanager
+    def session(self, **kwargs):
+        self.sessions_opened += 1
+        with self.inner.session(**kwargs) as inner_session:
+            yield CountingSession(self, inner_session)
 
     def prepare_environment(self, **kwargs):
         self.readiness_calls += 1
@@ -161,6 +194,11 @@ class FixedReadinessChallenge:
         self.readiness = readiness
         self.readiness_calls = 0
         self.calls = 0
+
+    @contextmanager
+    def session(self, **kwargs):
+        del kwargs
+        yield self
 
     def prepare_environment(self, **kwargs):
         del kwargs
@@ -190,6 +228,11 @@ def _claim_selection(retriever: DeterministicContextRetriever, history) -> Claim
         claim=BehavioralClaim(
             claim_id="claim-selected-behavior",
             summary="Workspace resolution prefers the most-specific candidate path.",
+            observable_operation="WorkspaceResolver.choose_workspace(candidates)",
+            trigger_condition="Two or more candidate paths differ in depth and length.",
+            expected_head_observation="The deepest, longest candidate path is returned.",
+            expected_base_hypothesis="The first candidate is returned regardless of depth.",
+            shared_interface="WorkspaceResolver.choose_workspace",
             preconditions=("Two candidate workspace paths are available.",),
             action="Resolve one workspace from the candidates.",
             expected_behavior="The deepest and longest path is returned.",
@@ -262,12 +305,39 @@ def _execution_feedback(
     challenge = SimpleNamespace(
         base=base,
         head=head,
+        # Derived with the real classifier's own predicate rather than hard-coded, so
+        # this helper cannot drift away from how evidence is actually classified.
         assessment=SimpleNamespace(
-            mechanical_status=MechanicalEvidenceStatus.ENVIRONMENTAL,
-            pattern=DifferentialPattern.NOT_COMPARABLE,
+            mechanical_status=_mechanical_status(base_status, head_status),
+            pattern=_pattern(base_status, head_status),
         ),
     )
     return EvidenceWorkflow._repair_feedback(attempt=attempt, challenge=challenge)
+
+
+def _mechanical_status(
+    base_status: TestExecutionStatus, head_status: TestExecutionStatus
+) -> MechanicalEvidenceStatus:
+    base = SimpleNamespace(status=base_status)
+    head = SimpleNamespace(status=head_status)
+    if MechanicalEvidenceClassifier._is_one_sided_uncaught_exception(base=base, head=head):
+        return MechanicalEvidenceStatus.UNCAUGHT_EXCEPTION_ON_ONE_REVISION
+    if {base_status, head_status} <= {
+        TestExecutionStatus.PASSED,
+        TestExecutionStatus.ASSERTION_FAILED,
+    }:
+        return MechanicalEvidenceStatus.NON_DISCRIMINATING
+    return MechanicalEvidenceStatus.ENVIRONMENTAL
+
+
+def _pattern(
+    base_status: TestExecutionStatus, head_status: TestExecutionStatus
+) -> DifferentialPattern:
+    if base_status is head_status is TestExecutionStatus.PASSED:
+        return DifferentialPattern.BOTH_PASSED
+    if base_status is head_status is TestExecutionStatus.ASSERTION_FAILED:
+        return DifferentialPattern.BOTH_ASSERTION_FAILED
+    return DifferentialPattern.NOT_COMPARABLE
 
 
 def test_execution_error_feedback_contains_bounded_exception_and_generated_line() -> None:
@@ -290,7 +360,7 @@ def test_execution_error_feedback_contains_bounded_exception_and_generated_line(
     assert "generated_line=2:call_api()" in joined
     assert "same_exception_on_base_and_head=true" in joined
     assert len(feedback.observations) == 4
-    assert all(len(item) <= 500 for item in feedback.observations)
+    assert all(len(item) <= 900 for item in feedback.observations)
 
 
 def test_execution_feedback_truncates_and_redacts_untrusted_values_without_logs() -> None:
@@ -324,7 +394,7 @@ def test_execution_feedback_truncates_and_redacts_untrusted_values_without_logs(
     assert "abcdefghijklmnopqrstuvwxyz0123456789" not in joined
     assert "credential=<redacted>" in joined
     assert "WITHHELD_ORACLE" not in joined
-    assert all(len(item) <= 500 for item in feedback.observations)
+    assert all(len(item) <= 900 for item in feedback.observations)
 
 
 def test_one_sided_domain_exception_feedback_preserves_conservative_classification() -> None:
@@ -339,8 +409,12 @@ def test_one_sided_domain_exception_feedback_preserves_conservative_classificati
     assert "BASE status=TEST_ERROR" in joined
     assert "HEAD status=PASSED" in joined
     assert "DomainValidationError" in joined
-    assert "explicit deterministic pytest assertion/failure" in joined
-    assert "mechanical_status=ENVIRONMENTAL" in joined
+    # The repair is told to convert the outcome into an observed value, and is told so
+    # under a status that names what actually happened rather than blaming the machine.
+    assert "assert observed ==" in joined
+    assert "Never catch Exception" in joined
+    assert "mechanical_status=UNCAUGHT_EXCEPTION_ON_ONE_REVISION" in joined
+    assert "ENVIRONMENTAL" not in joined
 
 
 def test_non_discriminating_candidate_repairs_then_persists_and_publication_retries_only(
@@ -667,3 +741,96 @@ def test_github_app_provider_mints_and_caches_short_lived_installation_token(
     assert len(requests) == 1
     assert requests[0].url.path == "/app/installations/4242/access_tokens"
     assert requests[0].headers["authorization"] == "Bearer header.payload.signature"
+
+
+_ASSERTION_DETAIL = """def test_patchproof_generated_behavior():
+        result = normalize("owner/repo.git")
+>       assert result == "owner/repo"
+E       AssertionError: assert 'owner/repo.git' == 'owner/repo'
+E         - owner/repo
+E         + owner/repo.git
+
+tests/patchproof_generated/test_patchproof_generated_initial.py:5: AssertionError
+"""
+
+
+def test_repair_after_both_passed_learns_that_the_input_did_not_discriminate() -> None:
+    """Regression: this feedback previously contained no observed value at all."""
+    feedback = _execution_feedback(
+        base_status=TestExecutionStatus.PASSED,
+        head_status=TestExecutionStatus.PASSED,
+        base_detail=None,
+        head_detail=None,
+    )
+
+    joined = "\n".join(feedback.observations)
+    assert "does not reach the changed behavior" in joined
+    assert "do not restate" in joined
+
+
+def test_repair_after_both_assertion_failed_receives_the_observed_values() -> None:
+    feedback = _execution_feedback(
+        base_status=TestExecutionStatus.ASSERTION_FAILED,
+        head_status=TestExecutionStatus.ASSERTION_FAILED,
+        base_detail=_ASSERTION_DETAIL,
+        head_detail=_ASSERTION_DETAIL,
+    )
+
+    joined = "\n".join(feedback.observations)
+    # The operands of the failed comparison are the whole point.
+    assert "owner/repo.git" in joined
+    assert "observed=" in joined
+    assert "the expected value is wrong" in joined
+
+
+def test_observed_values_survive_sanitization_that_would_erase_them() -> None:
+    """A path-shaped or long observed value must not be redacted into uselessness."""
+    detail = (
+        "E       AssertionError: assert '/home/user/.local/share/app' == "
+        "'/home/user/.local/share/other'\n"
+    )
+    feedback = _execution_feedback(
+        base_status=TestExecutionStatus.ASSERTION_FAILED,
+        head_status=TestExecutionStatus.ASSERTION_FAILED,
+        base_detail=detail,
+        head_detail=detail,
+    )
+
+    joined = "\n".join(feedback.observations)
+    assert "/home/user/.local/share/app" in joined
+    assert "<path>" not in joined
+
+
+def test_credentials_are_still_redacted_from_observed_values() -> None:
+    detail = "E       AssertionError: assert token='super-secret-value' == 'x'\n"
+    feedback = _execution_feedback(
+        base_status=TestExecutionStatus.ASSERTION_FAILED,
+        head_status=TestExecutionStatus.ASSERTION_FAILED,
+        base_detail=detail,
+        head_detail=detail,
+    )
+
+    joined = "\n".join(feedback.observations)
+    assert "super-secret-value" not in joined
+    assert "credential=<redacted>" in joined
+
+
+def test_repository_frame_is_reported_and_the_generated_frame_is_not() -> None:
+    detail = (
+        "src/package/urls.py:112: in replace\n"
+        "    host = authority[:index]\n"
+        "E   IndexError: string index out of range\n"
+        "tests/patchproof_generated/test_patchproof_generated_initial.py:7: in "
+        "test_patchproof_generated_behavior\n"
+    )
+    feedback = _execution_feedback(
+        base_status=TestExecutionStatus.TEST_ERROR,
+        head_status=TestExecutionStatus.PASSED,
+        base_detail=detail,
+        head_detail=None,
+    )
+
+    joined = "\n".join(feedback.observations)
+    assert "repository_frame=" in joined
+    assert "src/package/urls.py:112" in joined
+    assert "test_patchproof_generated_initial.py:7: in" not in joined

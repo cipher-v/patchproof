@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import builtins
 import copy
 import hashlib
 import json
@@ -45,6 +46,13 @@ _BLOCKED_IMPORT_ROOTS = {
     "urllib",
 }
 _FORBIDDEN_CALL_NAMES = {"__import__", "compile", "eval", "exec"}
+#: Exception types too broad to express a specific behavioral expectation. Catching one
+#: of these -- or asserting that one is raised -- turns any failure anywhere into an
+#: apparent result, which is precisely the fishing behavior the exception-to-observable
+#: repair strategy must not be allowed to degrade into.
+_OVERBROAD_EXCEPTION_NAMES = {"BaseException", "Exception"}
+#: Statements that discard an outcome instead of recording it for an assertion.
+_OUTCOME_DISCARDING_BODIES = (ast.Pass, ast.Continue, ast.Break)
 _FORBIDDEN_ATTRIBUTE_CALLS = {
     ("os", "popen"),
     ("os", "system"),
@@ -111,6 +119,10 @@ class CandidateIssueCode(StrEnum):
     DUPLICATE_CANDIDATE_ID = "DUPLICATE_CANDIDATE_ID"
     DUPLICATE_CANDIDATE_SOURCE = "DUPLICATE_CANDIDATE_SOURCE"
     NO_BEHAVIORAL_REPAIR_CHANGE = "NO_BEHAVIORAL_REPAIR_CHANGE"
+    BROAD_EXCEPTION_HANDLER = "BROAD_EXCEPTION_HANDLER"
+    UNGROUNDED_EXCEPTION_TYPE = "UNGROUNDED_EXCEPTION_TYPE"
+    SWALLOWED_OUTCOME = "SWALLOWED_OUTCOME"
+    HEAD_ONLY_INTERFACE = "HEAD_ONLY_INTERFACE"
 
 
 class CandidateTestProposal(StrictGeminiOutputModel):
@@ -167,12 +179,15 @@ class CandidateFeedback(BaseModel):
 
     category: str = Field(min_length=1, max_length=80)
     summary: str = Field(min_length=1, max_length=1_500)
-    observations: tuple[str, ...] = Field(default_factory=tuple, max_length=4)
+    # Five observations of up to 900 characters. The previous budget of four at 500 was
+    # too small to carry a pytest assertion diff, which is why repairs after BOTH_PASSED
+    # and BOTH_ASSERTION_FAILED were effectively blind.
+    observations: tuple[str, ...] = Field(default_factory=tuple, max_length=5)
 
     @field_validator("observations")
     @classmethod
     def validate_observations(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        if any(not item.strip() or len(item) > 500 for item in value):
+        if any(not item.strip() or len(item) > 900 for item in value):
             raise ValueError("repair observations must contain bounded non-empty text")
         return value
 
@@ -619,10 +634,19 @@ class CandidateGenerationStateError(RuntimeError):
 class CandidateTestValidator:
     """Turn model source into an artifact only after deterministic safety checks."""
 
-    def __init__(self, *, max_source_bytes: int = 16_000) -> None:
+    def __init__(
+        self,
+        *,
+        max_source_bytes: int = 16_000,
+        installed_import_roots: frozenset[str] = frozenset(),
+    ) -> None:
         if max_source_bytes <= 0:
             raise ValueError("candidate source byte budget must be positive")
         self.max_source_bytes = max_source_bytes
+        #: Top-level names importable in the prepared revision workspace. Empty when the
+        #: environment has not been introspected, which leaves context-derived grounding
+        #: in force. See `patchproof.environment_introspection`.
+        self.installed_import_roots = installed_import_roots
 
     def validate(
         self,
@@ -676,6 +700,8 @@ class CandidateTestValidator:
 
         imported_roots = self._validate_imports(tree=tree, context=context)
         self._validate_calls(tree)
+        self._validate_exception_handling(tree)
+        self._validate_shared_interface(tree, context)
         artifact = TestArtifact.from_text(
             relative_path=proposal.target_path,
             node_id=f"{proposal.target_path}::{proposal.test_function}",
@@ -692,7 +718,7 @@ class CandidateTestValidator:
         )
 
     def _validate_imports(self, *, tree: ast.Module, context: PullRequestContext) -> set[str]:
-        allowed_roots = self._allowed_import_roots(context)
+        allowed_roots = self._allowed_import_roots(context) | self.installed_import_roots
         imported_roots: set[str] = set()
         for node in ast.walk(tree):
             modules: list[str] = []
@@ -748,7 +774,148 @@ class CandidateTestValidator:
                 )
 
     @staticmethod
+    def _validate_shared_interface(tree: ast.Module, context: PullRequestContext) -> None:
+        """Reject a candidate that depends on a symbol only HEAD has.
+
+        A test can only produce assertion evidence if it runs on both revisions. If it
+        imports or calls something introduced by the pull request, BASE cannot do
+        anything except fail to import or fail to resolve an attribute -- which is an
+        error, not an assertion, and demonstrates only that a new symbol exists.
+
+        This is the Rich #3938 failure shape from the sealed unseen holdout, expressed
+        as a mechanical rule rather than a repository-specific one: the check reads the
+        deterministic BASE/HEAD symbol partition and knows nothing about any project.
+
+        Rejecting here can only ever reduce support, never manufacture it, and the
+        rejection reaches the repair as actionable feedback naming the offending symbol.
+        """
+        head_only = context.interfaces.head_only_leaf_names
+        if not head_only:
+            return
+        for node in ast.walk(tree):
+            name: str | None = None
+            if isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    if alias.name in head_only:
+                        name = alias.name
+                        break
+            elif isinstance(node, ast.Attribute) and node.attr in head_only:
+                name = node.attr
+            if name is not None:
+                CandidateTestValidator._reject(
+                    CandidateIssueCode.HEAD_ONLY_INTERFACE,
+                    f"{name!r} exists only on HEAD; test observable behavior through an "
+                    "interface present on both revisions instead",
+                )
+
+    @staticmethod
+    def _validate_exception_handling(tree: ast.Module) -> None:
+        """Keep exception handling narrow, grounded, and observable.
+
+        The repair agent is deliberately taught to convert a one-sided escaping
+        exception into an explicit observed value (see
+        `evidence_workflow._EXCEPTION_TO_OBSERVABLE_GUIDANCE`), because that turns a real
+        behavioral difference into admissible assertion evidence. That instruction is
+        only safe if the degenerate forms of it are mechanically impossible: catching
+        everything, catching something the test never imported, or catching an outcome
+        and discarding it would let a candidate manufacture a difference rather than
+        observe one.
+        """
+        import_bindings = _import_bindings(tree)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ExceptHandler):
+                CandidateTestValidator._validate_handler(node, import_bindings)
+            elif isinstance(node, ast.Call):
+                CandidateTestValidator._validate_raises_call(node)
+
+    @staticmethod
+    def _validate_handler(handler: ast.ExceptHandler, import_bindings: dict[str, str]) -> None:
+        if handler.type is None:
+            CandidateTestValidator._reject(
+                CandidateIssueCode.BROAD_EXCEPTION_HANDLER,
+                "a bare except clause cannot express a specific behavioral expectation",
+            )
+        for name in CandidateTestValidator._exception_names(handler.type):
+            leaf = name.rsplit(".", maxsplit=1)[-1]
+            if leaf in _OVERBROAD_EXCEPTION_NAMES:
+                CandidateTestValidator._reject(
+                    CandidateIssueCode.BROAD_EXCEPTION_HANDLER,
+                    f"catching {name!r} is too broad to be claim-scoped evidence",
+                )
+            if not CandidateTestValidator._is_grounded_exception(name, import_bindings):
+                CandidateTestValidator._reject(
+                    CandidateIssueCode.UNGROUNDED_EXCEPTION_TYPE,
+                    f"exception type {name!r} is neither a builtin nor imported by the test",
+                )
+        if all(isinstance(statement, _OUTCOME_DISCARDING_BODIES) for statement in handler.body):
+            CandidateTestValidator._reject(
+                CandidateIssueCode.SWALLOWED_OUTCOME,
+                "an except clause must record the outcome for an assertion, not discard it",
+            )
+
+    @staticmethod
+    def _validate_raises_call(node: ast.Call) -> None:
+        """`pytest.raises(Exception)` is the same fishing pattern in another shape."""
+        is_raises = (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "raises"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "pytest"
+        )
+        if not is_raises or not node.args:
+            return
+        for name in CandidateTestValidator._exception_names(node.args[0]):
+            if name.rsplit(".", maxsplit=1)[-1] in _OVERBROAD_EXCEPTION_NAMES:
+                CandidateTestValidator._reject(
+                    CandidateIssueCode.BROAD_EXCEPTION_HANDLER,
+                    f"pytest.raises({name}) is too broad to be claim-scoped evidence",
+                )
+
+    @staticmethod
+    def _exception_names(node: ast.expr | None) -> tuple[str, ...]:
+        """Return the identifiers named by an exception expression."""
+        if node is None:
+            return ()
+        if isinstance(node, ast.Tuple):
+            names: list[str] = []
+            for element in node.elts:
+                names.extend(CandidateTestValidator._exception_names(element))
+            return tuple(names)
+        if isinstance(node, ast.Name):
+            return (node.id,)
+        if isinstance(node, ast.Attribute):
+            parts = [node.attr]
+            value = node.value
+            while isinstance(value, ast.Attribute):
+                parts.append(value.attr)
+                value = value.value
+            if isinstance(value, ast.Name):
+                parts.append(value.id)
+                return (".".join(reversed(parts)),)
+            return (node.attr,)
+        return ()
+
+    @staticmethod
+    def _is_grounded_exception(name: str, import_bindings: dict[str, str]) -> bool:
+        """Accept builtin exceptions and anything the candidate actually imported."""
+        root = name.split(".", maxsplit=1)[0]
+        if root in import_bindings:
+            return True
+        if "." in name:
+            return False
+        builtin = getattr(builtins, name, None)
+        return isinstance(builtin, type) and issubclass(builtin, BaseException)
+
+    @staticmethod
     def _allowed_import_roots(context: PullRequestContext) -> set[str]:
+        """Roots inferable from the context bundle alone.
+
+        This is a floor, not the whole grounding set. It cannot see the repository's
+        third-party runtime dependencies, so on its own it rejects candidates that
+        import a package the project genuinely requires -- the cattrs `attrs`
+        rejection in the sealed unseen holdout. `CandidateTestValidator` unions this
+        with the roots actually installed in the prepared workspace.
+        """
         roots = set(sys.stdlib_module_names)
         roots.add("pytest")
         paths = {file.path for file in context.changed_files}

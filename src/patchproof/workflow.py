@@ -61,6 +61,7 @@ class PublicationState(StrEnum):
     PUBLISHED = "PUBLISHED"
     RETRYABLE_FAILURE = "RETRYABLE_FAILURE"
     TERMINAL_FAILURE = "TERMINAL_FAILURE"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
 
 
 class RevisionState(StrEnum):
@@ -221,6 +222,7 @@ _PUBLICATION_TRANSITIONS: dict[PublicationState, frozenset[PublicationState]] = 
             PublicationState.PUBLISHED,
             PublicationState.RETRYABLE_FAILURE,
             PublicationState.TERMINAL_FAILURE,
+            PublicationState.NOT_APPLICABLE,
         }
     ),
     PublicationState.RETRYABLE_FAILURE: frozenset(
@@ -233,6 +235,7 @@ _PUBLICATION_TRANSITIONS: dict[PublicationState, frozenset[PublicationState]] = 
     ),
     PublicationState.PUBLISHED: frozenset({PublicationState.PUBLISHED}),
     PublicationState.TERMINAL_FAILURE: frozenset({PublicationState.TERMINAL_FAILURE}),
+    PublicationState.NOT_APPLICABLE: frozenset({PublicationState.NOT_APPLICABLE}),
 }
 
 

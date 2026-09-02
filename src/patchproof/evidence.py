@@ -66,6 +66,20 @@ class MechanicalEvidenceClassifier:
                     f"BASE={base.status}, HEAD={head.status}"
                 ),
             )
+        if self._is_one_sided_uncaught_exception(base=base, head=head):
+            # Still not comparable and still never support: an escaping exception is not
+            # an assertion. Reported separately from ENVIRONMENTAL because the two mean
+            # opposite things to a repair, and because counting them together
+            # misattributes agent behavior to infrastructure.
+            return EvidenceAssessment(
+                mechanical_status=MechanicalEvidenceStatus.UNCAUGHT_EXCEPTION_ON_ONE_REVISION,
+                pattern=DifferentialPattern.NOT_COMPARABLE,
+                reason=(
+                    "exactly one revision let an exception escape the generated test while "
+                    f"the other produced an ordinary outcome: BASE={base.status}, "
+                    f"HEAD={head.status}; an escaping exception is not assertion evidence"
+                ),
+            )
         if statuses & _ENVIRONMENTAL_STATUSES:
             return EvidenceAssessment(
                 mechanical_status=MechanicalEvidenceStatus.ENVIRONMENTAL,
@@ -129,6 +143,14 @@ class MechanicalEvidenceClassifier:
                 "the identical selected test passed on BASE and asserted unsuccessfully on HEAD; "
                 "semantic regression relevance has not been assessed"
             ),
+        )
+
+    @staticmethod
+    def _is_one_sided_uncaught_exception(*, base: ExecutionResult, head: ExecutionResult) -> bool:
+        """Detect a TEST_ERROR on exactly one side against an ordinary outcome."""
+        ordinary = {TestExecutionStatus.PASSED, TestExecutionStatus.ASSERTION_FAILED}
+        return (base.status is TestExecutionStatus.TEST_ERROR and head.status in ordinary) or (
+            head.status is TestExecutionStatus.TEST_ERROR and base.status in ordinary
         )
 
     @staticmethod

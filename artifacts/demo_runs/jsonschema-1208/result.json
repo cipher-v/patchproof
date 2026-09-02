@@ -1,0 +1,13 @@
+{
+  "base_sha": "256dadd3539861ae696c03805923eb4097b871f9",
+  "candidate_attempt_count": 1,
+  "candidate_evaluation_count": 1,
+  "case_id": "jsonschema-1208-enum-equality",
+  "completed_at": "2026-08-30T16:12:06.901804+00:00",
+  "final_mechanical": "DISCRIMINATING",
+  "final_outcome": "CLAIM_SUPPORTED_FOR_SCENARIO",
+  "head_sha": "9a3d4a770813484be066ead99edf2e779b72362a",
+  "pr_url": "https://github.com/python-jsonschema/jsonschema/pull/1208",
+  "run_id": "0d710d8c-b8bb-4eca-a014-eb8a7065f547",
+  "terminal_status": "CLAIM_SUPPORTED_FOR_SCENARIO"
+}

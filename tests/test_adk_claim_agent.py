@@ -27,6 +27,7 @@ from patchproof.claim_agent import (
 from patchproof.context_retrieval import PullRequestContext, RetrievalStats
 from patchproof.gemini_provider import GeminiProviderConfig, GeminiProviderSurface
 from patchproof.model_reliability import BoundedRetryingModel
+from patchproof.reasoning_budget import AgentTask, budget_for
 
 
 def _request() -> ClaimAgentInput:
@@ -65,14 +66,14 @@ def test_adk_agent_is_one_stateless_tool_free_structured_agent() -> None:
     assert model.agent.tools == []
     assert model.agent.timeout == 60.0
     assert model.agent.generate_content_config.temperature == 0.1
+    budget = budget_for(AgentTask.CLAIM_SELECTION)
     assert (
         model.agent.generate_content_config.max_output_tokens
         == DEFAULT_CLAIM_MAX_OUTPUT_TOKENS
-        == 2_048
+        == budget.max_output_tokens
     )
     assert (
-        model.agent.generate_content_config.thinking_config.thinking_level
-        is types.ThinkingLevel.LOW
+        model.agent.generate_content_config.thinking_config.thinking_level is budget.thinking_level
     )
     assert "UNTRUSTED DATA" in CLAIM_AGENT_INSTRUCTION
     assert "no tools" in CLAIM_AGENT_INSTRUCTION

@@ -108,11 +108,38 @@ class EnvironmentReadinessStatus(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class EnvironmentSetupDiagnostic:
+    """Bounded, sanitized facts from one failed deterministic install command."""
+
+    reason: str
+    argv: tuple[str, ...]
+    cwd: str
+    exit_code: int | None
+    duration_seconds: float
+    stdout: str = ""
+    stderr: str = ""
+    timed_out: bool = False
+    start_error: str | None = None
+    environment: tuple[tuple[str, str], ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.reason or len(self.reason) > 2_000:
+            raise ValueError("setup diagnostic reason must be bounded and non-empty")
+        if not self.argv or len(self.argv) > 8:
+            raise ValueError("setup diagnostic argv must contain 1-8 tokens")
+        if len(self.cwd) > 2_000 or self.duration_seconds < 0:
+            raise ValueError("setup diagnostic cwd or duration is invalid")
+        if len(self.stdout) > 4_000 or len(self.stderr) > 4_000:
+            raise ValueError("setup diagnostic output exceeds its bounded limit")
+
+
+@dataclass(frozen=True, slots=True)
 class EnvironmentReadiness:
     """Result of validating repository-declared setup before candidate generation."""
 
     status: EnvironmentReadinessStatus
     reason: str
+    setup_diagnostic: EnvironmentSetupDiagnostic | None = None
 
     @property
     def ready(self) -> bool:
@@ -163,6 +190,19 @@ class MechanicalEvidenceStatus(StrEnum):
     NON_DISCRIMINATING = "NON_DISCRIMINATING"
     INVALID_TEST = "INVALID_TEST"
     ENVIRONMENTAL = "ENVIRONMENTAL"
+    #: Exactly one revision let an exception escape the generated test while the other
+    #: produced an ordinary outcome. This is NOT support and can never be upgraded to
+    #: support: an escaping exception is not an assertion, so the pair is not comparable
+    #: evidence. It is distinguished from ENVIRONMENTAL because the two mean opposite
+    #: things to a repair. ENVIRONMENTAL says the environment is broken and the
+    #: experiment never happened. This says the experiment reached the code and observed
+    #: a real difference, but expressed it in a shape PatchProof cannot admit -- the test
+    #: must convert the exception into an explicit observed value and assert on it.
+    #:
+    #: In the sealed unseen holdout, Starlette #3317 and Rich #3938 both ended here while
+    #: being reported as ENVIRONMENTAL, which both understated the agent's performance and
+    #: sent the repair a misleading instruction.
+    UNCAUGHT_EXCEPTION_ON_ONE_REVISION = "UNCAUGHT_EXCEPTION_ON_ONE_REVISION"
     COUNTERFACTUAL_NOT_APPLICABLE = "COUNTERFACTUAL_NOT_APPLICABLE"
 
 

@@ -9,6 +9,7 @@ from pathlib import Path
 from patchproof.execution_runtime import (
     BoundedSubprocessRunner,
     ChildProcessEnvironmentPolicy,
+    sanitize_process_output,
 )
 
 
@@ -28,7 +29,10 @@ def test_child_environment_uses_an_allowlist_and_isolated_runtime_paths(
     assert environment["PATH"] == str(Path(sys.executable).parent)
     assert environment["HOME"].startswith(str(runtime_root.resolve()))
     assert environment["UV_CACHE_DIR"].startswith(str(runtime_root.resolve()))
-    assert environment["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1"
+    # Autoload must stay enabled: a repository's own conftest.py imports its declared
+    # plugins, and its addopts reference their options. Interfering plugins are
+    # disabled by name in pytest_runner.DISABLED_PYTEST_PLUGINS instead.
+    assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD" not in environment
     assert (
         not {
             "GOOGLE_API_KEY",
@@ -62,8 +66,10 @@ def test_process_output_is_streamed_into_a_hard_bounded_buffer(
     assert result.returncode == 0
     assert len(result.stdout) <= 1_000
     assert len(result.stderr) <= 1_000
-    assert result.stdout.endswith("... [output truncated by PatchProof]")
-    assert result.stderr.endswith("... [output truncated by PatchProof]")
+    assert "middle output omitted by PatchProof" in result.stdout
+    assert "middle output omitted by PatchProof" in result.stderr
+    assert result.stdout.endswith("o" * 20)
+    assert result.stderr.endswith("e" * 20)
 
 
 def test_process_timeout_terminates_promptly_and_returns_only_bounded_facts(
@@ -106,3 +112,21 @@ def test_process_start_failure_does_not_persist_os_error_details(
     assert result.returncode is None
     assert result.start_error == "process could not start"
     assert result.stdout == result.stderr == ""
+
+
+def test_setup_output_sanitization_redacts_credentials_and_stays_bounded() -> None:
+    value = (
+        "token=super-secret-value\nBearer signed-value\n"
+        + ("x" * 10_000)
+        + "\nterminal build cause"
+    )
+
+    sanitized = sanitize_process_output(value, maximum_chars=500)
+
+    assert "super-secret-value" not in sanitized
+    assert "signed-value" not in sanitized
+    assert "credential=<redacted>" in sanitized
+    assert "Bearer <redacted>" in sanitized
+    assert len(sanitized) <= 500
+    assert "middle output omitted by PatchProof" in sanitized
+    assert sanitized.endswith("terminal build cause")
