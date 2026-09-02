@@ -51,6 +51,8 @@ def _prepare_artifacts(
     *,
     public_document: dict[str, Any] | None = None,
     working_source_hash: str = "a" * 64,
+    repository_cache: Path = RUNNER.REPOSITORY_CACHE,
+    workspace_root: Path = RUNNER.WORKSPACE_ROOT,
 ) -> dict[str, Any]:
     document = public_document or _public_document()
     public_bytes = RUNNER._canonical_bytes(document)
@@ -63,6 +65,8 @@ def _prepare_artifacts(
         "sealed_integrity_sha256": "b" * 64,
         "public_document_sha256": hashlib.sha256(public_bytes).hexdigest(),
         "frozen_source_identity": {"working_src_sha256": working_source_hash},
+        "repository_cache_path": str(repository_cache.resolve()),
+        "workspace_root_path": str(workspace_root.resolve()),
         "model_calls": 0,
     }
     RUNNER._atomic_write(artifact_root / "public_cases.json", public_bytes)
@@ -95,6 +99,38 @@ def test_prepare_model_tripwire_and_phase_boundary() -> None:
 
     prepare_source = RUNNER.prepare.__code__.co_names
     assert "AdkGeminiClaimInvestigator" not in prepare_source
+
+
+def test_windows_runtime_defaults_are_short_deterministic_temp_paths() -> None:
+    environment = {"TEMP": "C:/Temp"}
+
+    first = RUNNER._default_runtime_paths(platform_name="nt", environment=environment)
+    second = RUNNER._default_runtime_paths(platform_name="nt", environment=environment)
+
+    assert first == second
+    assert first[0].name == "patchproof-fresh-eval-repositories"
+    assert first[1].name == "fe"
+    assert first[0].parent == first[1].parent == Path("C:/Temp").resolve()
+    assert not first[0].is_relative_to(RUNNER.ARTIFACT_ROOT)
+
+
+def test_detected_tests_must_be_excluded_while_sealed_manual_exclusions_remain_valid() -> None:
+    manual = SimpleNamespace(
+        case_id="manual-typing-test",
+        excluded_paths=("typing-examples/baseline.py",),
+    )
+    RUNNER._verify_changed_test_exclusions(manual, ())
+
+    with pytest.raises(RUNNER.SealedHarnessError, match="not excluded"):
+        RUNNER._verify_changed_test_exclusions(manual, ("tests/test_behavior.py",))
+
+
+def test_repository_index_priorities_include_only_supported_python_source_paths() -> None:
+    case = SimpleNamespace(
+        production_files_changed=("src/package/runtime.py", "src/package/api.pyi")
+    )
+
+    assert RUNNER._priority_paths(case) == frozenset({"src/package/runtime.py"})
 
 
 @pytest.mark.parametrize(
@@ -185,7 +221,14 @@ def test_run_is_label_blind_and_uses_current_product_wiring(
     context_json = '{"context":"stable"}'
     document = _public_document(context_json)
     document["cases"] = document["cases"][:2]
-    _prepare_artifacts(artifact_root, public_document=document)
+    repository_cache = writable_test_directory / "cache"
+    workspace_root = writable_test_directory / "workspaces"
+    _prepare_artifacts(
+        artifact_root,
+        public_document=document,
+        repository_cache=repository_cache,
+        workspace_root=workspace_root,
+    )
     captured: dict[str, Any] = {}
 
     monkeypatch.setattr(
@@ -282,8 +325,8 @@ def test_run_is_label_blind_and_uses_current_product_wiring(
     raw = RUNNER.run(
         project_root=ROOT,
         artifact_root=artifact_root,
-        repository_cache=writable_test_directory / "cache",
-        workspace_root=writable_test_directory / "workspaces",
+        repository_cache=repository_cache,
+        workspace_root=workspace_root,
         inter_case_delay_seconds=0,
     )
 
@@ -304,6 +347,8 @@ def test_run_is_label_blind_and_uses_current_product_wiring(
     )
     assert captured["live_case"]["claim_investigator"] is not None
     assert captured["live_case"]["model_name"] == RUNNER.MODEL_NAME
+    assert raw["repository_cache_path"] == str(repository_cache.resolve())
+    assert raw["workspace_root_path"] == str(workspace_root.resolve())
     events = [
         json.loads(line)["event"]
         for line in (artifact_root / "live" / "journal.jsonl").read_text().splitlines()

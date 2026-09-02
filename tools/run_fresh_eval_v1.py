@@ -41,8 +41,6 @@ INTEGRITY_PATH = SEALED_ROOT / "integrity.json"
 ARTIFACT_ROOT = PROJECT_ROOT / ".patchproof" / "fresh-eval-v1-sealed"
 PUBLIC_CASES_PATH = ARTIFACT_ROOT / "public_cases.json"
 PREPARE_METADATA_PATH = ARTIFACT_ROOT / "prepare_metadata.json"
-REPOSITORY_CACHE = ARTIFACT_ROOT / "repositories"
-WORKSPACE_ROOT = ARTIFACT_ROOT / "workspaces"
 LIVE_ROOT = ARTIFACT_ROOT / "live"
 JOURNAL_PATH = LIVE_ROOT / "journal.jsonl"
 RAW_RESULTS_PATH = LIVE_ROOT / "raw_results.json"
@@ -66,6 +64,24 @@ _FORBIDDEN_PUBLIC_KEYS = frozenset(
 
 class SealedHarnessError(RuntimeError):
     """Fail-closed error raised by the external sealed harness."""
+
+
+def _default_runtime_paths(
+    *,
+    platform_name: str = os.name,
+    environment: Mapping[str, str] = os.environ,
+) -> tuple[Path, Path]:
+    """Choose short deterministic disposable roots without moving durable artifacts."""
+    if platform_name == "nt":
+        temp_value = environment.get("TEMP") or environment.get("TMP")
+        if not temp_value:
+            raise SealedHarnessError("Windows TEMP is unavailable for sealed evaluation")
+        temp_root = Path(temp_value).resolve()
+        return temp_root / "patchproof-fresh-eval-repositories", temp_root / "fe"
+    return ARTIFACT_ROOT / "repositories", ARTIFACT_ROOT / "workspaces"
+
+
+REPOSITORY_CACHE, WORKSPACE_ROOT = _default_runtime_paths()
 
 
 class PublicCase(BaseModel):
@@ -125,6 +141,8 @@ class PrepareMetadata(BaseModel):
     sealed_integrity_sha256: str = Field(pattern=r"[0-9a-f]{64}")
     public_document_sha256: str = Field(pattern=r"[0-9a-f]{64}")
     frozen_source_identity: dict[str, Any]
+    repository_cache_path: str
+    workspace_root_path: str
     model_calls: Literal[0]
 
 
@@ -307,11 +325,24 @@ def _case_with_context(document: dict[str, Any], context_sha256: str) -> dict[st
     return {**document, "kind": str(document["kind"]), "context_sha256": context_sha256}
 
 
+def _verify_changed_test_exclusions(case: Any, detected: tuple[str, ...]) -> None:
+    missing = tuple(sorted(set(detected) - set(case.excluded_paths)))
+    if missing:
+        raise SealedHarnessError(
+            f"changed Python tests are not excluded for {case.case_id}: {missing!r}"
+        )
+
+
+def _priority_paths(case: Any) -> frozenset[str]:
+    return frozenset(path for path in case.production_files_changed if path.endswith(".py"))
+
+
 def prepare(
     *,
     project_root: Path = PROJECT_ROOT,
     artifact_root: Path = ARTIFACT_ROOT,
     repository_cache: Path = REPOSITORY_CACHE,
+    workspace_root: Path = WORKSPACE_ROOT,
 ) -> dict[str, Any]:
     """Verify and materialize the deterministic label-blind inference gate."""
     live_root = artifact_root / "live"
@@ -324,12 +355,10 @@ def prepare(
     public_cases: list[dict[str, Any]] = []
     for hidden_case in manifest.cases:
         public = evaluation.inference_case(hidden_case)
+        print(f"[PREPARE] {public.case_id}: preparing repository and context", flush=True)
         repository = repositories.prepare(public)
         changed_tests = repositories.changed_python_test_paths(public, repository)
-        if changed_tests != tuple(sorted(public.excluded_paths)):
-            raise SealedHarnessError(
-                f"changed-test exclusions differ for {public.case_id}: {changed_tests!r}"
-            )
+        _verify_changed_test_exclusions(public, changed_tests)
         retriever = DeterministicContextRetriever(
             source_repository=repository,
             excluded_paths=frozenset(public.excluded_paths),
@@ -340,7 +369,7 @@ def prepare(
             model=_ModelMustNotRun(),  # type: ignore[arg-type]
             source_repository=repository,
             excluded_paths=frozenset(public.excluded_paths),
-            priority_paths=frozenset(public.production_files_changed),
+            priority_paths=_priority_paths(public),
         )
         starting_context = factory.build(
             base_sha=public.base_sha, head_sha=public.head_sha
@@ -369,6 +398,8 @@ def prepare(
         "sealed_integrity_sha256": integrity_sha,
         "public_document_sha256": _sha256(public_bytes),
         "frozen_source_identity": source_identity,
+        "repository_cache_path": str(repository_cache.resolve()),
+        "workspace_root_path": str(workspace_root.resolve()),
         "model_calls": 0,
     }
     PrepareMetadata.model_validate(metadata)
@@ -430,6 +461,10 @@ def run(
         "working_src_sha256"
     ):
         raise SealedHarnessError("production source identity changed after PREPARE")
+    if str(repository_cache.resolve()) != prepared.repository_cache_path:
+        raise SealedHarnessError("RUN repository cache differs from PREPARE")
+    if str(workspace_root.resolve()) != prepared.workspace_root_path:
+        raise SealedHarnessError("RUN workspace root differs from PREPARE")
     provider = GeminiProviderConfig.from_environment()
     if provider.provider_surface is not GeminiProviderSurface.VERTEX_AI:
         raise SealedHarnessError("sealed RUN requires PATCHPROOF_GEMINI_PROVIDER=VERTEX_AI")
@@ -456,6 +491,8 @@ def run(
         "provider_surface": str(provider.provider_surface),
         "case_ids": [case.case_id for case in public.cases],
         "inter_case_delay_seconds": inter_case_delay_seconds,
+        "repository_cache_path": prepared.repository_cache_path,
+        "workspace_root_path": prepared.workspace_root_path,
     }
     try:
         _append_journal(journal_path, run_started, exclusive=True)
@@ -467,6 +504,8 @@ def run(
         "public_document_sha256": prepared.public_document_sha256,
         "model_name": MODEL_NAME,
         "provider_surface": str(provider.provider_surface),
+        "repository_cache_path": prepared.repository_cache_path,
+        "workspace_root_path": prepared.workspace_root_path,
         "started_at": started_at,
         "completed_at": None,
         "run_completed": False,
@@ -514,10 +553,7 @@ def run(
         try:
             repository = repositories.prepare(case)  # type: ignore[arg-type]
             changed_tests = repositories.changed_python_test_paths(case, repository)  # type: ignore[arg-type]
-            if changed_tests != tuple(sorted(case.excluded_paths)):
-                raise SealedHarnessError(
-                    f"changed-test exclusions differ for {case.case_id}: {changed_tests!r}"
-                )
+            _verify_changed_test_exclusions(case, changed_tests)
             context = DeterministicContextRetriever(
                 source_repository=repository,
                 excluded_paths=frozenset(case.excluded_paths),
@@ -534,7 +570,7 @@ def run(
                 ),
                 source_repository=repository,
                 excluded_paths=frozenset(case.excluded_paths),
-                priority_paths=frozenset(case.production_files_changed),
+                priority_paths=_priority_paths(case),
             )
             result = asyncio.run(
                 hard_mode._run_live_case(
