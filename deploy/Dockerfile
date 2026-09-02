@@ -15,8 +15,6 @@ RUN apt-get update \
 WORKDIR /opt/patchproof
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
-COPY benchmarks/holdout/manifest.json ./benchmarks/holdout/manifest.json
-COPY benchmarks/hard_mode/manifest_v5.json ./benchmarks/hard_mode/manifest_v5.json
 RUN uv sync --frozen --no-dev \
     && useradd --create-home --uid 10001 patchproof \
     && chown -R patchproof:patchproof /opt/patchproof

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -34,6 +34,17 @@ from patchproof.models import (
     MechanicalEvidenceStatus,
     RevisionRole,
     TestExecutionStatus,
+)
+from patchproof.pr_resolution import (
+    PullRequestResolutionError,
+    PullRequestUpstreamError,
+    ResolvedPullRequest,
+)
+from patchproof.product_preparation import (
+    PreparedPullRequest,
+    ProductExecutionPlan,
+    ProductExecutionPlanSource,
+    UnsupportedExecutionPlanError,
 )
 from patchproof.storage import SqliteVerificationRunStore
 from patchproof.workflow import PullRequestEvent
@@ -149,6 +160,37 @@ class StubTokenProvider:
     def token(self, audience: str) -> str:
         assert audience == "https://executor.example"
         return "short-lived-id-token"
+
+
+class StubPullRequestResolver:
+    def __init__(self, result: ResolvedPullRequest | Exception) -> None:
+        self.result = result
+        self.requests = []
+
+    async def resolve(self, parsed):
+        self.requests.append(parsed)
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
+def resolved_pr(
+    *,
+    repository: str = "owner/repo",
+    number: int = 37,
+    base_sha: str = "a" * 40,
+    head_sha: str = "b" * 40,
+) -> ResolvedPullRequest:
+    return ResolvedPullRequest(
+        repository=repository,
+        number=number,
+        url=f"https://github.com/{repository}/pull/{number}",
+        base_sha=base_sha,
+        head_sha=head_sha,
+        title="Server-resolved title",
+        body="Server-resolved body",
+        updated_at=datetime(2026, 9, 1, tzinfo=UTC),
+    )
 
 
 def settings() -> CloudControlSettings:
@@ -325,28 +367,26 @@ def test_google_task_verifier_pins_audience_issuer_and_email(monkeypatch) -> Non
     }
 
 
-def test_cloud_analyze_accepts_known_case_persists_and_dispatches(
+def test_cloud_analyze_accepts_arbitrary_pr_in_allowed_repository_and_dispatches(
     writable_test_directory: Path,
 ) -> None:
     store = SqliteVerificationRunStore(writable_test_directory / "analyze.db")
     dispatcher = StubDispatcher()
+    resolver = StubPullRequestResolver(resolved_pr(number=314))
     app = create_cloud_control_app(
-        settings=replace(
-            settings(),
-            allowed_repositories=frozenset({"python-jsonschema/jsonschema"}),
-        ),
+        settings=settings(),
         store=store,
         dispatcher=dispatcher,
         processor=StubProcessor(),
         verifier=StubVerifier(accepted=True),
-        project_root=Path(__file__).resolve().parents[1],
+        pr_resolver=resolver,
     )
     client = TestClient(app)
 
     response = client.post(
         "/api/analyze",
         json={
-            "pr_url": "https://github.com/python-jsonschema/jsonschema/pull/1208",
+            "pr_url": "https://github.com/owner/repo/pull/314",
         },
     )
 
@@ -359,8 +399,17 @@ def test_cloud_analyze_accepts_known_case_persists_and_dispatches(
     assert dispatcher.run_ids == [run_id]
     run = store.get_run(run_id)
     assert run.event_action == "patchproof_analyze"
-    assert run.repository == "python-jsonschema/jsonschema"
+    assert run.repository == "owner/repo"
+    assert run.pr_number == 314
+    assert run.base_sha == "a" * 40
+    assert run.head_sha == "b" * 40
+    assert run.head_updated_at == datetime(2026, 9, 1, tzinfo=UTC)
+    assert run.title == "Server-resolved title"
+    assert run.body == "Server-resolved body"
     assert run.installation_id is None
+    assert resolver.requests[0].number == 314
+    assert not hasattr(cloud_control_module, "find_known_pr")
+    assert not hasattr(cloud_control_module, "hard_mode")
 
     status_response = client.get(f"/api/runs/{run_id}")
     assert status_response.status_code == 200
@@ -373,19 +422,17 @@ def test_cloud_analyze_duplicate_revision_returns_same_durable_run(
 ) -> None:
     store = SqliteVerificationRunStore(writable_test_directory / "dedupe.db")
     dispatcher = StubDispatcher()
+    resolver = StubPullRequestResolver(resolved_pr())
     app = create_cloud_control_app(
-        settings=replace(
-            settings(),
-            allowed_repositories=frozenset({"python-jsonschema/jsonschema"}),
-        ),
+        settings=settings(),
         store=store,
         dispatcher=dispatcher,
         processor=StubProcessor(),
         verifier=StubVerifier(accepted=True),
-        project_root=Path(__file__).resolve().parents[1],
+        pr_resolver=resolver,
     )
     client = TestClient(app)
-    payload = {"pr_url": "https://github.com/python-jsonschema/jsonschema/pull/1208"}
+    payload = {"pr_url": "https://github.com/owner/repo/pull/37"}
 
     first = client.post("/api/analyze", json=payload)
     duplicate = client.post("/api/analyze", json=payload)
@@ -395,32 +442,39 @@ def test_cloud_analyze_duplicate_revision_returns_same_durable_run(
     assert dispatcher.run_ids == [UUID(first.json()["run_id"])] * 2
 
 
-def test_cloud_analyze_rejects_malformed_and_unknown_pr_without_dispatch(
+def test_cloud_analyze_rejects_malformed_disallowed_and_unresolved_pr_without_dispatch(
     writable_test_directory: Path,
 ) -> None:
     dispatcher = StubDispatcher()
+    resolver = StubPullRequestResolver(
+        PullRequestResolutionError("GitHub pull request was not found")
+    )
     app = create_cloud_control_app(
-        settings=replace(
-            settings(),
-            allowed_repositories=frozenset({"python-jsonschema/jsonschema"}),
-        ),
+        settings=settings(),
         store=SqliteVerificationRunStore(writable_test_directory / "reject.db"),
         dispatcher=dispatcher,
         processor=StubProcessor(),
         verifier=StubVerifier(accepted=True),
-        project_root=Path(__file__).resolve().parents[1],
+        pr_resolver=resolver,
     )
     client = TestClient(app)
 
     malformed = client.post("/api/analyze", json={"pr_url": "not-a-url"})
-    unknown = client.post(
+    disallowed = client.post(
         "/api/analyze",
         json={"pr_url": "https://github.com/python/cpython/pull/1"},
     )
+    unresolved = client.post(
+        "/api/analyze",
+        json={"pr_url": "https://github.com/owner/repo/pull/999"},
+    )
 
     assert malformed.status_code == 422
-    assert unknown.status_code == 422
-    assert "Arbitrary public PR analysis is not enabled" in unknown.json()["detail"]
+    assert malformed.json()["detail"].startswith("INVALID_PR_URL")
+    assert disallowed.status_code == 403
+    assert disallowed.json()["detail"].startswith("REPOSITORY_NOT_ALLOWED")
+    assert unresolved.status_code == 422
+    assert unresolved.json()["detail"].startswith("PR_RESOLUTION_FAILED")
     assert dispatcher.run_ids == []
 
     oversized = client.post(
@@ -431,11 +485,36 @@ def test_cloud_analyze_rejects_malformed_and_unknown_pr_without_dispatch(
     assert oversized.status_code == 413
 
 
-def test_known_product_worker_uses_manifest_contract_and_skips_github_publication(
+def test_cloud_analyze_reports_transient_github_failure_as_service_unavailable(
+    writable_test_directory: Path,
+) -> None:
+    dispatcher = StubDispatcher()
+    app = create_cloud_control_app(
+        settings=settings(),
+        store=SqliteVerificationRunStore(writable_test_directory / "upstream-failure.db"),
+        dispatcher=dispatcher,
+        processor=StubProcessor(),
+        verifier=StubVerifier(accepted=True),
+        pr_resolver=StubPullRequestResolver(
+            PullRequestUpstreamError("credential and upstream fixture detail")
+        ),
+    )
+
+    response = TestClient(app).post(
+        "/api/analyze",
+        json={"pr_url": "https://github.com/owner/repo/pull/37"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"].startswith("PR_RESOLUTION_UPSTREAM_FAILED")
+    assert "credential" not in response.json()["detail"]
+    assert dispatcher.run_ids == []
+
+
+def test_arbitrary_product_worker_uses_symmetric_plan_and_phase2_investigator(
     monkeypatch, writable_test_directory: Path
 ) -> None:
-    root = Path(__file__).resolve().parents[1]
-    store = SqliteVerificationRunStore(writable_test_directory / "worker-known.db")
+    store = SqliteVerificationRunStore(writable_test_directory / "worker-arbitrary.db")
     run = store.accept_pull_request(
         PullRequestEvent(
             delivery_id="product-known",
@@ -451,6 +530,12 @@ def test_known_product_worker_uses_manifest_contract_and_skips_github_publicatio
     captured = {}
     resolved_contract = historical_contract()
 
+    @contextmanager
+    def temporary_directory(**_kwargs):
+        path = writable_test_directory / "processor-temp"
+        path.mkdir()
+        yield str(path)
+
     def prepare_repository(_repository, _pr, _base, _head, destination) -> None:
         destination.mkdir()
 
@@ -462,6 +547,22 @@ def test_known_product_worker_uses_manifest_contract_and_skips_github_publicatio
         captured["challenge"] = kwargs
         return object()
 
+    def prepare_product(**kwargs):
+        captured["prepared_from"] = kwargs
+        return PreparedPullRequest(
+            resolved=kwargs["resolved"],
+            excluded_paths=("tests/test_changed.py",),
+            priority_paths=("jsonschema/_keywords.py",),
+            execution_plan=ProductExecutionPlan(
+                contract=resolved_contract,
+                source=ProductExecutionPlanSource.DETERMINISTIC_PROBE,
+            ),
+        )
+
+    def investigator_factory(**kwargs):
+        captured["investigator"] = kwargs
+        return "phase-2-factory"
+
     class FakeWorker:
         def __init__(self, *, workflow, store) -> None:
             captured["workflow"] = workflow
@@ -470,17 +571,20 @@ def test_known_product_worker_uses_manifest_contract_and_skips_github_publicatio
         async def run(self, run_id) -> None:
             captured["run_id"] = run_id
 
-    monkeypatch.setattr(
-        cloud_control_module.hard_mode,
-        "_execution_plan",
-        lambda _repository, _case: SimpleNamespace(contract=resolved_contract),
-    )
+    monkeypatch.setattr(cloud_control_module, "prepare_pull_request", prepare_product)
+    monkeypatch.setattr(cloud_control_module.tempfile, "TemporaryDirectory", temporary_directory)
     monkeypatch.setattr(
         cloud_control_module,
-        "TrustedHistoricalContextRetriever",
+        "ProductExecutionContextRetriever",
         context_factory,
     )
     monkeypatch.setattr(cloud_control_module, "RemoteBaseHeadChallenge", challenge_factory)
+    monkeypatch.setattr(cloud_control_module, "GitClaimInvestigatorFactory", investigator_factory)
+    monkeypatch.setattr(
+        cloud_control_module,
+        "AdkGeminiClaimInvestigator",
+        lambda **kwargs: SimpleNamespace(arguments=kwargs),
+    )
     monkeypatch.setattr(cloud_control_module, "BehavioralClaimAgent", lambda **_kwargs: object())
     monkeypatch.setattr(cloud_control_module, "AdkGeminiClaimModel", lambda **_kwargs: object())
     monkeypatch.setattr(cloud_control_module, "AdkGeminiCandidateModel", lambda **_kwargs: object())
@@ -512,17 +616,21 @@ def test_known_product_worker_uses_manifest_contract_and_skips_github_publicatio
         allowed_repositories=frozenset({"python-jsonschema/jsonschema"}),
         github_app_id=123,
         github_private_key="fixture-key",
-        project_root=root,
     )
     monkeypatch.setattr(processor, "_prepare_repository", prepare_repository)
 
     asyncio.run(processor.process(run.run_id))
 
     assert captured["run_id"] == run.run_id
-    assert captured["context"]["excluded_paths"] == frozenset()
+    assert captured["prepared_from"]["resolved"].base_sha == run.base_sha
+    assert captured["prepared_from"]["resolved"].head_sha == run.head_sha
+    assert captured["context"]["excluded_paths"] == frozenset({"tests/test_changed.py"})
     assert captured["context"]["contract"] == resolved_contract
-    assert captured["challenge"]["contract_origin"] == "PATCHPROOF_MANIFEST"
-    assert captured["challenge"]["repository_python_paths"] == (".",)
+    assert captured["challenge"]["contract_origin"] == "PATCHPROOF_PROBE"
+    assert captured["challenge"]["repository_python_paths"] == ()
+    assert captured["investigator"]["excluded_paths"] == frozenset({"tests/test_changed.py"})
+    assert captured["investigator"]["priority_paths"] == frozenset({"jsonschema/_keywords.py"})
+    assert captured["workflow"].arguments["claim_investigator"] == "phase-2-factory"
     assert published == []
 
 
@@ -552,7 +660,7 @@ def test_unexpected_task_preparation_failure_becomes_sanitized_terminal_run(
         dispatcher=StubDispatcher(),
         processor=FailingProcessor(),
         verifier=StubVerifier(accepted=True),
-        project_root=Path(__file__).resolve().parents[1],
+        pr_resolver=StubPullRequestResolver(resolved_pr()),
     )
 
     response = TestClient(app).post(
@@ -567,3 +675,46 @@ def test_unexpected_task_preparation_failure_becomes_sanitized_terminal_run(
     assert failure is not None
     assert failure.error_code == "INTERNAL_WORKER_FAILURE"
     assert "secret detail" not in failure.summary
+
+
+def test_unsupported_execution_plan_becomes_explicit_terminal_failure(
+    writable_test_directory: Path,
+) -> None:
+    class UnsupportedProcessor:
+        async def process(self, _run_id) -> None:
+            raise UnsupportedExecutionPlanError("unsafe repository-controlled detail")
+
+    store = SqliteVerificationRunStore(writable_test_directory / "unsupported-plan.db")
+    run = store.accept_pull_request(
+        PullRequestEvent(
+            delivery_id="unsupported-plan",
+            action="patchproof_analyze",
+            repository="owner/repo",
+            pr_number=37,
+            base_sha="a" * 40,
+            head_sha="b" * 40,
+            head_updated_at=datetime(2026, 9, 1, tzinfo=UTC),
+            title="Unsupported plan fixture",
+        )
+    ).run
+    app = create_cloud_control_app(
+        settings=settings(),
+        store=store,
+        dispatcher=StubDispatcher(),
+        processor=UnsupportedProcessor(),
+        verifier=StubVerifier(accepted=True),
+        pr_resolver=StubPullRequestResolver(resolved_pr()),
+    )
+
+    response = TestClient(app).post(
+        "/tasks/verify",
+        headers={"Authorization": "Bearer signed-google-token"},
+        json={"run_id": str(run.run_id)},
+    )
+
+    assert response.status_code == 200
+    failure = store.get_failure(run.run_id)
+    assert failure is not None
+    assert failure.error_code == "UNSUPPORTED_EXECUTION_PLAN"
+    assert failure.summary == "BASE and HEAD do not have one supported equivalent execution plan."
+    assert "repository-controlled" not in failure.summary

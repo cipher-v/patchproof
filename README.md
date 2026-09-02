@@ -117,11 +117,12 @@ Cloud Run IAM, Developer API compatibility, and evaluation provenance are docume
 
 ## PR analysis demonstration
 
-With `PATCHPROOF_CONTROL_URL` configured, `patchproof analyze <GitHub PR URL>` creates one durable
-cloud run and polls the same sanitized evidence shown automatically by `patchproof dashboard`.
-Without it, the known-good local analyzer remains the default; `--cloud` and `--local` are explicit
-overrides. Both paths currently accept only pull requests in committed historical manifests, not
-arbitrary public PRs. See
+With `PATCHPROOF_CONTROL_URL` configured, `patchproof analyze <GitHub PR URL>` accepts any pull
+request number in a deployment-allowlisted public repository, creates one durable cloud run, and
+polls the same sanitized evidence shown automatically by `patchproof dashboard`. The service
+independently resolves and stores immutable BASE/HEAD revisions before dispatch. Without a control
+URL, the manifest-backed local demonstration remains the default; `--cloud` and `--local` are
+explicit overrides. See
 [`docs/23_CLOUD_ANALYZE_INTEGRATION.md`](docs/23_CLOUD_ANALYZE_INTEGRATION.md).
 
 To preview the evidence console with the checked sanitized live-proof fixture:

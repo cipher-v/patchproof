@@ -26,17 +26,28 @@ them. No records are migrated or copied between namespaces.
 
 ## Current product boundary
 
-`POST /api/analyze` accepts only canonical GitHub URLs that match the committed reproducible
-historical manifests. Arbitrary public PR onboarding is not enabled. The control service derives
-immutable BASE/HEAD facts from trusted metadata, creates or reuses the durable Firestore run, and
-returns HTTP 202 without waiting for Gemini.
+`POST /api/analyze` accepts canonical GitHub pull-request URLs for public repositories on the
+deployment's explicit repository allowlist. It is arbitrary with respect to PR number, not
+repository trust: the allowlist remains an intentional security and cost boundary. PatchProof does
+not claim that the executor is a hostile-code sandbox.
 
-Historical third-party repositories do not need `.patchproof.yaml`. The control worker probes BASE
-and HEAD independently using PatchProof's existing deterministic install templates and requires an
-equivalent synthesized contract. That validated contract, its manifest origin, and the case's
-repository Python paths cross the existing private executor boundary. Normal webhook runs continue
-to require identical repository-owned `.patchproof.yaml` files. Neither path permits model-selected
+The control service resolves the URL through GitHub's fixed REST endpoint with bounded time and
+response-size limits. It validates repository identity, public visibility, full BASE/HEAD SHAs,
+and the update timestamp, then stores those server-derived immutable facts before dispatching the
+durable task. Client-supplied revision identifiers are never accepted.
+
+For URL-submitted runs, the worker derives changed Python-test exclusions and changed non-test
+Python investigation priorities directly from the immutable Git diff. Matching repository-owned
+`.patchproof.yaml` contracts are honored when present on both revisions. Otherwise the worker
+probes BASE and HEAD independently using PatchProof's deterministic install templates and proceeds
+only when both plans are supported and equivalent. Normal webhook runs retain their existing
+requirement for identical repository-owned `.patchproof.yaml` files. No path permits model-selected
 install commands.
+
+URL-submitted runs construct the real Phase-2 `GitClaimInvestigatorFactory`. Its bounded transcript
+is stored in the same `EvidenceReport` as candidate lineage, BASE/HEAD executions, mechanical
+classification, semantic narrowing, and the evidence hash. Benchmark manifests and hidden oracle
+data are not copied into the production image and are not dependencies of this flow.
 
 Only `BASE=ASSERTION_FAILED` plus `HEAD=PASSED`, followed by related semantic assessment, can support
 a claim. The cloud integration does not alter prompts, model settings, repair budget, validation,
@@ -48,7 +59,7 @@ Set the deployed public control URL for the current PowerShell session:
 
 ```powershell
 $env:PATCHPROOF_CONTROL_URL="https://patchproof-control-...run.app"
-uv run patchproof analyze https://github.com/python-jsonschema/jsonschema/pull/1208
+uv run patchproof analyze https://github.com/allowed-owner/allowed-repo/pull/123
 ```
 
 The CLI prints `Mode: CLOUD`, the run ID, dashboard and status URLs, durable progress changes, each
@@ -67,7 +78,8 @@ required. Optional configured featured IDs are shown first and still count towar
 
 ## Local reproducibility
 
-Without `PATCHPROOF_CONTROL_URL`, analyze retains its existing local default. Explicit commands are:
+Without `PATCHPROOF_CONTROL_URL`, analyze retains its manifest-backed demonstration default.
+Explicit commands are:
 
 ```powershell
 uv run patchproof analyze --local https://github.com/python-jsonschema/jsonschema/pull/1208
@@ -79,16 +91,19 @@ uv run patchproof dashboard --local
 
 ## Public API
 
-Create or reuse one known immutable run:
+Resolve and create or reuse one immutable run in an allowlisted repository:
 
 ```http
 POST /api/analyze
 Content-Type: application/json
 
-{"pr_url":"https://github.com/python-jsonschema/jsonschema/pull/1208"}
+{"pr_url":"https://github.com/allowed-owner/allowed-repo/pull/123"}
 ```
 
 The bounded response contains `run_id`, `status`, `pr_url`, `dashboard_url`, and `result_url`.
+Malformed URLs, disallowed repositories, and GitHub resolution failures are rejected before a run
+is created. Unsupported or asymmetric execution plans become sanitized durable
+`UNSUPPORTED_EXECUTION_PLAN` failures rather than generic internal failures.
 `GET /api/runs/{run_id}` returns the same sanitized projection used by the dashboard.
 `GET /dashboard/api/runs` returns the bounded newest-first snapshot. Evidence JSON is SHA-256
 verified and identity-checked before projection.
@@ -97,8 +112,8 @@ verified and identity-checked before projection.
 
 The existing deployment script continues to reuse `patchproof-control`, `patchproof-executor`, the
 `patchproof-verification-runs` queue, Firestore, and existing service accounts. Its default
-allowlist includes the committed historical repositories. It copies only the two case manifests
-into the image; benchmark oracle files are not copied.
+allowlist is the repository trust boundary. Benchmark manifests and oracle files are not copied
+into the production image.
 
 ```powershell
 gcloud auth login
@@ -121,8 +136,9 @@ historical `patchproof` namespace.
 Existing enabled secret versions are reused. For an initial deployment, or an intentional rotation,
 also pass `-UpdateSecretVersions`, `-WebhookSecretFile`, and `-GitHubPrivateKeyFile` with local
 operator-controlled files. Never commit their contents.
-After deployment, verify `/livez`, `/dashboard`, `/dashboard/api/runs`, malformed and unknown
-`/api/analyze` rejection, and then make at most the separately authorized live known-PR request.
+After deployment, verify `/livez`, `/dashboard`, `/dashboard/api/runs`, malformed, disallowed, and
+unresolvable `/api/analyze` rejection, and then make at most a separately authorized live request
+in an allowed repository.
 
 ## Superseding the two legacy successful Checks
 

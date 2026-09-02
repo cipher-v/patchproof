@@ -19,3 +19,11 @@ def test_cloud_deployment_docs_distinguish_historical_and_final_namespaces() -> 
     assert "`patchproof` namespace contains historical and pre-final evidence" in documentation
     assert "`patchproof-final-v1` Firestore collection namespace" in documentation
     assert "No records are migrated or copied between namespaces." in documentation
+
+
+def test_product_image_excludes_benchmark_manifests_and_keeps_repository_allowlist() -> None:
+    dockerfile = (_ROOT / "deploy" / "Dockerfile").read_text(encoding="utf-8")
+    script = (_ROOT / "deploy" / "gcp" / "deploy.ps1").read_text(encoding="utf-8")
+
+    assert "benchmarks/" not in dockerfile
+    assert "PATCHPROOF_ALLOWED_REPOSITORIES=${AllowedRepositories}" in script

@@ -12,6 +12,7 @@ from patchproof.evidence_workflow import EvidenceReport, EvidenceWorkflow
 from patchproof.execution_contract import ExecutionContractError
 from patchproof.git_workspace import GitWorkspaceError
 from patchproof.model_reliability import ModelInvocationFailure
+from patchproof.product_preparation import UnsupportedExecutionPlanError
 from patchproof.storage import VerificationRunStore
 from patchproof.test_generation import CandidateBudgetExceeded
 from patchproof.workflow import RevisionState, RunLifecycle
@@ -24,6 +25,7 @@ class WorkerFailureCode(StrEnum):
     MODEL_OUTPUT_INVALID = "MODEL_OUTPUT_INVALID"
     REPOSITORY_CONTEXT_FAILED = "REPOSITORY_CONTEXT_FAILED"
     EXECUTION_CONTRACT_INVALID = "EXECUTION_CONTRACT_INVALID"
+    UNSUPPORTED_EXECUTION_PLAN = "UNSUPPORTED_EXECUTION_PLAN"
     WORKSPACE_FAILED = "WORKSPACE_FAILED"
     CANDIDATE_BUDGET_VIOLATION = "CANDIDATE_BUDGET_VIOLATION"
     INTERNAL_WORKER_FAILURE = "INTERNAL_WORKER_FAILURE"
@@ -99,6 +101,12 @@ class ReliableEvidenceWorker:
             return ClassifiedWorkerFailure(
                 code=WorkerFailureCode.EXECUTION_CONTRACT_INVALID,
                 summary="The immutable repository execution contract is invalid.",
+                retryable=False,
+            )
+        if isinstance(error, UnsupportedExecutionPlanError):
+            return ClassifiedWorkerFailure(
+                code=WorkerFailureCode.UNSUPPORTED_EXECUTION_PLAN,
+                summary="BASE and HEAD do not have one supported equivalent execution plan.",
                 retryable=False,
             )
         if isinstance(error, GitWorkspaceError):

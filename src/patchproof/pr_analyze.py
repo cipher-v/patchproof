@@ -29,14 +29,14 @@ from patchproof.gemini_provider import (
     preflight_vertex_authentication,
 )
 from patchproof.hard_mode import HardModeCase, HardModeCaseKind, HardModeRepositoryCache
+from patchproof.pr_resolution import (
+    ParsedPullRequest,
+    PullRequestUrlError,
+    parse_github_pull_request_url,
+)
 
 HARDENED_BEHAVIOR_BASELINE = "8ad46415e81192c3fb90768b6e6f85beb8d96a43"
 MODEL_NAME = "gemini-3.6-flash"
-
-_PR_URL = re.compile(
-    r"^https://github\.com/(?P<owner>[A-Za-z0-9_.-]+)/"
-    r"(?P<repo>[A-Za-z0-9_.-]+)/pull/(?P<number>[1-9][0-9]*)/?$"
-)
 
 _PROTECTED_CORE_PATHS = (
     "src/patchproof/adk_claim_agent.py",
@@ -105,13 +105,6 @@ class PrAnalyzeRunError(PrAnalyzeError):
 
 
 @dataclass(frozen=True, slots=True)
-class ParsedPullRequest:
-    repository: str
-    number: int
-    url: str
-
-
-@dataclass(frozen=True, slots=True)
 class KnownPullRequest:
     case: HardModeCase
     manifest_path: Path
@@ -129,16 +122,10 @@ _INFRASTRUCTURE_TERMINALS = frozenset(
 
 def parse_pr_url(value: str) -> ParsedPullRequest:
     """Parse one canonical public GitHub pull-request URL."""
-    match = _PR_URL.fullmatch(value.strip())
-    if match is None:
-        raise PrAnalyzeError("expected a GitHub PR URL like https://github.com/owner/repo/pull/123")
-    repository = f"{match.group('owner')}/{match.group('repo')}".lower()
-    number = int(match.group("number"))
-    return ParsedPullRequest(
-        repository=repository,
-        number=number,
-        url=f"https://github.com/{repository}/pull/{number}",
-    )
+    try:
+        return parse_github_pull_request_url(value)
+    except PullRequestUrlError as error:
+        raise PrAnalyzeError(str(error)) from error
 
 
 def find_project_root(start: Path | None = None) -> Path:

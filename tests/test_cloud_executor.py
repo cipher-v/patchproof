@@ -193,8 +193,15 @@ def test_request_rejects_artifact_hash_mismatch() -> None:
         raise AssertionError("mismatched candidate bytes were accepted")
 
 
-def test_manifest_contract_uses_trusted_wire_plan_without_upstream_contract(
-    monkeypatch, writable_test_directory: Path
+@pytest.mark.parametrize(
+    "origin",
+    (
+        ExecutionContractOrigin.PATCHPROOF_MANIFEST,
+        ExecutionContractOrigin.PATCHPROOF_PROBE,
+    ),
+)
+def test_patchproof_contract_uses_trusted_wire_plan_without_upstream_contract(
+    monkeypatch, writable_test_directory: Path, origin: ExecutionContractOrigin
 ) -> None:
     captured = {}
 
@@ -218,7 +225,7 @@ def test_manifest_contract_uses_trusted_wire_plan_without_upstream_contract(
         executor,
         "_git_output",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("manifest execution must not read upstream .patchproof.yaml")
+            AssertionError("PatchProof execution must not read upstream .patchproof.yaml")
         ),
     )
     monkeypatch.setattr(executor_module, "GitWorkspaceManager", StubWorkspaceManager)
@@ -229,7 +236,7 @@ def test_manifest_contract_uses_trusted_wire_plan_without_upstream_contract(
         base_sha="a" * 40,
         head_sha="b" * 40,
         contract=synthesized_contract(),
-        contract_origin=ExecutionContractOrigin.PATCHPROOF_MANIFEST,
+        contract_origin=origin,
         repository_python_paths=("src",),
     )
 

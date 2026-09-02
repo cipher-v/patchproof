@@ -37,6 +37,7 @@ class ExecutionContractOrigin(StrEnum):
     """Why the private executor may trust the supplied validated contract."""
 
     REPOSITORY = "REPOSITORY"
+    PATCHPROOF_PROBE = "PATCHPROOF_PROBE"
     PATCHPROOF_MANIFEST = "PATCHPROOF_MANIFEST"
 
 
@@ -285,7 +286,7 @@ class EphemeralChallengeExecutor:
             if base_contract != head_contract or head_contract != contract:
                 raise ValueError("immutable BASE/HEAD execution contracts do not match")
         elif not contract.synthesized:
-            raise ValueError("manifest execution requires a synthesized validated contract")
+            raise ValueError("PatchProof-supplied execution requires a synthesized contract")
         return BaseHeadChallenge(
             workspaces=GitWorkspaceManager(
                 source_repository=repository,
