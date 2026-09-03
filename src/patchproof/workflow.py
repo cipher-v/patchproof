@@ -18,6 +18,8 @@ _REPOSITORY_PATTERN = re.compile(r"[a-z0-9_.-]+/[a-z0-9_.-]+")
 def normalize_repository_name(value: str) -> str:
     """Return a canonical GitHub owner/name or reject the value."""
     normalized = value.strip().lower()
+    if normalized.endswith(".git"):
+        normalized = normalized[:-4]
     if _REPOSITORY_PATTERN.fullmatch(normalized) is None:
         raise ValueError("repository must use the owner/name form")
     return normalized
